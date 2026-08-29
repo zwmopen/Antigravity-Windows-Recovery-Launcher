@@ -2,7 +2,7 @@
 
 > 项目 ID：`antigravity-recovery-launcher`  
 > 版本：0.1.0  
-> 状态：探索  
+> 状态：维护  
 > 服务对象：AI基础设施与 Windows 工作环境  
 > 创建日期：2026-08-29
 
@@ -14,21 +14,26 @@
 
 ## 目标用户
 
-待补充。
+在 Windows 上通过 Cockpit Tools 切换 Antigravity 多个 Google 账号，并需要固定美国专用代理的个人用户。
 
 ## 核心使用流程
 
-1. 待补充。
+1. 双击桌面唯一的 `Antigravity` 图标。
+2. 小应用检查专用 Mihomo、Google 连通性、Antigravity 设置和桌面入口。
+3. 小应用关闭 Cockpit 遗留的无代理或黑屏实例，再以 `127.0.0.1:17897` 完整重启。
+4. 后台监控器发现 Cockpit 再次以 `--reuse-window` 覆盖正确实例时，自动重复修复。
 
 ## 安装与启动
 
-待实现后填写真实可运行命令。
+已安装入口：桌面 `Antigravity.lnk`。
+
+正式应用目录：`releases/current/`。构建运行 `build.ps1`，安装运行 `install.ps1`。
 
 ## 数据和隐私
 
-- 数据位置：待补充。
-- 是否上云：待补充。
-- 导出、备份和恢复：待补充。
+- 运行状态与脱敏日志：`%LOCALAPPDATA%\Antigravity\private-proxy`。
+- 不上传数据；不保存账号密码、Cookie、Token 或节点密钥。
+- 不清理 Antigravity 登录态、会话和项目；旧快捷方式保存在 `%LOCALAPPDATA%\Antigravity\shortcut-backups`。
 
 ## 项目文档
 
@@ -40,7 +45,7 @@
 
 ## 当前限制
 
-- 项目刚创建，尚未完成功能验收。
+- 本工具只能保证本机启动、代理链和黑屏恢复。Google 返回的账号地区资格 400 仍需以真实对话验收，本工具不能修改账号国家或绕过 Google 风控。
 
 ## 源码与发布
 
