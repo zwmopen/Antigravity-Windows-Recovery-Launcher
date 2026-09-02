@@ -4,7 +4,7 @@
   "source_commit": "v0.8.0",
   "tag": "v0.8.0",
   "built_at": "2026-09-02T14:06:00+08:00",
-  "ci_run": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/actions/workflows/ci.yml",
+  "ci_run": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/actions/runs/33597134492",
   "artifacts": [
     {
       "file": "Antigravity-Windows-Recovery-Launcher-0.8.0-windows-x64.zip",
