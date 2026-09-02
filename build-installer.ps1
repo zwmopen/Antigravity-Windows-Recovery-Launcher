@@ -18,16 +18,31 @@ $innoUri = 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innos
 
 & (Join-Path $root 'build.ps1') | Out-Null
 
+function Test-IsccCandidate {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    # The hosted Windows image may expose an older/minimal Inno Setup on PATH
+    # without the Chinese language file. Selecting it makes an otherwise valid
+    # build fail at [Languages]. Only accept compilers that can produce the
+    # promised Chinese installer UI.
+    $languageFile = Join-Path (Split-Path -Parent $Path) 'Languages\ChineseSimplified.isl'
+    return (Test-Path -LiteralPath $languageFile)
+}
+
 $candidates = @()
 if (-not [string]::IsNullOrWhiteSpace($IsccPath)) { $candidates += $IsccPath }
+$candidates += @(
+    $localIscc,
+    (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 7\ISCC.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 7\ISCC.exe')
+)
 $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
 if ($null -ne $command) { $candidates += $command.Source }
-$candidates += @(
-    (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 7\ISCC.exe'),
-    (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 7\ISCC.exe'),
-    $localIscc
-)
-$iscc = $candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+$iscc = $candidates | Where-Object { Test-IsccCandidate -Path ([string]$_) } | Select-Object -First 1
 if ([string]::IsNullOrWhiteSpace($iscc)) {
     New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
     if (-not (Test-Path -LiteralPath $innoInstaller)) {
@@ -42,7 +57,7 @@ if ([string]::IsNullOrWhiteSpace($iscc)) {
     }
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', ('/DIR="' + $localInnoRoot + '"'))
     $installerProcess = Start-Process -FilePath $innoInstaller -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
-    if ($installerProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $localIscc)) {
+    if ($installerProcess.ExitCode -ne 0 -or -not (Test-IsccCandidate -Path $localIscc)) {
         throw ('inno_setup_local_install_failed:' + $installerProcess.ExitCode)
     }
     $iscc = $localIscc
