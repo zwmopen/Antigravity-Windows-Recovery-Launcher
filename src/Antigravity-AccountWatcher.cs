@@ -244,8 +244,21 @@ internal static class AntigravityAccountWatcher
 
     private static bool LauncherIsRunning()
     {
-        try { return Process.GetProcessesByName("Antigravity-Recovery-Launcher").Length > 0; }
-        catch { return false; }
+        try
+        {
+            foreach (Process process in Process.GetProcessesByName("Antigravity-Recovery-Launcher"))
+            {
+                try
+                {
+                    string path = process.MainModule == null ? "" : process.MainModule.FileName;
+                    if (string.Equals(path, LauncherPath, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                catch { }
+                finally { process.Dispose(); }
+            }
+        }
+        catch { }
+        return false;
     }
 
     private static bool RuntimeNeedsRepair()

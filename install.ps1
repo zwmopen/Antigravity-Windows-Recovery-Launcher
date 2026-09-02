@@ -1,10 +1,13 @@
 ﻿[CmdletBinding()]
-param()
+param(
+    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Antigravity\launcher'),
+    [string]$SourceApp = ''
+)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$app = Join-Path $root 'releases\current'
-$installRoot = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher'
+$app = if ([string]::IsNullOrWhiteSpace($SourceApp)) { Join-Path $root 'releases\current' } else { [System.IO.Path]::GetFullPath($SourceApp) }
+$installRoot = [System.IO.Path]::GetFullPath($InstallRoot)
 $sourceLauncher = Join-Path $app 'Antigravity-Recovery-Launcher.exe'
 $sourceWatcher = Join-Path $app 'Antigravity-AccountWatcher.exe'
 $launcher = Join-Path $installRoot 'Antigravity-Recovery-Launcher.exe'
@@ -56,12 +59,19 @@ $runtime = Join-Path $env:LOCALAPPDATA 'Antigravity'
 $backupRoot = Join-Path $runtime 'shortcut-backups'
 $localizationPendingMarker = Join-Path $runtime 'localization-extension-pending.flag'
 
+$previousWatcherPath = ''
+$previousRunValue = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'AntigravityAccountWatcher' -ErrorAction SilentlyContinue).AntigravityAccountWatcher
+if (-not [string]::IsNullOrWhiteSpace([string]$previousRunValue)) {
+    $previousWatcherPath = ([string]$previousRunValue).Trim().Trim('"')
+}
+
 if (-not (Test-Path -LiteralPath $sourceLauncher) -or -not (Test-Path -LiteralPath $sourceWatcher) -or -not (Test-Path -LiteralPath $sourceLocalizationLoader) -or -not (Test-Path -LiteralPath $sourceSupervisor) -or -not (Test-Path -LiteralPath $sourceLocalizationHelper) -or -not (Test-Path -LiteralPath $sourceEnableChinese) -or -not (Test-Path -LiteralPath $sourceRestoreEnglish) -or -not (Test-Path -LiteralPath (Join-Path $sourceExtension 'manifest.json'))) { throw 'build_first' }
 
 # Stop only old copies owned by this project before replacing the installed
 # runtime. This keeps the desktop entry independent of the source checkout.
-$watcherPaths = @($sourceWatcher, $watcher)
+$watcherPaths = @($sourceWatcher, $watcher, $previousWatcherPath)
 foreach ($watcherPath in ($watcherPaths | Select-Object -Unique)) {
+    if ([string]::IsNullOrWhiteSpace($watcherPath)) { continue }
     $runningWatchers = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $_.Name -ieq 'Antigravity-AccountWatcher.exe' -and
         [string]$_.ExecutablePath -ieq $watcherPath
@@ -73,8 +83,13 @@ foreach ($watcherPath in ($watcherPaths | Select-Object -Unique)) {
 # A failed launch can leave the GUI launcher open while showing its error
 # dialog. Stop only this project's installed/source launcher before replacing
 # the binary, otherwise upgrades silently leave the desktop on an old build.
-$launcherPaths = @($sourceLauncher, $launcher)
+$previousLauncherPath = ''
+if (-not [string]::IsNullOrWhiteSpace($previousWatcherPath)) {
+    $previousLauncherPath = Join-Path (Split-Path -Parent $previousWatcherPath) 'Antigravity-Recovery-Launcher.exe'
+}
+$launcherPaths = @($sourceLauncher, $launcher, $previousLauncherPath)
 foreach ($launcherPath in ($launcherPaths | Select-Object -Unique)) {
+    if ([string]::IsNullOrWhiteSpace($launcherPath)) { continue }
     $runningLaunchers = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $_.Name -ieq 'Antigravity-Recovery-Launcher.exe' -and
         [string]$_.ExecutablePath -ieq $launcherPath
@@ -85,15 +100,19 @@ foreach ($launcherPath in ($launcherPaths | Select-Object -Unique)) {
 }
 Start-Sleep -Milliseconds 300
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-Copy-Item -LiteralPath $sourceLauncher -Destination $launcher -Force
-Copy-Item -LiteralPath $sourceWatcher -Destination $watcher -Force
-Copy-Item -LiteralPath $sourceLocalizationLoader -Destination $installedLocalizationLoader -Force
-Copy-Item -LiteralPath $sourceSupervisor -Destination $installedSupervisor -Force
-Copy-Item -LiteralPath $sourceLocalizationHelper -Destination $installedLocalizationHelper -Force
-Copy-Item -LiteralPath $sourceEnableChinese -Destination $installedEnableChinese -Force
-Copy-Item -LiteralPath $sourceRestoreEnglish -Destination $installedRestoreEnglish -Force
-New-Item -ItemType Directory -Path $installedExtension -Force | Out-Null
-Copy-Item -Path (Join-Path $sourceExtension '*') -Destination $installedExtension -Recurse -Force
+$sourceAppFull = [System.IO.Path]::GetFullPath($app).TrimEnd('\')
+$installRootFull = [System.IO.Path]::GetFullPath($installRoot).TrimEnd('\')
+if (-not [string]::Equals($sourceAppFull, $installRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Copy-Item -LiteralPath $sourceLauncher -Destination $launcher -Force
+    Copy-Item -LiteralPath $sourceWatcher -Destination $watcher -Force
+    Copy-Item -LiteralPath $sourceLocalizationLoader -Destination $installedLocalizationLoader -Force
+    Copy-Item -LiteralPath $sourceSupervisor -Destination $installedSupervisor -Force
+    Copy-Item -LiteralPath $sourceLocalizationHelper -Destination $installedLocalizationHelper -Force
+    Copy-Item -LiteralPath $sourceEnableChinese -Destination $installedEnableChinese -Force
+    Copy-Item -LiteralPath $sourceRestoreEnglish -Destination $installedRestoreEnglish -Force
+    New-Item -ItemType Directory -Path $installedExtension -Force | Out-Null
+    Copy-Item -Path (Join-Path $sourceExtension '*') -Destination $installedExtension -Recurse -Force
+}
 
 # The official CLI does not currently declare a redistribution license. Do
 # not bundle it in this project. Download the current Windows binary from the
@@ -110,6 +129,15 @@ if (Test-Path -LiteralPath $agyPath) {
     $agyReady = ((Get-Sha512Hex -LiteralPath $agyPath) -eq $agyExpectedHash)
 }
 if (-not $agyReady) {
+    $defaultAgy = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\tools\agy\agy.exe'
+    if (-not [string]::Equals($defaultAgy, $agyPath, [System.StringComparison]::OrdinalIgnoreCase) -and
+        (Test-Path -LiteralPath $defaultAgy) -and
+        ((Get-Sha512Hex -LiteralPath $defaultAgy) -eq $agyExpectedHash)) {
+        Copy-Item -LiteralPath $defaultAgy -Destination $agyPath -Force
+        $agyReady = $true
+    }
+}
+if (-not $agyReady) {
     Invoke-WebRequest -Uri ([string]$agyManifest.url) -OutFile $agyStaging -TimeoutSec 180
     $agyActualHash = Get-Sha512Hex -LiteralPath $agyStaging
     if ($agyActualHash -ne $agyExpectedHash) {
@@ -122,7 +150,8 @@ if (-not $agyReady) {
 # were installed. The first explicit language/recovery launch applies the new
 # extension; the watcher ignores this one pending window in the meantime.
 Set-Content -LiteralPath $localizationPendingMarker -Value 'Localization installed; waiting for an explicit launch.' -Encoding ASCII
-if (Test-Path -LiteralPath $sourceManifest) {
+if ((Test-Path -LiteralPath $sourceManifest) -and
+    -not [string]::Equals($sourceManifest, $installedManifest, [System.StringComparison]::OrdinalIgnoreCase)) {
     Copy-Item -LiteralPath $sourceManifest -Destination $installedManifest -Force
 }
 

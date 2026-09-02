@@ -1,17 +1,28 @@
 {
   "project": "antigravity-recovery-launcher",
-  "version": "0.8.0",
-  "source_commit": "v0.8.0",
-  "tag": "v0.8.0",
-  "built_at": "2026-09-02T14:06:00+08:00",
-  "ci_run": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/actions/runs/33597134492",
+  "version": "0.9.0",
+  "source_commit": "v0.9.0",
+  "tag": "v0.9.0",
+  "built_at": "2026-09-02T16:52:25+08:00",
+  "ci_run": null,
   "artifacts": [
     {
-      "file": "Antigravity-Windows-Recovery-Launcher-0.8.0-windows-x64.zip",
+      "file": "Antigravity-Windows-Recovery-Launcher-0.9.0-windows-x64.zip",
       "platform": "windows-x64",
-      "size": 75616,
-      "sha256": "B4294FA3545B8431605CECD79A42A1C44AE1EB06721A91F38EFEFA0D6CE0C77A",
-      "url": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v0.8.0/Antigravity-Windows-Recovery-Launcher-0.8.0-windows-x64.zip",
+      "size": 84512,
+      "sha256": "2D8D0CEDD76D303DD095DB8E98C481B7CB01EEC7D1D2FA25965C9BB80B85ED07",
+      "url": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v0.9.0/Antigravity-Windows-Recovery-Launcher-0.9.0-windows-x64.zip",
+      "installer": false,
+      "contains_official_agy_binary": false,
+      "contains_user_configuration": false
+    },
+    {
+      "file": "Antigravity-Windows-Recovery-Setup-0.9.0-windows-x64.exe",
+      "platform": "windows-x64",
+      "size": 2158174,
+      "sha256": "C6710685927B08D618ABC95DE7B5C89038F2EE8B6DFF055B9AA79F3874D16D33",
+      "url": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v0.9.0/Antigravity-Windows-Recovery-Setup-0.9.0-windows-x64.exe",
+      "installer": true,
       "contains_official_agy_binary": false,
       "contains_user_configuration": false
     }

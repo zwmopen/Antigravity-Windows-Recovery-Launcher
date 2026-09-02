@@ -8,7 +8,7 @@ param(
 )
 
 # Antigravity private proxy supervisor
-# Version: 2.4.0
+# Version: 2.5.0
 # Purpose: run one private Mihomo listener for Antigravity only.
 # The executable core is ASCII-only for Windows PowerShell 5.1 compatibility.
 
@@ -32,6 +32,7 @@ $ActiveClashConfig = Join-Path $ClashRoot 'clash-verge.yaml'
 $PartyRoot = Join-Path $env:APPDATA 'mihomo-party'
 $PartyProfilesIndex = Join-Path $PartyRoot 'profile.yaml'
 $PartyProfilesRoot = Join-Path $PartyRoot 'profiles'
+$AccountsPath = Join-Path $env:USERPROFILE '.antigravity_cockpit\accounts.json'
 $ProxyRoot = Join-Path $RuntimeRoot 'private-proxy'
 $ConfigPath = Join-Path $ProxyRoot 'mihomo-antigravity.yaml'
 $StatePath = Join-Path $ProxyRoot 'supervisor-state.json'
@@ -40,19 +41,20 @@ $PidPath = Join-Path $ProxyRoot 'mihomo.pid'
 $LogPath = Join-Path $ProxyRoot 'supervisor.log'
 $Port = 17897
 $ProxyUrl = 'http://127.0.0.1:17897'
-$DefaultTargetNodeMatch = ([char]0x7F8E).ToString() + ([char]0x56FD).ToString() + ([char]0x6D1B).ToString() + ([char]0x6749).ToString() + ([char]0x77F6).ToString() + '-1|' + ([char]0x8054).ToString() + ([char]0x901A).ToString() + ([char]0x4F18).ToString() + ([char]0x5316).ToString()
-$TargetNodeMatch = if ([string]::IsNullOrWhiteSpace($TargetNodeOverride)) { $DefaultTargetNodeMatch } else { $TargetNodeOverride.Trim() }
+$TargetNodeMatch = if ([string]::IsNullOrWhiteSpace($TargetNodeOverride)) { '' } else { $TargetNodeOverride.Trim() }
 $TargetNodeExactMatch = -not [string]::IsNullOrWhiteSpace($TargetNodeOverride)
 $TargetAlias = 'ANTIGRAVITY-VERIFIED-CANDIDATE'
-$TargetNodeName = if ($TargetNodeExactMatch) { $TargetNodeMatch } else { 'CURRENT-ACTIVE-US-LA1' }
-$ExpectedEgressCountry = if ([string]::IsNullOrWhiteSpace($ExpectedEgressCountryOverride)) { 'US' } else { $ExpectedEgressCountryOverride.Trim().ToUpperInvariant() }
+$ExpectedEgressCountry = if ([string]::IsNullOrWhiteSpace($ExpectedEgressCountryOverride)) { '' } else { $ExpectedEgressCountryOverride.Trim().ToUpperInvariant() }
 $CandidateCooldownMinutes = 20
+$MaxSuccessHistory = 128
 $MaxCandidateCount = 32
 $StopProcessTimeoutSeconds = 20
 $ProbeTimeoutMs = 8000
 $ModelProbeTimeoutSeconds = 90
 $ModelProbePrompt = 'Reply with exactly OK. Do not call tools or modify files.'
+$ModelProbeConfirmationCount = 2
 $ConnectivityAttemptCount = if ($RecoveryReason -eq 'Startup') { 3 } else { 2 }
+$JapanNodeMatch = ([char]0x65E5).ToString() + ([char]0x672C).ToString()
 $UnitedStatesNodeMatch = ([char]0x7F8E).ToString() + ([char]0x56FD).ToString()
 $LosAngelesNodeMatch = ([char]0x6D1B).ToString() + ([char]0x6749).ToString() + ([char]0x77F6).ToString()
 $SettingsPath = Join-Path $env:APPDATA 'Antigravity\User\settings.json'
@@ -61,6 +63,7 @@ $LauncherPath = Join-Path $ScriptRoot 'Antigravity-Recovery-Launcher.exe'
 $ShortcutBackupRoot = Join-Path $RuntimeRoot 'shortcut-backups'
 $DesktopShortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Antigravity 启动器.lnk'
 $StartMenuShortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 启动器.lnk'
+$SupervisorMutex = $null
 
 function Write-SafeLog {
     param(
@@ -242,17 +245,70 @@ function Get-StringSha256 {
     }
 }
 
+function Get-CurrentAccountFingerprint {
+    if (-not (Test-Path -LiteralPath $AccountsPath)) {
+        return ''
+    }
+
+    try {
+        $accounts = Get-Content -LiteralPath $AccountsPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        $accountId = [string]$accounts.current_account_id
+        if ([string]::IsNullOrWhiteSpace($accountId)) {
+            return ''
+        }
+        # Keep switching state isolated without persisting or logging the
+        # account ID or email address itself.
+        return Get-StringSha256 -Text $accountId
+    } catch {
+        return ''
+    }
+}
+
+function New-EmptyFailoverState {
+    return [pscustomobject]@{
+        account_fingerprint = Get-CurrentAccountFingerprint
+        active_node_id = ''
+        failed_nodes = @()
+        retired_nodes = @()
+        successful_nodes = @()
+        last_switch_at = ''
+    }
+}
+
 function Get-FailoverState {
     if (-not (Test-Path -LiteralPath $FailoverStatePath)) {
-        return [pscustomobject]@{ active_node_id = ''; failed_nodes = @(); last_switch_at = '' }
+        return New-EmptyFailoverState
     }
     try {
         $state = Get-Content -LiteralPath $FailoverStatePath -Raw | ConvertFrom-Json
-        if ($null -eq $state.failed_nodes) { $state | Add-Member -NotePropertyName failed_nodes -NotePropertyValue @() -Force }
+        foreach ($propertyName in @('failed_nodes', 'retired_nodes', 'successful_nodes')) {
+            if ($null -eq $state.PSObject.Properties[$propertyName]) {
+                $state | Add-Member -NotePropertyName $propertyName -NotePropertyValue @() -Force
+            } else {
+                $state.$propertyName = @($state.$propertyName)
+            }
+        }
+        $currentFingerprint = Get-CurrentAccountFingerprint
+        $storedFingerprint = ''
+        if ($null -ne $state.PSObject.Properties['account_fingerprint']) {
+            $storedFingerprint = [string]$state.account_fingerprint
+        }
+        if (-not [string]::IsNullOrWhiteSpace($currentFingerprint) -and
+            $storedFingerprint -ne $currentFingerprint) {
+            try {
+                $stamp = Get-Date -Format 'yyyyMMdd-HHmmssfff'
+                Copy-Item -LiteralPath $FailoverStatePath -Destination ($FailoverStatePath + '.before-account-' + $stamp + '.json') -Force
+            } catch { }
+            Write-SafeLog -Event 'failover_state_reset_for_account_change'
+            return New-EmptyFailoverState
+        }
+        if ($null -eq $state.PSObject.Properties['account_fingerprint']) {
+            $state | Add-Member -NotePropertyName account_fingerprint -NotePropertyValue $currentFingerprint -Force
+        }
         return $state
     } catch {
         Write-SafeLog -Event 'failover_state_invalid'
-        return [pscustomobject]@{ active_node_id = ''; failed_nodes = @(); last_switch_at = '' }
+        return New-EmptyFailoverState
     }
 }
 
@@ -276,6 +332,71 @@ function Get-ActiveCooldownEntries {
     return @($entries)
 }
 
+function Get-RetiredNodeEntries {
+    param([Parameter(Mandatory = $true)]$State)
+
+    $entries = @()
+    foreach ($entry in @($State.retired_nodes)) {
+        try {
+            $nodeId = [string]$entry.node_id
+            if ([string]::IsNullOrWhiteSpace($nodeId)) { continue }
+            $sourceId = ''
+            if ($null -ne $entry.PSObject.Properties['source_id']) {
+                $sourceId = [string]$entry.source_id
+            }
+            $entries += [pscustomobject]@{
+                node_id = $nodeId
+                retired_at = [string]$entry.retired_at
+                reason = [string]$entry.reason
+                source_id = $sourceId
+            }
+        } catch { }
+    }
+    return @($entries)
+}
+
+function Get-RetiredNodeIds {
+    param([Parameter(Mandatory = $true)]$State)
+
+    return @((Get-RetiredNodeEntries -State $State | Select-Object -ExpandProperty node_id))
+}
+
+function Get-SuccessfulNodeEntries {
+    param([Parameter(Mandatory = $true)]$State)
+
+    $entries = @()
+    foreach ($entry in @($State.successful_nodes)) {
+        try {
+            $nodeId = [string]$entry.node_id
+            if ([string]::IsNullOrWhiteSpace($nodeId)) { continue }
+            $sourceId = ''
+            if ($null -ne $entry.PSObject.Properties['source_id']) {
+                $sourceId = [string]$entry.source_id
+            }
+            $successCount = 1
+            if ($null -ne $entry.PSObject.Properties['success_count']) {
+                try { $successCount = [Math]::Max(1, [int]$entry.success_count) } catch { $successCount = 1 }
+            }
+            $entries += [pscustomobject]@{
+                node_id = $nodeId
+                source_id = $sourceId
+                last_passed_at = [string]$entry.last_passed_at
+                success_count = $successCount
+            }
+        } catch { }
+    }
+    return @($entries)
+}
+
+function Test-NodeRetired {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$NodeId
+    )
+
+    return [bool](@(Get-RetiredNodeIds -State $State) -contains $NodeId)
+}
+
 function Add-NodeCooldown {
     param(
         [Parameter(Mandatory = $true)]$State,
@@ -283,6 +404,9 @@ function Add-NodeCooldown {
         [Parameter(Mandatory = $true)][string]$Reason
     )
 
+    if ([string]::IsNullOrWhiteSpace($NodeId) -or (Test-NodeRetired -State $State -NodeId $NodeId)) {
+        return
+    }
     $entries = @(Get-ActiveCooldownEntries -State $State | Where-Object { [string]$_.node_id -ne $NodeId })
     $entries += [pscustomobject]@{
         node_id = $NodeId
@@ -293,12 +417,154 @@ function Add-NodeCooldown {
     Write-SafeLog -Event 'candidate_quarantined' -Values @{ node_id = $NodeId; reason = $Reason; minutes = $CandidateCooldownMinutes }
 }
 
+function Add-NodeRetirement {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$NodeId,
+        [Parameter(Mandatory = $true)][string]$Reason,
+        $Candidate = $null
+    )
+
+    if ([string]::IsNullOrWhiteSpace($NodeId)) { return }
+    $sourceId = ''
+    if ($null -ne $Candidate -and $null -ne $Candidate.PSObject.Properties['SourceId']) {
+        $sourceId = [string]$Candidate.SourceId
+    }
+    $entries = @(Get-RetiredNodeEntries -State $State | Where-Object { [string]$_.node_id -ne $NodeId })
+    $entries = @([pscustomobject]@{
+        node_id = $NodeId
+        retired_at = (Get-Date).ToString('o')
+        reason = $Reason
+        source_id = $sourceId
+    }) + $entries
+    $State.retired_nodes = @($entries)
+    $State.failed_nodes = @(Get-ActiveCooldownEntries -State $State | Where-Object { [string]$_.node_id -ne $NodeId })
+    $State.successful_nodes = @(Get-SuccessfulNodeEntries -State $State | Where-Object { [string]$_.node_id -ne $NodeId })
+    Write-SafeLog -Event 'candidate_retired' -Values @{ node_id = $NodeId; reason = $Reason; source_id = $sourceId }
+}
+
+function Mark-NodeSuccess {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)]$Candidate
+    )
+
+    $nodeId = [string]$Candidate.Id
+    if ([string]::IsNullOrWhiteSpace($nodeId) -or (Test-NodeRetired -State $State -NodeId $nodeId)) {
+        return
+    }
+    $previous = @(Get-SuccessfulNodeEntries -State $State | Where-Object { [string]$_.node_id -eq $nodeId } | Select-Object -First 1)
+    $successCount = 1
+    if ($previous.Count -gt 0) {
+        $successCount = [Math]::Max(1, [int]$previous[0].success_count) + 1
+    }
+    $rest = @(Get-SuccessfulNodeEntries -State $State | Where-Object { [string]$_.node_id -ne $nodeId })
+    $newEntry = [pscustomobject]@{
+        node_id = $nodeId
+        source_id = [string]$Candidate.SourceId
+        last_passed_at = (Get-Date).ToString('o')
+        success_count = $successCount
+    }
+    $State.successful_nodes = @(@($newEntry) + $rest | Select-Object -First $MaxSuccessHistory)
+    $State.failed_nodes = @(Get-ActiveCooldownEntries -State $State | Where-Object { [string]$_.node_id -ne $nodeId })
+    Write-SafeLog -Event 'candidate_verified' -Values @{ node_id = $nodeId; source_id = [string]$Candidate.SourceId; success_count = $successCount }
+}
+
+function Get-CandidateFailureDisposition {
+    param([Parameter(Mandatory = $true)][string]$FailureKind)
+
+    if ($FailureKind -in @('model_location', 'model_non_ok', 'proxy_egress_wrong_country', 'config_invalid')) {
+        return 'retire'
+    }
+    return 'cooldown'
+}
+
+function Get-CandidateFailureKind {
+    param([Parameter(Mandatory = $true)]$ErrorRecord)
+
+    $message = [string]$ErrorRecord
+    try {
+        if ($null -ne $ErrorRecord.Exception) {
+            $message += ' ' + [string]$ErrorRecord.Exception.Message
+        }
+    } catch { }
+    if ($message -match '(?i)model_location|user location is not supported|failed_precondition') { return 'model_location' }
+    if ($message -match '(?i)model_non_ok') { return 'model_non_ok' }
+    if ($message -match '(?i)proxy_egress_wrong_country') { return 'proxy_egress_wrong_country' }
+    if ($message -match '(?i)config_test_failed') { return 'config_invalid' }
+    if ($message -match '(?i)model_transport') { return 'model_transport' }
+    return 'transient_network'
+}
+
+function Get-OrderedCandidates {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Candidates,
+        [Parameter(Mandatory = $true)]$State,
+        [string[]]$CooldownIds = @(),
+        [switch]$IncludeCooldown
+    )
+
+    $retiredIds = @(Get-RetiredNodeIds -State $State)
+    $historyById = @{}
+    foreach ($entry in @(Get-SuccessfulNodeEntries -State $State)) {
+        $historyById[[string]$entry.node_id] = $entry
+    }
+
+    $decorated = @()
+    $discoveryIndex = 0
+    foreach ($candidate in @($Candidates)) {
+        $discoveryIndex++
+        $nodeId = [string]$candidate.Id
+        if ([string]::IsNullOrWhiteSpace($nodeId) -or $retiredIds -contains $nodeId) { continue }
+        if (-not $IncludeCooldown -and $CooldownIds -contains $nodeId) { continue }
+
+        $history = $null
+        if ($historyById.ContainsKey($nodeId)) { $history = $historyById[$nodeId] }
+        $isActive = [string]$State.active_node_id -eq $nodeId
+        $isVerified = $null -ne $history -or $isActive
+        $lastPassedTicks = [int64]0
+        $successCount = 0
+        if ($null -ne $history) {
+            $successCount = [int]$history.success_count
+            try { $lastPassedTicks = ([datetime]::Parse([string]$history.last_passed_at)).Ticks } catch { }
+        } elseif ($isActive) {
+            $successCount = 1
+            try { $lastPassedTicks = ([datetime]::Parse([string]$State.last_switch_at)).Ticks } catch { }
+        }
+        $priority = 1000
+        try { $priority = [int]$candidate.Priority } catch { }
+        $regionRank = 100
+        try { $regionRank = [int]$candidate.RegionRank } catch { }
+        $decorated += [pscustomobject]@{
+            Candidate = $candidate
+            RegionRank = $regionRank
+            VerifiedRank = if ($isVerified) { 0 } else { 1 }
+            ActiveRank = if ($isActive) { 0 } else { 1 }
+            LastPassedTicks = $lastPassedTicks
+            SuccessCount = $successCount
+            Priority = $priority
+            DiscoveryIndex = $discoveryIndex
+        }
+    }
+
+    # Region is an explicit policy: Japan first, United States as fallback.
+    # Within each region, retain verified-history and sticky-node preference.
+    $ordered = @($decorated | Sort-Object @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
+    return @($ordered | ForEach-Object { $_.Candidate })
+}
+
 function Save-FailoverState {
     param(
         [Parameter(Mandatory = $true)]$State,
         [string]$ActiveNodeId = ''
     )
 
+    $currentFingerprint = Get-CurrentAccountFingerprint
+    if ($null -eq $State.PSObject.Properties['account_fingerprint']) {
+        $State | Add-Member -NotePropertyName account_fingerprint -NotePropertyValue $currentFingerprint -Force
+    } elseif (-not [string]::IsNullOrWhiteSpace($currentFingerprint)) {
+        $State.account_fingerprint = $currentFingerprint
+    }
     if (-not [string]::IsNullOrWhiteSpace($ActiveNodeId)) {
         $State.active_node_id = $ActiveNodeId
         $State.last_switch_at = (Get-Date).ToString('o')
@@ -402,7 +668,7 @@ function Get-CandidateNodeDefinitions {
     }
 
     # Every locally imported Clash Verge subscription is a possible backup.
-    # Candidates still have to pass live Google/OAuth/US checks before use.
+    # Candidates still have to pass live Google/OAuth/egress/model checks.
     $profileSources += @(Get-ChildItem -LiteralPath $ProfilesRoot -Filter '*.yaml' -File -ErrorAction SilentlyContinue | ForEach-Object {
         [pscustomobject]@{
             Path = $_.FullName
@@ -457,11 +723,14 @@ function Get-CandidateNodeDefinitions {
                         }
                     }
                 }
+                $matchesJapan = $candidateName.IndexOf($JapanNodeMatch, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                    [regex]::IsMatch($candidateName, '(?i)(^|\W)(Japan|Tokyo|JP)(\W|$)')
+                $matchesUnitedStates = $candidateName.IndexOf($UnitedStatesNodeMatch, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                    [regex]::IsMatch($candidateName, '(?i)(^|\W)(US|USA|United States|Los Angeles)(\W|$)')
                 $matchesTarget = if ($TargetNodeExactMatch) {
                     $candidateName.Equals($TargetNodeMatch, [System.StringComparison]::OrdinalIgnoreCase)
                 } else {
-                    $candidateName.IndexOf($UnitedStatesNodeMatch, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-                        [regex]::IsMatch($candidateName, '(?i)(^|\W)US(\W|$)')
+                    $matchesJapan -or $matchesUnitedStates
                 }
                 if ($nameMatch.Success -and $matchesTarget) {
                     $nodeDefinition = $trimmed.Substring(2).Trim()
@@ -474,15 +743,22 @@ function Get-CandidateNodeDefinitions {
                     if ($seenDefinitions.ContainsKey($definitionId)) { continue }
                     $seenDefinitions[$definitionId] = $true
                     $sourceId = Get-StringSha256 -Text ([string]$source.SourceKey)
-                    $priority = [int]$source.Priority
-                    if ($candidateName.Equals($DefaultTargetNodeMatch, [System.StringComparison]::OrdinalIgnoreCase)) {
-                        $priority = 0
+                    $candidateCountry = if ($matchesJapan) { 'JP' } elseif ($matchesUnitedStates) { 'US' } else { $ExpectedEgressCountry }
+                    if ([string]::IsNullOrWhiteSpace($candidateCountry)) {
+                        continue
                     }
+                    $regionRank = if ($candidateCountry -eq 'JP') { 0 } else { 1 }
+                    $priority = ($regionRank * 1000) + [int]$source.Priority
                     $candidates += [pscustomobject]@{
                         Id = Get-StringSha256 -Text (([string]$source.SourceKey) + '|' + $candidateName + '|' + $definitionId)
                         SourceId = $sourceId
+                        SourceKey = [string]$source.SourceKey
+                        DefinitionId = $definitionId
                         Name = $candidateName
                         Definition = ('{ name: ' + $TargetAlias + $definitionTail)
+                        Region = $candidateCountry
+                        RegionRank = $regionRank
+                        ExpectedEgressCountry = $candidateCountry
                         Priority = $priority
                     }
                 }
@@ -567,7 +843,7 @@ function Test-PrivateConfig {
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
         Write-SafeLog -Event 'config_test_failed' -Values @{ code = $exitCode }
-        Stop-WithMessage -Event 'config_test_failed'
+        throw 'config_test_failed'
     }
     Write-SafeLog -Event 'config_test_passed'
 }
@@ -716,16 +992,20 @@ function Test-GoogleConnectivity {
 }
 
 function Test-ProxyEgress {
+    param([Parameter(Mandatory = $true)][string]$ExpectedCountry)
+
     $country = ''
+    $wrongCountry = $false
     for ($attempt = 1; $attempt -le $ConnectivityAttemptCount; $attempt++) {
         $trace = Get-TextThroughProxy -Uri 'https://www.cloudflare.com/cdn-cgi/trace'
         $match = [regex]::Match($trace, '(?m)^loc=([A-Za-z]{2})\s*$')
         if ($match.Success) {
             $country = $match.Groups[1].Value.ToUpperInvariant()
-            if ($country -eq $ExpectedEgressCountry) {
+            if ($country -eq $ExpectedCountry) {
                 Write-SafeLog -Event 'proxy_egress_country_passed' -Values @{ country = $country; attempts = $attempt }
                 return $country
             }
+            $wrongCountry = $true
             break
         }
         if ($attempt -lt $ConnectivityAttemptCount) {
@@ -733,8 +1013,11 @@ function Test-ProxyEgress {
         }
     }
 
-    Write-SafeLog -Event 'proxy_egress_country_failed' -Values @{ country = $country; expected = $ExpectedEgressCountry; attempts = $ConnectivityAttemptCount }
-    Stop-WithMessage -Event 'proxy_egress_country_failed'
+    Write-SafeLog -Event 'proxy_egress_country_failed' -Values @{ country = $country; expected = $ExpectedCountry; attempts = $ConnectivityAttemptCount }
+    if ($wrongCountry) {
+        throw 'proxy_egress_wrong_country'
+    }
+    throw 'proxy_egress_network_failure'
 }
 
 function Test-RealModelGeneration {
@@ -753,6 +1036,7 @@ function Test-RealModelGeneration {
     $startedAt = Get-Date
     $exitCode = -1
     $probeOutput = @()
+    $probeDiagnosticText = ''
     try {
         $env:HTTP_PROXY = $ProxyUrl
         $env:HTTPS_PROXY = $ProxyUrl
@@ -777,24 +1061,37 @@ function Test-RealModelGeneration {
     $locationFailure = $false
     if (Test-Path -LiteralPath $probeLog) {
         try {
+            $probeDiagnosticText = Get-Content -LiteralPath $probeLog -Raw -ErrorAction SilentlyContinue
             $locationFailure = [bool](Select-String -LiteralPath $probeLog -Pattern 'User location is not supported|FAILED_PRECONDITION.*400' -CaseSensitive:$false -Quiet)
         } catch { }
     }
     Remove-Item -LiteralPath $probeLog -Force -ErrorAction SilentlyContinue
 
     $durationMs = [int][math]::Round(((Get-Date) - $startedAt).TotalMilliseconds)
-    if ($exitCode -eq 0 -and $status -eq 'SUCCESS' -and $responseText -eq 'OK') {
+    if ($exitCode -eq 0 -and $status -eq 'SUCCESS' -and $responseText -ceq 'OK') {
         Write-SafeLog -Event 'model_generation_probe_passed' -Values @{ duration_ms = $durationMs }
         return $true
+    }
+
+    $transportFailure = [regex]::IsMatch(($probeDiagnosticText + ' ' + (($probeOutput | ForEach-Object { [string]$_ }) -join ' ')), '(?i)timed?\s*out|timeout|connection\s+(?:reset|closed|refused)|network|temporarily\s+unavailable|unreachable|eof|deadline')
+    $failureKind = 'model_transport'
+    if ($locationFailure) {
+        $failureKind = 'model_location'
+    } elseif ($status -eq 'SUCCESS' -or $status -eq 'ERROR' -or -not [string]::IsNullOrWhiteSpace($responseText)) {
+        # A structured model result that is not exactly OK is a candidate
+        # eligibility/quality failure. Retire it instead of trying it again.
+        # Only an explicitly transport-shaped failure remains temporary.
+        $failureKind = if ($transportFailure -and $status -ne 'SUCCESS') { 'model_transport' } else { 'model_non_ok' }
     }
 
     Write-SafeLog -Event 'model_generation_probe_failed' -Values @{
         exit_code = $exitCode
         status = $status
         location_failure = $locationFailure
+        failure_kind = $failureKind
         duration_ms = $durationMs
     }
-    throw 'model_generation_probe_failed'
+    throw $failureKind
 }
 
 function Sync-AntigravityProxySetting {
@@ -1020,10 +1317,39 @@ function Wait-AntigravityReady {
 
 if ($PolicyTest) {
     $policyCandidates = @(Get-CandidateNodeDefinitions)
+    $policyState = New-EmptyFailoverState
+    $policyState.active_node_id = 'verified-active'
+    $policyState.last_switch_at = '2026-09-02T00:00:00Z'
+    $policyState.successful_nodes = @([pscustomobject]@{
+        node_id = 'verified-history'
+        source_id = 'source-a'
+        last_passed_at = '2026-09-02T01:00:00Z'
+        success_count = 3
+    })
+    $policyCandidatesForOrder = @(
+        [pscustomobject]@{ Id = 'unverified'; SourceId = 'source-b'; Priority = 0; Region = 'JP'; RegionRank = 0; Name = 'unverified' },
+        [pscustomobject]@{ Id = 'verified-history'; SourceId = 'source-a'; Priority = 30; Region = 'JP'; RegionRank = 0; Name = 'verified-history' },
+        [pscustomobject]@{ Id = 'retired'; SourceId = 'source-c'; Priority = 0; Region = 'JP'; RegionRank = 0; Name = 'retired' }
+    )
+    $policyState.retired_nodes = @([pscustomobject]@{
+        node_id = 'retired'
+        retired_at = '2026-09-02T00:00:00Z'
+        reason = 'model_location'
+        source_id = 'source-c'
+    })
+    $policyOrder = @(Get-OrderedCandidates -Candidates $policyCandidatesForOrder -State $policyState -IncludeCooldown)
+    $regionOrder = @(Get-OrderedCandidates -Candidates @(
+        [pscustomobject]@{ Id = 'japan-unverified'; SourceId = 'source-jp'; Priority = 0; Region = 'JP'; RegionRank = 0; Name = 'japan-unverified' },
+        [pscustomobject]@{ Id = 'us-verified'; SourceId = 'source-us'; Priority = 0; Region = 'US'; RegionRank = 1; Name = 'us-verified' }
+    ) -State (New-EmptyFailoverState) -IncludeCooldown)
     [pscustomobject]@{
         candidate_count = $policyCandidates.Count
         unique_count = @($policyCandidates | Select-Object -ExpandProperty Id -Unique).Count
-        preferred_first = [bool]($policyCandidates.Count -gt 0 -and [int]$policyCandidates[0].Priority -eq 0)
+        preferred_first = [bool]($policyCandidates.Count -gt 0 -and [int]$policyCandidates[0].RegionRank -eq 0)
+        japan_candidate_count = @($policyCandidates | Where-Object { [string]$_.Region -eq 'JP' }).Count
+        united_states_candidate_count = @($policyCandidates | Where-Object { [string]$_.Region -eq 'US' }).Count
+        japan_preferred_first = [bool]($regionOrder.Count -gt 0 -and [string]$regionOrder[0].Id -eq 'japan-unverified')
+        account_scoped_state = [bool]((New-EmptyFailoverState).PSObject.Properties.Name -contains 'account_fingerprint')
         max_candidate_count = $MaxCandidateCount
         cooldown_minutes = $CandidateCooldownMinutes
         real_model_gate = $true
@@ -1031,8 +1357,31 @@ if ($PolicyTest) {
         model_probe_timeout_seconds = $ModelProbeTimeoutSeconds
         stop_process_timeout_seconds = $StopProcessTimeoutSeconds
         log_failure_nonfatal = Test-SafeLogFailureIsNonFatal
+        model_non_ok_disposition = Get-CandidateFailureDisposition -FailureKind 'model_non_ok'
+        location_failure_disposition = Get-CandidateFailureDisposition -FailureKind 'model_location'
+        wrong_egress_disposition = Get-CandidateFailureDisposition -FailureKind 'proxy_egress_wrong_country'
+        transient_network_disposition = Get-CandidateFailureDisposition -FailureKind 'transient_network'
+        model_transport_disposition = Get-CandidateFailureDisposition -FailureKind 'model_transport'
+        retired_node_excluded = [bool](@($policyOrder | Select-Object -ExpandProperty Id) -notcontains 'retired')
+        verified_history_first = [bool]($policyOrder.Count -gt 0 -and [string]$policyOrder[0].Id -eq 'verified-history')
+        success_history_limit = $MaxSuccessHistory
     } | ConvertTo-Json -Compress
     return
+}
+
+# The watcher and a foreground double-click can arrive at the same time. The
+# launcher mutex alone does not protect this PowerShell worker, so serialize
+# the actual proxy/config/model run as well. A process exit releases the OS
+# mutex even when Stop-WithMessage terminates this script with an error.
+$supervisorMutexCreated = $false
+try {
+    $SupervisorMutex = New-Object System.Threading.Mutex -ArgumentList @($true, 'Local\AntigravitySupervisorRun', [ref]$supervisorMutexCreated)
+} catch {
+    $SupervisorMutex = $null
+}
+if ($null -ne $SupervisorMutex -and -not $supervisorMutexCreated) {
+    Write-SafeLog -Event 'supervisor_run_busy'
+    exit 4
 }
 
 $MihomoPath = Resolve-MihomoPath
@@ -1056,33 +1405,11 @@ if ($RecoveryReason -eq 'NetworkFailure' -and -not [string]::IsNullOrWhiteSpace(
     Add-NodeCooldown -State $failoverState -NodeId ([string]$failoverState.active_node_id) -Reason $RecoveryReason
 }
 $cooldownIds = @(Get-ActiveCooldownEntries -State $failoverState | Select-Object -ExpandProperty node_id)
-$orderedCandidates = @()
-if ($RecoveryReason -in @('Startup', 'LocationFailure') -and -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id)) {
-    # A location line can be replayed when Antigravity restores an old failed
-    # conversation after restart. Re-check the active route with the real
-    # model gate before quarantining it. A genuine location failure still
-    # fails that gate and enters cooldown in the candidate catch block.
-    $orderedCandidates += @($candidates | Where-Object { [string]$_.Id -eq [string]$failoverState.active_node_id })
+$includeCooldown = $RecoveryReason -eq 'Startup'
+$orderedCandidates = @(Get-OrderedCandidates -Candidates $candidates -State $failoverState -CooldownIds $cooldownIds -IncludeCooldown:$includeCooldown)
+if ($includeCooldown -and $cooldownIds.Count -gt 0) {
+    Write-SafeLog -Event 'manual_startup_cooldown_bypass' -Values @{ candidate_count = $orderedCandidates.Count }
 }
-if ($RecoveryReason -eq 'Startup') {
-    $orderedCandidates += @($candidates)
-    if ($cooldownIds.Count -gt 0) {
-        Write-SafeLog -Event 'manual_startup_cooldown_bypass' -Values @{ candidate_count = $candidates.Count }
-    }
-} else {
-    $orderedCandidates += @($candidates | Where-Object {
-        $cooldownIds -notcontains [string]$_.Id
-    })
-}
-$deduplicatedCandidates = @()
-$orderedIds = @{}
-foreach ($candidate in $orderedCandidates) {
-    if (-not $orderedIds.ContainsKey([string]$candidate.Id)) {
-        $orderedIds[[string]$candidate.Id] = $true
-        $deduplicatedCandidates += $candidate
-    }
-}
-$orderedCandidates = @($deduplicatedCandidates)
 if ($orderedCandidates.Count -eq 0) {
     Save-FailoverState -State $failoverState
     Stop-WithMessage -Event 'all_candidates_in_cooldown'
@@ -1092,24 +1419,38 @@ $selectedCandidate = $null
 $configState = $null
 $connectivity = $null
 $egressCountry = ''
+$candidateIndex = 0
+$candidateTotal = $orderedCandidates.Count
 foreach ($candidate in $orderedCandidates) {
+    $candidateIndex++
     try {
-        Write-SafeLog -Event 'candidate_preflight_started' -Values @{ node_id = [string]$candidate.Id; recovery = $RecoveryReason }
+        Write-SafeLog -Event 'candidate_preflight_started' -Values @{ node_id = [string]$candidate.Id; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
         $candidateConfig = Write-PrivateConfig -ProfileId 'active-clash-runtime' -Candidate $candidate
         Test-PrivateConfig
         Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
         $candidateConnectivity = Test-GoogleConnectivity
-        $candidateCountry = Test-ProxyEgress
+        $candidateCountry = Test-ProxyEgress -ExpectedCountry ([string]$candidate.ExpectedEgressCountry)
         Test-RealModelGeneration | Out-Null
+        for ($confirmationIndex = 2; $confirmationIndex -le $ModelProbeConfirmationCount; $confirmationIndex++) {
+            Test-RealModelGeneration | Out-Null
+            Write-SafeLog -Event 'model_generation_probe_confirmation_passed' -Values @{ attempt = $confirmationIndex; total = $ModelProbeConfirmationCount }
+        }
         $selectedCandidate = $candidate
         $configState = $candidateConfig
         $connectivity = $candidateConnectivity
         $egressCountry = $candidateCountry
-        Write-SafeLog -Event 'candidate_preflight_passed' -Values @{ node_id = [string]$candidate.Id; recovery = $RecoveryReason }
+        Mark-NodeSuccess -State $failoverState -Candidate $candidate
+        Write-SafeLog -Event 'candidate_preflight_passed' -Values @{ node_id = [string]$candidate.Id; source_id = [string]$candidate.SourceId; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
         break
     } catch {
-        Add-NodeCooldown -State $failoverState -NodeId ([string]$candidate.Id) -Reason 'preflight_failed'
-        Write-SafeLog -Event 'candidate_preflight_failed' -Values @{ node_id = [string]$candidate.Id }
+        $failureKind = Get-CandidateFailureKind -ErrorRecord $_
+        $failureDisposition = Get-CandidateFailureDisposition -FailureKind $failureKind
+        if ($failureDisposition -eq 'retire') {
+            Add-NodeRetirement -State $failoverState -NodeId ([string]$candidate.Id) -Reason $failureKind -Candidate $candidate
+        } else {
+            Add-NodeCooldown -State $failoverState -NodeId ([string]$candidate.Id) -Reason $failureKind
+        }
+        Write-SafeLog -Event 'candidate_preflight_failed' -Values @{ node_id = [string]$candidate.Id; source_id = [string]$candidate.SourceId; failure_kind = $failureKind; disposition = $failureDisposition; candidate_index = $candidateIndex; candidate_total = $candidateTotal }
     }
 }
 if ($null -eq $selectedCandidate) {
@@ -1179,7 +1520,7 @@ if ($localizationEnabled -and $localizationMode -eq 'cdp-loader') {
 }
 
 $state = [ordered]@{
-    version = '2.4.0'
+    version = '2.5.0'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId
@@ -1187,7 +1528,11 @@ $state = [ordered]@{
     target_alias = $TargetAlias
     target_node = 'CURRENT-VERIFIED-FAILOVER-CANDIDATE'
     active_node_id = [string]$selectedCandidate.Id
+    active_source_id = [string]$selectedCandidate.SourceId
     candidate_count = $candidates.Count
+    eligible_candidate_count = $orderedCandidates.Count
+    retired_candidate_count = @(Get-RetiredNodeEntries -State $failoverState).Count
+    verified_candidate_count = @(Get-SuccessfulNodeEntries -State $failoverState).Count
     recovery_reason = $RecoveryReason
     private_port = $Port
     mihomo_pid = [int](Get-Content -LiteralPath $PidPath -Raw).Trim()

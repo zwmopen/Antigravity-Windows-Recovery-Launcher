@@ -1,7 +1,7 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：0.8.0
+> 对应版本：0.9.0
 > 最后核对：2026-09-02。
 
 ## 项目定位和范围
@@ -17,15 +17,17 @@
 
 ## 架构、模块和启动方式
 
-- `Antigravity-Recovery-Launcher.exe`：稳定桌面入口和克制玻璃中文实时状态窗口；从本次新增的脱敏事件显示独立代理、候选数量、Google/OAuth、出口、真实模型、中文注入和应用就绪状态，再调用监督器完成恢复。
+- `Antigravity-Recovery-Launcher.exe`：稳定桌面入口和克制玻璃中文实时状态窗口；从本次新增的脱敏事件显示独立代理、候选数量、Google/OAuth、出口、真实模型、中文注入和应用就绪状态，再调用监督器完成恢复。若后台恢复已先占用监督器，前台会等待并接管其结果。
 - `Antigravity-AccountWatcher.exe`：监控 Cockpit 当前账号、无代理 `--reuse-window` 实例，以及 17897 到 Google/OAuth 的持续健康；0.5.0 连续 3 次网络失败或新地区 400 才触发有界后台恢复。
-- `Antigravity-ProxySupervisor.ps1`：监督器 2.4.0 从 Clash Verge 与 Mihomo Party 本地缓存发现跨来源美国候选，维护失败冷却，配置/启动 17897，并以官方 `agy` 最小真实生成作为桌面启动前门禁；新增脱敏候选数量事件供中文启动器显示。
+- `Antigravity-ProxySupervisor.ps1`：监督器 2.5.0 从 Clash Verge 与 Mihomo Party 本地缓存发现跨来源日本/美国候选，维护失败冷却，配置/启动 17897，并以官方 `agy` 最小真实生成作为桌面启动前门禁；新增脱敏候选数量事件供中文启动器显示。
 - `localization-extension/translation-core.js`：可审查的词库和纯替换核心；完整句子、UI 短词、权限/额度/时间/数量/模型动态规则分层。
 - `localization-extension/content.js`：本地 UI DOM 观察、属性翻译和防抖调度；保护虚拟列表对话标题及用户内容。
 - `Set-AntigravityLocalization.ps1` + 两个 `.cmd`：中文启用/英文恢复的可逆开关。
 - `Antigravity-Chinese-Assistant.exe`：可对外分享的独立便携界面，只负责查找官方客户端、动态汉化、英文恢复和桌面入口，不依赖本机代理恢复链。
 - `build-shareable.ps1`：构建独立 Windows x64 ZIP、校验清单和用户说明。
 - `build.ps1` 构建；公开 ZIP 根目录的 `Install.cmd` 是普通用户双击安装入口，内部调用 `install.ps1` 备份并安装桌面入口和 HKCU Run 监控器。
+- `installer/Antigravity-Recovery-Setup.iss` + `build-installer.ps1`：构建中文单文件 Setup.exe；支持粘贴/浏览安装路径、每用户安装、升级复用目录、完成页启动/打开目录和标准卸载。
+- `uninstall.ps1`：按安装目录校验并停止本项目进程，移除本项目快捷方式和 HKCU Run；保留所有账号、会话、项目、订阅与 private-proxy 数据。
 
 ## 数据、同步、迁移、备份和恢复
 
@@ -37,19 +39,24 @@
 
 ## 版本、构建、发布和回滚
 
-- 当前本机恢复链版本：0.8.0；监督器 2.4.0、AccountWatcher 0.5.2、启动器 0.8.0。
+- 当前本机恢复链版本：0.9.0；监督器 2.5.0、AccountWatcher 0.5.2、启动器 0.9.0。
 - 独立分享版仍为 0.4.0，且不包含监控组件、节点池或代理配置。
 - 构建：Windows .NET Framework 4.0 C# 编译器生成两个 winexe，脚本执行语法检查。
-- 发布：`releases/current`；安装时复制到 `%LOCALAPPDATA%\Antigravity\launcher`，桌面快捷方式和开机监控指向该稳定运行目录，不依赖源码目录路径。
+- 发布：`releases/current`；Setup 可安装到用户选择目录，ZIP 默认复制到 `%LOCALAPPDATA%\Antigravity\launcher`。桌面快捷方式和开机监控始终指向稳定运行目录，不依赖源码目录路径。
+- `build-installer.ps1` 优先使用现有 ISCC；缺失时从 Inno Setup 官方 GitHub Release 获取 7.1.0 x64 安装器，校验固定 SHA-256 `0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F` 和有效数字签名，再装入 `.work/tools` 构建。
 - 中文扩展随发布包复制到 `%LOCALAPPDATA%\Antigravity\launcher\localization-extension`；启动器默认追加 `--load-extension`，英文恢复标记存在时跳过该参数。
 - 可分享版输出到 `releases/shareable/Antigravity-Chinese-Assistant-<version>-windows-x64.zip`；只包含中文助手、Loader、词库、使用说明、第三方说明和 SHA-256 清单，不包含监督器、账号监控器或任何代理配置。
 - 安装会创建一次性的 `localization-extension-pending.flag`，防止升级时监控器立即重启用户正在使用的窗口；显式中文/英文启动成功后由监督器清除。
 - 公开 ZIP 根目录包含 `Install.cmd`；它只切换到自身目录并以 Bypass 策略调用同目录 `install.ps1`，失败时保留窗口和退出码，核心安装逻辑仍保持模块化、可审计。
-- 桌面与用户开始菜单均维护 `Antigravity.lnk`，启动器每次运行会校验并在变更前备份；安装更新时只停止本项目旧监控器并替换稳定运行副本。
+- 桌面与用户开始菜单均维护 `Antigravity 启动器.lnk`，启动器每次运行会校验并在变更前备份；安装更新时只停止本项目旧监控器并替换稳定运行副本。
 - 回滚：恢复 `shortcut-backups` 中的快捷方式，删除 HKCU Run 的 `AntigravityAccountWatcher` 值并停止本项目监控器；不删除用户数据。
 
 ## 测试和当前验收
 
+- 2026-09-02 16:38–16:44：0.9.0 新版源码构建并安装到稳定目录；桌面快捷方式双击与后台恢复竞态实测通过。前台遇到 `supervisor_run_busy` 后保持状态窗口等待，后台真实模型门禁完成后前台自动接管并正常退出，无“启动未通过”误报。最终状态为 `ready`、候选池 32 条、JP 出口、17897、语言服务 8 条专线连接；7897 仍由原进程监听。
+- 2026-09-02：竞态复测中首个候选出现真实模型地区失败后被淘汰，下一条日本候选通过两次官方 `agy` 最小真实生成并启动 Antigravity；证明候选轮换与真实模型门禁均生效。
+- 2026-09-02：0.9.0 安装包验收通过。现有 Setup.exe 大小 2,158,174 字节、SHA-256 `C6710685927B08D618ABC95DE7B5C89038F2EE8B6DFF055B9AA79F3874D16D33`；现有 ZIP 大小 84,512 字节、SHA-256 `2D8D0CEDD76D303DD095DB8E98C481B7CB01EEC7D1D2FA25965C9BB80B85ED07`；ZIP 21 个条目，不含 `agy.exe`、日志、Token 或订阅配置。
+- 2026-09-02：0.9.0 回归测试全部通过：故障转移 32 候选、AccountWatcher 14 项、启动器中文状态、安装器契约、中文扩展、分享版隔离和 PowerShell 语法检查。
 - 2026-09-02 13:43–13:44：0.8.0 中文状态窗口首次实机验收。Computer Use 读取到窗口标题、全部中文步骤和无裁切布局；本次事件实际显示 17 条候选、独立 17897、Google/OAuth 连通、US 出口和真实模型 OK。随后 Antigravity PID 45172 ready，language server PID 18228 建立 10 条 17897 连接，中文 Loader 成功；7897 保持 PID 8240。用户随后指定使用个人开发系统中的“克制玻璃”视觉真源，并增加自绘百分比进度条，需再次完成视觉和发布包验收。
 - 2026-09-02 13:52–14:06：克制玻璃最终视觉复验通过，圆角黑边/锯齿已消除，动态进度显示正常；完整启动再次发现 17 条候选，Google/OAuth、US 出口和真实模型 OK 通过，Antigravity PID 23784 ready，language server PID 15048 建立 8 条 17897 连接，中文注入成功，7897 仍为 PID 8240。加入阶段内感知进度与 `✅` 成功符号后全部策略/UI/中文/隔离测试再次通过；最终 0.8.0 ZIP 为 75,616 字节，SHA-256 `B4294FA3545B8431605CECD79A42A1C44AE1EB06721A91F38EFEFA0D6CE0C77A`。
 - 2026-09-02：发布前按用户反馈增加感知性能动画。百分比从 1% 快速起步，在每个真实阶段的安全上限内持续微增；只有候选发现、代理、网络、出口、模型、应用和 Loader 的新事件才能解锁后续区间，最终成功事件才允许 100%。
@@ -99,8 +106,8 @@
 
 ## 已知问题、技术债和风险
 
-- Mihomo 路径和订阅缓存目录仍是本机值；当前默认策略为当前活动订阅中已真实验收的洛杉矶候选，跨电脑安装前需自动发现 Clash 路径、订阅格式、账号和可用节点，不复制本机节点结论。
-- 启动器现在依赖 Cloudflare trace 的 `loc=US` 做出口一致性门禁；若目标节点不可访问该 trace 或出口不是 US，会安全停止启动。
+- Mihomo 路径和订阅缓存目录仍是本机值；当前默认策略为当前活动订阅中日本优先、美国兜底的候选，跨电脑安装前需自动发现 Clash 路径、订阅格式、账号和可用节点，不复制本机节点结论。
+- 启动器按候选声明校验实际出口为 JP 或 US；若目标节点不可访问出口探针、出口不一致或真实模型不通过，会淘汰该候选并继续下一条。
 - 真实模型验收优先使用 Computer Use 在明确授权下发送无工具、无文件修改的最小测试消息，再读取新日志判定；若平台不可用，则由用户发送。不得改用 CDP/本地接口伪造模型验收。
 - `--load-extension` 是 Chromium/Electron 版本兼容边界；扩展若未加载，优先检查主进程命令行、`localization-extension_enabled` 日志和本地 UI 协议，不要修改 `app.asar` 兜底。
 - AccountWatcher 会常驻以处理真实切号和运行时代理绕过，但 Loader 与恢复启动器在完成后退出。监控器不得把普通 `accounts.json` 写入当作恢复条件；若日志出现同账号写入后的 `repair_started`，说明仍在运行旧版。
@@ -110,9 +117,9 @@
 
 ## 当前状态和下一步
 
-- 状态：0.8.0 已完成中文实时状态、克制玻璃界面、感知性能百分比、完整测试、实机启动、私有/公开仓库同步和正式 Release。公开 ZIP 已重新下载、校验并安装，桌面唯一入口为 0.8.0；CI、脱敏边界、真实模型门禁和 7897/17897 隔离均通过。
+- 状态：0.9.0 已完成中文实时状态、克制玻璃界面、感知性能百分比、后台/前台恢复竞态修复、Setup.exe/ZIP 构建、实机启动和 7897/17897 隔离验收；公开 Release 待本轮提交后同步。
 - 私有仓库：`https://github.com/zwmopen/antigravity-windows-recovery-launcher-private`。
-- 公开仓库：`https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher`；当前稳定 Release 目标：`v0.8.0`。
+- 公开仓库：`https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher`；当前稳定 Release 目标：`v0.9.0`。
 - 下一步：维护观察真实出口稳定性；若所有普通机房候选长期被拒绝，增加用户自有的干净 ISP/住宅出口适配，但不得把凭据或节点配置写入仓库。
 - 下一位维护者先读：`README.md` 和 `docs/DESIGN.md`。
 - 禁止：删除登录态/会话、伪造账号地区、修改全局 7897、刷新全部订阅、改变 Clash 日常规则模式、修改 `app.asar`，或用 Google 204 冒充模型成功。

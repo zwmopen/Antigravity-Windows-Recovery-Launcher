@@ -2,6 +2,16 @@
 
 记录可重复执行的语法、单元、集成、回归和手动验收方法。不要只写“已测试”，必须包含命令、环境和真实结果。
 
+## 0.9.0 Windows 安装器
+
+```powershell
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\installer-contract.test.ps1
+& .\build-release.ps1
+& .\build-installer.ps1
+```
+
+安装器构建会优先使用本机 Inno Setup；缺失时从官方 GitHub Release 下载并校验固定 SHA-256 与 Authenticode 签名。应分别验收 Setup.exe 的默认路径、粘贴/浏览自定义路径、升级复用路径、完成页“立即启动/打开安装目录”、Windows 标准卸载，以及卸载后 Antigravity 用户数据、Clash 数据和 `private-proxy` 仍存在。Setup 与 ZIP 都不得包含 `agy.exe`、订阅、节点、Token 或日志。
+
 ## 0.7.0 真实模型门禁与公开包
 
 ```powershell
@@ -21,9 +31,9 @@ node .\tests\shareable-assistant.test.js
 & .\tests\run-failover-policy-tests.ps1
 ```
 
-策略测试要求：一次和两次网络失败不切换，连续三次才恢复；新地区 400 立即轮换；后台原因只映射到三种受控监督器模式。节点池测试只读取当前活动 Clash 配置，不改运行状态；本机应发现至少 2 条唯一洛杉矶候选、已验证主节点排序第一、冷却不少于 15 分钟。
+策略测试要求：一次和两次网络失败不切换，连续三次才恢复；新地区 400 立即轮换；后台原因只映射到三种受控监督器模式。节点池测试只读取当前活动 Clash 配置，不改运行状态；本机应发现至少 2 条唯一日美候选、日本优先、冷却不少于 15 分钟。
 
-实机验收还必须确认：断流恢复只改变 `17897` 专用 Mihomo；`7897` PID、系统代理和 Clash 规则模式不变；后台不弹窗；新候选通过 Google/OAuth/US 预检；最终由用户正常对话后的新 `ResponseID` 确认模型可用。
+实机验收还必须确认：断流恢复只改变 `17897` 专用 Mihomo；`7897` PID、系统代理和 Clash 规则模式不变；后台不弹窗；新候选通过 Google/OAuth/JP 或 US 出口预检；最终由官方 CLI 真实生成或用户正常对话后的新 `ResponseID` 确认模型可用。
 
 ## AccountWatcher 0.4.1 防无限重启回归
 
@@ -66,12 +76,12 @@ Start-Process '.\releases\current\Antigravity-Recovery-Launcher.exe'
 验收项：
 
 1. `releases/current` 两个 EXE 和监督器脚本存在，PowerShell 脚本语法检查通过。
-2. 桌面与用户开始菜单的 `Antigravity.lnk` 均指向正式 `Antigravity-Recovery-Launcher.exe`，旧入口有时间戳备份。
+2. 桌面与用户开始菜单的 `Antigravity 启动器.lnk` 均指向正式 `Antigravity-Recovery-Launcher.exe`，旧入口有时间戳备份。
 3. `127.0.0.1:7897` 与 `127.0.0.1:17897` 均监听，17897 的拥有进程命令行指向 `mihomo-antigravity.yaml`。
 4. Antigravity 唯一主进程命令行含 `--proxy-server=http://127.0.0.1:17897`，language server 有到 17897 的连接。
 5. 连续启动两次时，第二次在配置和端口健康的情况下记录 `proxy_reused`，不因语言日志中的历史地区 400 重启代理。
 6. 启动前官方 CLI 最小真实生成必须返回 `OK`；如进行桌面验收，再从新请求后的日志判断 `ResponseID` 或新的地区错误。
-7. `17897` 通过 Cloudflare trace 的 `loc` 必须为 `US`，状态文件包含 `egress_country=US`；否则启动必须停止。
+7. `17897` 的实际出口必须与候选声明的 `JP` 或 `US` 一致，状态文件包含实际 `egress_country`；否则该候选淘汰并继续下一条。
 8. Cockpit 账号文件发生写入但 `current_account_id` 未变时不得恢复；A→B 应触发一次，重复 B 不得再次触发；账号和运行时修复失败均不得超过 3 次。
 9. 若同时存在带 `17897` 和不带 `17897` 的 Antigravity 主进程，监控器必须判定为需要修复。
 10. 在账号监控器运行时重复执行 `build.ps1`，应先停止同一路径旧监控器并成功覆盖构建，不得影响其他同名进程。

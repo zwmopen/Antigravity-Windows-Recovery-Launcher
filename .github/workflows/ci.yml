@@ -20,8 +20,10 @@ jobs:
           $files = @(
             'src/Antigravity-ProxySupervisor.ps1',
             'install.ps1',
+            'uninstall.ps1',
             'build.ps1',
             'build-release.ps1',
+            'build-installer.ps1',
             'tests/run-account-watcher-tests.ps1',
             'tests/run-failover-policy-tests.ps1'
           )
@@ -36,6 +38,7 @@ jobs:
         run: |
           .\tests\run-account-watcher-tests.ps1
           .\tests\launcher-ui.test.ps1
+          .\tests\installer-contract.test.ps1
       - name: Localization tests
         shell: pwsh
         run: |
@@ -44,9 +47,13 @@ jobs:
       - name: Build Windows binaries
         shell: powershell
         run: .\build.ps1
+      - name: Build Windows Setup.exe
+        shell: powershell
+        run: .\build-installer.ps1
       - name: Verify release boundary
         shell: pwsh
         run: |
           if (Test-Path releases/current/tools/agy/agy.exe) { throw 'agy must not be bundled' }
           if (-not (Test-Path releases/current/Antigravity-Recovery-Launcher.exe)) { throw 'launcher missing' }
           if (-not (Test-Path releases/current/Antigravity-AccountWatcher.exe)) { throw 'watcher missing' }
+          if (-not (Test-Path releases/public/Antigravity-Windows-Recovery-Setup-0.9.0-windows-x64.exe)) { throw 'setup missing' }

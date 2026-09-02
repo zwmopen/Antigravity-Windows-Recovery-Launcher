@@ -7,10 +7,11 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
 
-[assembly: AssemblyVersion("0.8.0.0")]
-[assembly: AssemblyFileVersion("0.8.0.0")]
-[assembly: AssemblyInformationalVersion("0.8.0")]
+[assembly: AssemblyVersion("0.9.0.0")]
+[assembly: AssemblyFileVersion("0.9.0.0")]
+[assembly: AssemblyInformationalVersion("0.9.0")]
 
 internal static class AntigravityLauncher
 {
@@ -20,13 +21,46 @@ internal static class AntigravityLauncher
     private static readonly string RuntimeDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity", "private-proxy");
     private static readonly string LauncherLogPath = Path.Combine(RuntimeDirectory, "launcher-error.log");
     private static readonly string SupervisorLogPath = Path.Combine(RuntimeDirectory, "supervisor.log");
+    private static readonly string SupervisorStatePath = Path.Combine(RuntimeDirectory, "supervisor-state.json");
+    private const string SupervisorMutexName = @"Local\AntigravitySupervisorRun";
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+    private static void ActivateExistingLauncher()
+    {
+        try
+        {
+            for (int attempt = 0; attempt < 20; attempt++)
+            {
+                foreach (Process process in Process.GetProcessesByName("Antigravity-Recovery-Launcher"))
+                {
+                    try
+                    {
+                        if (process.Id == Process.GetCurrentProcess().Id) continue;
+                        IntPtr handle = process.MainWindowHandle;
+                        if (handle == IntPtr.Zero) continue;
+                        ShowWindowAsync(handle, 9); // SW_RESTORE
+                        SetForegroundWindow(handle);
+                        return;
+                    }
+                    finally { process.Dispose(); }
+                }
+                Thread.Sleep(100);
+            }
+        }
+        catch { }
+    }
 
     private sealed class StatusView
     {
         internal string Headline = "正在读取本机代理配置…";
         internal string Proxy = "● 正在建立 Antigravity 独立代理 127.0.0.1:17897";
         internal string Nodes = "○ 正在发现本机候选节点";
-        internal string Verification = "○ 等待 Google、OAuth、美国出口和真实模型验证";
+        internal string Verification = "○ 等待 Google、OAuth、日美出口和真实模型验证";
         internal string Localization = "○ 等待注入中文翻译";
         internal string Launch = "○ 等待启动 Antigravity";
         internal int Progress = 3;
@@ -78,6 +112,25 @@ internal static class AntigravityLauncher
         }
     }
 
+    private static bool IsOwnWatcherRunning()
+    {
+        try
+        {
+            foreach (Process process in Process.GetProcessesByName("Antigravity-AccountWatcher"))
+            {
+                try
+                {
+                    string path = process.MainModule == null ? "" : process.MainModule.FileName;
+                    if (string.Equals(path, WatcherPath, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                catch { }
+                finally { process.Dispose(); }
+            }
+        }
+        catch { }
+        return false;
+    }
+
     private sealed class GlassPanel : Panel
     {
         internal GlassPanel()
@@ -124,7 +177,7 @@ internal static class AntigravityLauncher
     {
         try
         {
-            if (!File.Exists(WatcherPath) || Process.GetProcessesByName("Antigravity-AccountWatcher").Length > 0) return;
+            if (!File.Exists(WatcherPath) || IsOwnWatcherRunning()) return;
             Process.Start(new ProcessStartInfo { FileName = WatcherPath, WorkingDirectory = AppDirectory, UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
         }
         catch { }
@@ -150,6 +203,74 @@ internal static class AntigravityLauncher
         catch { return ""; }
     }
 
+    private static bool IsSupervisorMutexAvailable()
+    {
+        bool createdNew;
+        try
+        {
+            using (var mutex = new Mutex(false, SupervisorMutexName, out createdNew))
+            {
+                bool acquired = false;
+                try { acquired = mutex.WaitOne(0); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired) return false;
+                try { return true; }
+                finally { mutex.ReleaseMutex(); }
+            }
+        }
+        catch { return true; }
+    }
+
+    private static bool HasFreshReadyState(DateTime requestedUtc)
+    {
+        try
+        {
+            if (!File.Exists(SupervisorStatePath)) return false;
+            if (File.GetLastWriteTimeUtc(SupervisorStatePath) < requestedUtc.AddSeconds(-2)) return false;
+            string compact = File.ReadAllText(SupervisorStatePath, Encoding.UTF8)
+                .Replace(" ", "")
+                .Replace("\r", "")
+                .Replace("\n", "")
+                .Replace("\t", "");
+            return compact.IndexOf("\"status\":\"ready\"", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                compact.IndexOf("\"real_model_probe\":\"passed\"", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                compact.IndexOf("\"private_port\":17897", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+        catch { return false; }
+    }
+
+    private static bool WaitForConcurrentRecovery(
+        DateTime requestedUtc,
+        long logStartOffset,
+        Action<StatusView> updateStatus,
+        out string concurrentLog)
+    {
+        DateTime deadline = DateTime.UtcNow.AddMinutes(20);
+        concurrentLog = "";
+        while (DateTime.UtcNow < deadline)
+        {
+            concurrentLog = ReadLogSince(logStartOffset);
+            if (updateStatus != null) updateStatus(BuildStatus(concurrentLog));
+            if (HasFreshReadyState(requestedUtc)) return true;
+
+            // The other recovery has released the mutex. Give its final log
+            // and state writes a short flush window before deciding whether
+            // the foreground launch should report the real failure.
+            if (IsSupervisorMutexAvailable())
+            {
+                Thread.Sleep(700);
+                concurrentLog = ReadLogSince(logStartOffset);
+                if (updateStatus != null) updateStatus(BuildStatus(concurrentLog));
+                return HasFreshReadyState(requestedUtc);
+            }
+
+            Application.DoEvents();
+            Thread.Sleep(250);
+        }
+        concurrentLog = ReadLogSince(logStartOffset) + Environment.NewLine + "supervisor_run_busy";
+        return false;
+    }
+
     private static string GetValue(string line, string key)
     {
         string marker = key + "=";
@@ -163,15 +284,49 @@ internal static class AntigravityLauncher
     private static StatusView BuildStatus(string logText)
     {
         var view = new StatusView();
+        int candidateIndex = 0;
+        int candidateTotal = 0;
+        int discoveredTotal = 0;
+        string egressCountry = "";
         foreach (string line in logText.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
         {
             if (line.Contains("candidate_discovery_completed"))
             {
                 string count = GetValue(line, "candidate_count");
                 view.Nodes = "✅ 已发现 " + (count.Length == 0 ? "多" : count) + " 条候选线路";
+                int parsedDiscoveredTotal;
+                if (Int32.TryParse(count, out parsedDiscoveredTotal))
+                {
+                    discoveredTotal = parsedDiscoveredTotal;
+                    candidateTotal = parsedDiscoveredTotal;
+                }
                 view.Headline = "候选节点已发现，正在逐条验证…";
                 view.Progress = Math.Max(view.Progress, 20);
                 view.Ceiling = Math.Max(view.Ceiling, 28);
+            }
+            else if (line.Contains("candidate_preflight_started"))
+            {
+                int parsedIndex;
+                int parsedTotal;
+                string indexText = GetValue(line, "candidate_index");
+                string totalText = GetValue(line, "candidate_total");
+                if (Int32.TryParse(indexText, out parsedIndex) && parsedIndex > 0) candidateIndex = parsedIndex;
+                else candidateIndex++;
+                if (Int32.TryParse(totalText, out parsedTotal) && parsedTotal > 0) candidateTotal = parsedTotal;
+                string totalLabel = candidateTotal > 0 ? candidateTotal.ToString() : "?";
+                string discoveredLabel = discoveredTotal > 0 ? discoveredTotal.ToString() : totalLabel;
+                view.Nodes = "✅ 已发现 " + discoveredLabel + " 条候选线路 · 正在验证 " + candidateIndex.ToString() + "/" + totalLabel;
+                view.Headline = "正在逐条验证候选线路…";
+            }
+            else if (line.Contains("candidate_preflight_passed"))
+            {
+                int parsedIndex;
+                int parsedTotal;
+                if (Int32.TryParse(GetValue(line, "candidate_index"), out parsedIndex) && parsedIndex > 0) candidateIndex = parsedIndex;
+                if (Int32.TryParse(GetValue(line, "candidate_total"), out parsedTotal) && parsedTotal > 0) candidateTotal = parsedTotal;
+                string passedTotalLabel = candidateTotal > 0 ? candidateTotal.ToString() : "?";
+                string passedDiscoveredLabel = discoveredTotal > 0 ? discoveredTotal.ToString() : passedTotalLabel;
+                view.Nodes = "✅ 已发现 " + passedDiscoveredLabel + " 条候选线路 · 已验证 " + candidateIndex.ToString() + "/" + passedTotalLabel;
             }
             else if (line.Contains("proxy_started") || line.Contains("proxy_reused"))
             {
@@ -188,6 +343,7 @@ internal static class AntigravityLauncher
             else if (line.Contains("proxy_egress_country_passed"))
             {
                 string country = GetValue(line, "country");
+                egressCountry = country;
                 view.Verification = "● Google / OAuth 连通，出口 " + (country == "US" ? "US（美国）" : country) + "；正在验证真实模型";
                 view.Headline = "基础网络通过，正在验证真实模型…";
                 view.Progress = Math.Max(view.Progress, 62);
@@ -196,11 +352,22 @@ internal static class AntigravityLauncher
             else if (line.Contains("model_generation_probe_failed") || line.Contains("candidate_preflight_failed"))
             {
                 view.Verification = "● 当前节点未通过，正在自动切换下一条";
+                if (line.Contains("candidate_preflight_failed"))
+                {
+                    int parsedIndex;
+                    int parsedTotal;
+                    if (Int32.TryParse(GetValue(line, "candidate_index"), out parsedIndex) && parsedIndex > 0) candidateIndex = parsedIndex;
+                    if (Int32.TryParse(GetValue(line, "candidate_total"), out parsedTotal) && parsedTotal > 0) candidateTotal = parsedTotal;
+                    string failedTotalLabel = candidateTotal > 0 ? candidateTotal.ToString() : "?";
+                    string failedDiscoveredLabel = discoveredTotal > 0 ? discoveredTotal.ToString() : failedTotalLabel;
+                    view.Nodes = "✅ 已发现 " + failedDiscoveredLabel + " 条候选线路 · 第 " + candidateIndex.ToString() + "/" + failedTotalLabel + " 条未通过，切换下一条";
+                }
                 view.Headline = "当前线路不可用，正在自动恢复…";
             }
             else if (line.Contains("model_generation_probe_passed"))
             {
-                view.Verification = "✅ Google / OAuth 连通，出口 US；真实模型 OK 验证通过";
+                string countryLabel = egressCountry.Length == 0 ? "目标地区" : (egressCountry == "US" ? "US（美国）" : egressCountry);
+                view.Verification = "✅ Google / OAuth 连通，出口 " + countryLabel + "；真实模型 OK 验证通过";
                 view.Headline = "网络与真实模型均已通过";
                 view.Progress = Math.Max(view.Progress, 76);
                 view.Ceiling = Math.Max(view.Ceiling, 82);
@@ -246,8 +413,9 @@ internal static class AntigravityLauncher
         string all = logText + "\n" + stderr;
         if (all.Contains("mihomo_missing")) return "未找到兼容的 Mihomo 核心，请先安装 Clash Verge 或 Mihomo Party。";
         if (all.Contains("antigravity_missing")) return "未找到官方 Antigravity，请先完成安装。";
-        if (all.Contains("target_node_not_found")) return "没有发现美国候选节点，请先在代理软件中更新自己的订阅。";
+        if (all.Contains("target_node_not_found")) return "没有发现日本或美国候选节点，请先在代理软件中更新自己的订阅。";
         if (all.Contains("all_candidates_in_cooldown")) return "候选线路正在冷却，请稍后再试。";
+        if (all.Contains("supervisor_run_busy")) return "后台正在进行一次恢复检查，请稍后查看已经打开的启动器窗口。";
         if (all.Contains("no_healthy_candidate_available")) return "本轮候选均未通过真实模型验证，稍后会重新尝试。";
         if (all.Contains("google_connectivity_failed")) return "当前线路无法稳定连接 Google，已停止错误启动。";
         if (all.Contains("model_generation_probe_failed")) return "当前账号或线路未通过真实模型验证。";
@@ -327,12 +495,29 @@ internal static class AntigravityLauncher
     private static int Main(string[] args)
     {
         bool backgroundMode = HasArgument(args, "--background");
+
+        // Background repairs must never occupy the foreground launcher's
+        // single-instance slot. Otherwise a hidden watcher repair makes a
+        // user's double-click show a misleading "already checking" dialog.
+        if (backgroundMode)
+        {
+            bool backgroundCreated;
+            using (var backgroundMutex = new Mutex(true, @"Local\AntigravitySelfHealingLauncherBackground", out backgroundCreated))
+            {
+                if (!backgroundCreated) return 0;
+                if (!File.Exists(ScriptPath)) return 2;
+                int backgroundResult = RunBackgroundRepair(GetRecoveryReason(args));
+                if (backgroundResult == 0) EnsureWatcherRunning();
+                return backgroundResult;
+            }
+        }
+
         bool createdNew;
         using (var mutex = new Mutex(true, @"Local\AntigravitySelfHealingLauncher", out createdNew))
         {
             if (!createdNew)
             {
-                if (!backgroundMode) MessageBox.Show("Antigravity 正在检查中，请等待当前启动完成。", "Antigravity 启动器", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                ActivateExistingLauncher();
                 return 0;
             }
             if (!File.Exists(ScriptPath))
@@ -341,9 +526,7 @@ internal static class AntigravityLauncher
                 return 2;
             }
 
-            EnsureWatcherRunning();
             string recoveryReason = GetRecoveryReason(args);
-            if (backgroundMode) return RunBackgroundRepair(recoveryReason);
 
             try
             {
@@ -356,15 +539,15 @@ internal static class AntigravityLauncher
                 var card = new GlassPanel { Left = 18, Top = 16, Width = 604, Height = 396 };
                 var title = new Label { Text = "Antigravity 智能启动器", Left = 28, Top = 20, Width = 548, Height = 34, Font = new Font("Microsoft YaHei UI", 16F, FontStyle.Bold), ForeColor = Color.FromArgb(20, 35, 55) };
                 var subtitle = new Label { Text = "自动检查独立代理、节点、真实模型与中文界面", Left = 30, Top = 56, Width = 544, Height = 22, ForeColor = Color.FromArgb(92, 110, 132) };
-                var badge = new Label { Text = "独立代理 17897   ·   Clash 7897 保持不变", Left = 28, Top = 88, Width = 548, Height = 30, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(220, 231, 245), ForeColor = Color.FromArgb(30, 82, 160), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
+                var badge = new Label { Text = "独立代理 17897   ·   日本优先，美国兜底   ·   Clash 7897 保持不变", Left = 28, Top = 88, Width = 548, Height = 30, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(220, 231, 245), ForeColor = Color.FromArgb(30, 82, 160), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
                 var headline = new Label { Text = "正在读取本机代理配置…", Left = 30, Top = 132, Width = 544, Height = 28, Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold), ForeColor = Color.FromArgb(31, 50, 72) };
                 var proxyStep = MakeStepLabel("● 正在建立 Antigravity 独立代理 127.0.0.1:17897", 168);
                 var nodeStep = MakeStepLabel("○ 正在发现本机候选节点", 196);
-                var verificationStep = MakeStepLabel("○ 等待 Google、OAuth、美国出口和真实模型验证", 224);
+                var verificationStep = MakeStepLabel("○ 等待 Google、OAuth、日美出口和真实模型验证", 224);
                 var localizationStep = MakeStepLabel("○ 等待注入中文翻译", 252);
                 var launchStep = MakeStepLabel("○ 等待启动 Antigravity", 280);
                 var progress = new StatusProgress { Left = 30, Top = 320, Width = 544, Font = new Font("Segoe UI", 8.5F, FontStyle.Bold), ProgressValue = 1 };
-                var footer = new Label { Text = "线路不合格时自动切换，不修改 Clash 模式或日常节点。", Left = 30, Top = 357, Width = 544, Height = 24, ForeColor = Color.FromArgb(92, 110, 132), TextAlign = ContentAlignment.MiddleCenter };
+                var footer = new Label { Text = "日本优先、美国兜底；线路不合格时自动切换，不修改 Clash 模式或日常节点。", Left = 30, Top = 357, Width = 544, Height = 24, ForeColor = Color.FromArgb(92, 110, 132), TextAlign = ContentAlignment.MiddleCenter };
                 card.Controls.AddRange(new Control[] { title, subtitle, badge, headline, proxyStep, nodeStep, verificationStep, localizationStep, launchStep, progress, footer });
                 form.Controls.Add(card);
                 form.Show();
@@ -373,6 +556,7 @@ internal static class AntigravityLauncher
                 long logStartOffset = GetLogLength();
                 int displayedProgress = 1;
                 int animationTick = 0;
+                DateTime supervisorRequestedUtc = DateTime.UtcNow;
                 using (var process = Process.Start(CreateSupervisorStartInfo(recoveryReason)))
                 {
                     if (process == null) throw new InvalidOperationException("Windows 未能启动检查进程。");
@@ -405,11 +589,36 @@ internal static class AntigravityLauncher
                         Thread.Sleep(250);
                     }
                     process.WaitForExit();
+                    int result = process.ExitCode;
                     string currentLog = ReadLogSince(logStartOffset);
-                    if (process.ExitCode != 0)
+                    if (result == 4)
+                    {
+                        headline.Text = "已有后台恢复正在进行，正在接收结果…";
+                        verificationStep.Text = "● 后台检查已占用恢复通道，等待它完成";
+                        launchStep.Text = "● 等待后台恢复完成后接管 Antigravity";
+                        Application.DoEvents();
+                        string concurrentLog;
+                        bool joined = WaitForConcurrentRecovery(
+                            supervisorRequestedUtc,
+                            logStartOffset,
+                            delegate(StatusView status)
+                            {
+                                headline.Text = status.Headline;
+                                proxyStep.Text = status.Proxy;
+                                nodeStep.Text = status.Nodes;
+                                verificationStep.Text = status.Verification;
+                                localizationStep.Text = status.Localization;
+                                launchStep.Text = status.Launch;
+                                Application.DoEvents();
+                            },
+                            out concurrentLog);
+                        currentLog = concurrentLog;
+                        if (joined) result = 0;
+                    }
+                    if (result != 0)
                     {
                         Directory.CreateDirectory(Path.GetDirectoryName(LauncherLogPath));
-                        File.AppendAllText(LauncherLogPath, DateTime.Now.ToString("o") + " exit=" + process.ExitCode + Environment.NewLine + output + Environment.NewLine + error + Environment.NewLine);
+                        File.AppendAllText(LauncherLogPath, DateTime.Now.ToString("o") + " exit=" + result + Environment.NewLine + output + Environment.NewLine + error + Environment.NewLine);
                         allowClose = true;
                         form.Close();
                         MessageBox.Show(TranslateFailure(currentLog, error.ToString()), "Antigravity 启动未通过", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -429,7 +638,8 @@ internal static class AntigravityLauncher
                         allowClose = true;
                         form.Close();
                     }
-                    return process.ExitCode;
+                    if (result == 0) EnsureWatcherRunning();
+                    return result;
                 }
             }
             catch (Exception ex)
