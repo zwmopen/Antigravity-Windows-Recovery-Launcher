@@ -168,14 +168,14 @@ internal static class AntigravityLauncher
             if (line.Contains("candidate_discovery_completed"))
             {
                 string count = GetValue(line, "candidate_count");
-                view.Nodes = "✓ 已发现 " + (count.Length == 0 ? "多" : count) + " 条候选线路";
+                view.Nodes = "✅ 已发现 " + (count.Length == 0 ? "多" : count) + " 条候选线路";
                 view.Headline = "候选节点已发现，正在逐条验证…";
                 view.Progress = Math.Max(view.Progress, 20);
                 view.Ceiling = Math.Max(view.Ceiling, 28);
             }
             else if (line.Contains("proxy_started") || line.Contains("proxy_reused"))
             {
-                view.Proxy = "✓ 已建立 Antigravity 独立代理 127.0.0.1:17897";
+                view.Proxy = "✅ 已建立 Antigravity 独立代理 127.0.0.1:17897";
                 view.Progress = Math.Max(view.Progress, 34);
                 view.Ceiling = Math.Max(view.Ceiling, 42);
             }
@@ -200,7 +200,7 @@ internal static class AntigravityLauncher
             }
             else if (line.Contains("model_generation_probe_passed"))
             {
-                view.Verification = "✓ Google / OAuth 连通，出口 US；真实模型 OK 验证通过";
+                view.Verification = "✅ Google / OAuth 连通，出口 US；真实模型 OK 验证通过";
                 view.Headline = "网络与真实模型均已通过";
                 view.Progress = Math.Max(view.Progress, 76);
                 view.Ceiling = Math.Max(view.Ceiling, 82);
@@ -226,13 +226,13 @@ internal static class AntigravityLauncher
             }
             else if (line.Contains("antigravity_ready"))
             {
-                view.Launch = "✓ Antigravity 已启动并连接语言服务";
+                view.Launch = "✅ Antigravity 已启动并连接语言服务";
                 view.Progress = Math.Max(view.Progress, 97);
                 view.Ceiling = Math.Max(view.Ceiling, 99);
             }
             else if (line.Contains("localization_loader_succeeded"))
             {
-                view.Localization = "✓ 中文翻译注入成功";
+                view.Localization = "✅ 中文翻译注入成功";
                 view.Headline = "中文翻译注入成功，Antigravity 已就绪";
                 view.Progress = 100;
                 view.Ceiling = 100;

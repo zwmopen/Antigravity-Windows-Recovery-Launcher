@@ -9,8 +9,11 @@ foreach ($requiredText in @(
     '条候选线路',
     '真实模型 OK 验证通过',
     '中文翻译注入成功，Antigravity 已就绪',
+    '✅ 已建立 Antigravity 独立代理',
     'Clash 7897 保持不变',
-    'ReadLogSince(logStartOffset)'
+    'ReadLogSince(logStartOffset)',
+    'displayedProgress < status.Ceiling',
+    'animationTick % 2 == 0'
 )) {
     if (-not $launcher.Contains($requiredText)) { throw ('launcher_ui_missing:' + $requiredText) }
 }

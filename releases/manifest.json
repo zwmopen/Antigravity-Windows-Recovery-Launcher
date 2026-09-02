@@ -3,14 +3,14 @@
   "version": "0.8.0",
   "source_commit": "v0.8.0",
   "tag": "v0.8.0",
-  "built_at": "2026-09-02T14:01:00+08:00",
+  "built_at": "2026-09-02T14:06:00+08:00",
   "ci_run": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/actions/workflows/ci.yml",
   "artifacts": [
     {
       "file": "Antigravity-Windows-Recovery-Launcher-0.8.0-windows-x64.zip",
       "platform": "windows-x64",
-      "size": 75619,
-      "sha256": "92D9F1D2B0A16CDABC56D1FA3D748C5C3E50C5CE9DA0F95DC36884A0070D2967",
+      "size": 75616,
+      "sha256": "B4294FA3545B8431605CECD79A42A1C44AE1EB06721A91F38EFEFA0D6CE0C77A",
       "url": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v0.8.0/Antigravity-Windows-Recovery-Launcher-0.8.0-windows-x64.zip",
       "contains_official_agy_binary": false,
       "contains_user_configuration": false
