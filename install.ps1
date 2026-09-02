@@ -28,6 +28,23 @@ $agyPath = Join-Path $agyDirectory 'agy.exe'
 $agyManifestUri = 'https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/windows_amd64.json'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $officialApp = Join-Path $env:LOCALAPPDATA 'Programs\antigravity\Antigravity.exe'
+
+function Get-Sha512Hex {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+
+    $stream = [System.IO.File]::OpenRead($LiteralPath)
+    try {
+        $algorithm = [System.Security.Cryptography.SHA512]::Create()
+        try {
+            return ([System.BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+        } finally {
+            $algorithm.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 $shortcutTargets = @(
     @{ Path = (Join-Path $desktop 'Antigravity 启动器.lnk'); Target = $launcher; Description = 'Antigravity recovery launcher'; Key = 'desktop-launcher' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 启动器.lnk'); Target = $launcher; Description = 'Antigravity recovery launcher'; Key = 'start-menu-launcher' },
@@ -90,11 +107,11 @@ $agyStaging = Join-Path $agyDirectory 'agy.download'
 $agyExpectedHash = ([string]$agyManifest.sha512).ToLowerInvariant()
 $agyReady = $false
 if (Test-Path -LiteralPath $agyPath) {
-    $agyReady = ((Get-FileHash -LiteralPath $agyPath -Algorithm SHA512).Hash.ToLowerInvariant() -eq $agyExpectedHash)
+    $agyReady = ((Get-Sha512Hex -LiteralPath $agyPath) -eq $agyExpectedHash)
 }
 if (-not $agyReady) {
     Invoke-WebRequest -Uri ([string]$agyManifest.url) -OutFile $agyStaging -TimeoutSec 180
-    $agyActualHash = (Get-FileHash -LiteralPath $agyStaging -Algorithm SHA512).Hash.ToLowerInvariant()
+    $agyActualHash = Get-Sha512Hex -LiteralPath $agyStaging
     if ($agyActualHash -ne $agyExpectedHash) {
         Remove-Item -LiteralPath $agyStaging -Force -ErrorAction SilentlyContinue
         throw 'agy_sha512_mismatch'
