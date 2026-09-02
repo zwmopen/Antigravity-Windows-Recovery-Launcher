@@ -2,9 +2,14 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Drawing;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+
+[assembly: AssemblyVersion("0.5.2.0")]
+[assembly: AssemblyFileVersion("0.5.2.0")]
+[assembly: AssemblyInformationalVersion("0.5.2")]
 
 internal static class AntigravityLauncher
 {
@@ -39,7 +44,7 @@ internal static class AntigravityLauncher
             string[] lines = File.ReadAllLines(SupervisorLogPath);
             string line = lines.Length == 0 ? "" : lines[lines.Length - 1];
             if (line.Contains("config_test")) return "Checking private proxy configuration...";
-            if (line.Contains("proxy_restart") || line.Contains("proxy_stopped") || line.Contains("proxy_started") || line.Contains("proxy_reused")) return "Preparing the private US proxy...";
+            if (line.Contains("proxy_restart") || line.Contains("proxy_stopped") || line.Contains("proxy_started") || line.Contains("proxy_reused")) return "Preparing the verified private proxy...";
             if (line.Contains("google_connectivity")) return "Checking Google connectivity...";
             if (line.Contains("settings_proxy")) return "Applying Antigravity proxy settings...";
             if (line.Contains("existing_antigravity")) return "Closing the previous Antigravity instance...";
@@ -50,15 +55,93 @@ internal static class AntigravityLauncher
         return "Repairing and restarting Antigravity...";
     }
 
-    [STAThread]
-    private static int Main()
+    private static bool HasArgument(string[] args, string expected)
     {
+        foreach (string arg in args)
+        {
+            if (string.Equals(arg, expected, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    private static string GetRecoveryReason(string[] args)
+    {
+        foreach (string arg in args)
+        {
+            const string prefix = "--recovery-reason=";
+            if (!arg.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            string value = arg.Substring(prefix.Length);
+            if (value == "NetworkFailure" || value == "LocationFailure") return value;
+        }
+        return "Startup";
+    }
+
+    private static ProcessStartInfo CreateSupervisorStartInfo(string recoveryReason)
+    {
+        return new ProcessStartInfo
+        {
+            FileName = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" +
+                ScriptPath + "\" -RecoveryReason " + recoveryReason,
+            WorkingDirectory = AppDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+    }
+
+    private static int RunBackgroundRepair(string recoveryReason)
+    {
+        var output = new StringBuilder();
+        var error = new StringBuilder();
+        try
+        {
+            using (var process = Process.Start(CreateSupervisorStartInfo(recoveryReason)))
+            {
+                if (process == null) return 3;
+                process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) output.AppendLine(e.Data); };
+                process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) error.AppendLine(e.Data); };
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                process.WaitForExit();
+                if (process.ExitCode != 0)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(LauncherLogPath));
+                    File.AppendAllText(LauncherLogPath, DateTime.Now.ToString("o") +
+                        " background=true recovery=" + recoveryReason + " exit=" + process.ExitCode +
+                        Environment.NewLine + output + Environment.NewLine + error + Environment.NewLine);
+                }
+                return process.ExitCode;
+            }
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(LauncherLogPath));
+                File.AppendAllText(LauncherLogPath, DateTime.Now.ToString("o") +
+                    " background=true recovery=" + recoveryReason + " type=" + ex.GetType().Name + Environment.NewLine);
+            }
+            catch { }
+            return 3;
+        }
+    }
+
+    [STAThread]
+    private static int Main(string[] args)
+    {
+        bool backgroundMode = HasArgument(args, "--background");
         bool createdNew;
         using (var mutex = new Mutex(true, @"Local\AntigravitySelfHealingLauncher", out createdNew))
         {
             if (!createdNew)
             {
-                MessageBox.Show("Antigravity is already being checked. Please wait for it to open.", "Antigravity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                if (!backgroundMode)
+                {
+                    MessageBox.Show("Antigravity is already being checked. Please wait for it to open.", "Antigravity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
                 return 0;
             }
 
@@ -69,6 +152,12 @@ internal static class AntigravityLauncher
             }
 
             EnsureWatcherRunning();
+
+            string recoveryReason = GetRecoveryReason(args);
+            if (backgroundMode)
+            {
+                return RunBackgroundRepair(recoveryReason);
+            }
 
             try
             {
@@ -110,17 +199,7 @@ internal static class AntigravityLauncher
                 form.Show();
                 Application.DoEvents();
 
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-                    Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + ScriptPath + "\"",
-                    WorkingDirectory = AppDirectory,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
+                var startInfo = CreateSupervisorStartInfo(recoveryReason);
 
                 using (var process = Process.Start(startInfo))
                 {

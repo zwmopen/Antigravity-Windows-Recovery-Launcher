@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Antigravity 简体中文界面",
+  "version": "0.4.0",
+  "description": "通过 Chromium 外部扩展为 Antigravity 本地界面提供简体中文 UI 翻译。",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://127.0.0.1/*",
+        "http://127.0.0.1/*",
+        "https://localhost/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "translation-core.js",
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "permissions": [],
+  "host_permissions": [
+    "https://127.0.0.1/*",
+    "http://127.0.0.1/*",
+    "https://localhost/*",
+    "http://localhost/*"
+  ],
+  "action": {
+    "default_title": "Antigravity 简体中文界面"
+  }
+}
