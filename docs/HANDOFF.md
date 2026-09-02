@@ -56,6 +56,7 @@
 - 2026-09-02：公开 ZIP 增加根目录双击安装入口 `Install.cmd` 后重新构建；AccountWatcher 14 项、17 候选故障转移、中文扩展和独立助手隔离测试全部通过。ZIP 共 19 个文件，包含 `Install.cmd`，不含 `agy.exe` 或日志；修复 Windows PowerShell 哈希和中文编码兼容问题后的 SHA-256 为 `F87528CE71849CF1AB32A7FFC2CE4DA4CF0CB29B528E533A80D6F3F4E175739D`。
 - 2026-09-02：首次从公开 ZIP 真实运行 `Install.cmd` 发现系统 `powershell.exe` 不提供 `Get-FileHash`，安装在官方 `agy` 校验阶段退出 1。安装脚本随后改用 .NET SHA-512 实现，避免依赖 PowerShell 4+；必须重新构建并从公开 Release 复验双击路径后再收口。
 - 2026-09-02：第二次公开 ZIP 双击验收通过哈希阶段后，在创建中文 `.lnk` 时触发 COM 路径扩展名错误；根因是 Windows PowerShell 将无 BOM UTF-8 脚本中的中文路径解码损坏。`install.ps1` 改为 UTF-8 BOM，`build-release.ps1` 增加 BOM 发布门禁。
+- 2026-09-02 13:33–13:35：第三次从 GitHub Release 全新下载 ZIP，SHA-256 与 `F87528CE71849CF1AB32A7FFC2CE4DA4CF0CB29B528E533A80D6F3F4E175739D` 一致，19 个文件且不含 `agy.exe`/日志；Windows PowerShell 5.1 通过 `Install.cmd` 安装成功。桌面只有 `Antigravity 启动器.lnk`，目标为稳定安装目录；从该快捷方式启动后 17 候选发现、US 出口和官方 `agy` 真实生成门禁通过，Antigravity PID 30828 ready，language server PID 38964 建立 8 条 17897 连接，7897 仍为原 PID 8240。公开 CI `33595128036` 通过。
 
 - 2026-09-02：连续真实请求再次出现 `FAILED_PRECONDITION 400: User location is not supported`，旧监督状态显示候选池仅 4 条且全部同源。安装 Clash Party 2.0.2 后逐卡更新 4 份有效订阅；一元机场订阅端点返回 HTTP 200 空内容，未导入。
 - 2026-09-02：新增订阅的 6 条美国线路经隔离临时端口完成两轮 Google、OAuth 与 US 出口测试，6/6 通过。监督器 2.2.0 改为读取 Clash Verge 与 Clash Party 的全部本地订阅缓存，按完整节点定义去重、按订阅来源交叉排列，实机策略探测得到 17 个唯一美国候选，策略测试通过。
@@ -103,7 +104,7 @@
 
 ## 当前状态和下一步
 
-- 状态：0.7.0 已完成私有 Git 备份、公开仓库、MIT 许可证、Windows CI 和正式 Release；发布 ZIP 已补充普通用户可双击的 `Install.cmd`。公开 ZIP 重新下载后须保持 SHA-256 一致，不含 `agy.exe`、日志或 Mihomo 生成配置；从该 ZIP 安装后桌面仅一个主入口，并以真实模型门禁、17897 language server 连接和 7897 不变作为实机验收。
+- 状态：0.7.0 已完成私有 Git 备份、公开仓库、MIT 许可证、Windows CI 和正式 Release；发布 ZIP 包含普通用户可双击的 `Install.cmd`。公开 ZIP 已重新下载并通过 Windows PowerShell 5.1 安装，SHA-256 一致，不含 `agy.exe`、日志或 Mihomo 生成配置；桌面只有一个主入口，真实模型门禁通过，17897 language server 连接正常且 7897 未变。
 - 私有仓库：`https://github.com/zwmopen/antigravity-windows-recovery-launcher-private`。
 - 公开仓库：`https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher`；Release：`v0.7.0`。
 - 下一步：维护观察真实出口稳定性；若所有普通机房候选长期被拒绝，增加用户自有的干净 ISP/住宅出口适配，但不得把凭据或节点配置写入仓库。
