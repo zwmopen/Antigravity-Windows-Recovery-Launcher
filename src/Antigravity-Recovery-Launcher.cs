@@ -29,7 +29,8 @@ internal static class AntigravityLauncher
         internal string Verification = "○ 等待 Google、OAuth、美国出口和真实模型验证";
         internal string Localization = "○ 等待注入中文翻译";
         internal string Launch = "○ 等待启动 Antigravity";
-        internal int Progress = 6;
+        internal int Progress = 3;
+        internal int Ceiling = 16;
     }
 
     private sealed class StatusProgress : Control
@@ -170,16 +171,19 @@ internal static class AntigravityLauncher
                 view.Nodes = "✓ 已发现 " + (count.Length == 0 ? "多" : count) + " 条候选线路";
                 view.Headline = "候选节点已发现，正在逐条验证…";
                 view.Progress = Math.Max(view.Progress, 20);
+                view.Ceiling = Math.Max(view.Ceiling, 28);
             }
             else if (line.Contains("proxy_started") || line.Contains("proxy_reused"))
             {
                 view.Proxy = "✓ 已建立 Antigravity 独立代理 127.0.0.1:17897";
                 view.Progress = Math.Max(view.Progress, 34);
+                view.Ceiling = Math.Max(view.Ceiling, 42);
             }
             else if (line.Contains("google_connectivity_passed"))
             {
                 view.Verification = "● Google 与 OAuth 已连通，正在确认出口和模型";
                 view.Progress = Math.Max(view.Progress, 48);
+                view.Ceiling = Math.Max(view.Ceiling, 56);
             }
             else if (line.Contains("proxy_egress_country_passed"))
             {
@@ -187,6 +191,7 @@ internal static class AntigravityLauncher
                 view.Verification = "● Google / OAuth 连通，出口 " + (country == "US" ? "US（美国）" : country) + "；正在验证真实模型";
                 view.Headline = "基础网络通过，正在验证真实模型…";
                 view.Progress = Math.Max(view.Progress, 62);
+                view.Ceiling = Math.Max(view.Ceiling, 75);
             }
             else if (line.Contains("model_generation_probe_failed") || line.Contains("candidate_preflight_failed"))
             {
@@ -198,33 +203,39 @@ internal static class AntigravityLauncher
                 view.Verification = "✓ Google / OAuth 连通，出口 US；真实模型 OK 验证通过";
                 view.Headline = "网络与真实模型均已通过";
                 view.Progress = Math.Max(view.Progress, 76);
+                view.Ceiling = Math.Max(view.Ceiling, 82);
             }
             else if (line.Contains("localization_cdp-loader_selected") || line.Contains("localization_chromium-extension_selected"))
             {
                 view.Localization = "● 中文翻译模块已准备";
                 view.Progress = Math.Max(view.Progress, 84);
+                view.Ceiling = Math.Max(view.Ceiling, 89);
             }
             else if (line.Contains("localization_extension_disabled"))
             {
                 view.Localization = "○ 当前使用英文原版";
                 view.Progress = Math.Max(view.Progress, 84);
+                view.Ceiling = Math.Max(view.Ceiling, 89);
             }
             else if (line.Contains("antigravity_started"))
             {
                 view.Launch = "● 正在启动 Antigravity";
                 view.Headline = "验证通过，正在启动…";
                 view.Progress = Math.Max(view.Progress, 91);
+                view.Ceiling = Math.Max(view.Ceiling, 95);
             }
             else if (line.Contains("antigravity_ready"))
             {
                 view.Launch = "✓ Antigravity 已启动并连接语言服务";
                 view.Progress = Math.Max(view.Progress, 97);
+                view.Ceiling = Math.Max(view.Ceiling, 99);
             }
             else if (line.Contains("localization_loader_succeeded"))
             {
                 view.Localization = "✓ 中文翻译注入成功";
                 view.Headline = "中文翻译注入成功，Antigravity 已就绪";
                 view.Progress = 100;
+                view.Ceiling = 100;
             }
         }
         return view;
@@ -352,7 +363,7 @@ internal static class AntigravityLauncher
                 var verificationStep = MakeStepLabel("○ 等待 Google、OAuth、美国出口和真实模型验证", 224);
                 var localizationStep = MakeStepLabel("○ 等待注入中文翻译", 252);
                 var launchStep = MakeStepLabel("○ 等待启动 Antigravity", 280);
-                var progress = new StatusProgress { Left = 30, Top = 320, Width = 544, Font = new Font("Segoe UI", 8.5F, FontStyle.Bold), ProgressValue = 6 };
+                var progress = new StatusProgress { Left = 30, Top = 320, Width = 544, Font = new Font("Segoe UI", 8.5F, FontStyle.Bold), ProgressValue = 1 };
                 var footer = new Label { Text = "线路不合格时自动切换，不修改 Clash 模式或日常节点。", Left = 30, Top = 357, Width = 544, Height = 24, ForeColor = Color.FromArgb(92, 110, 132), TextAlign = ContentAlignment.MiddleCenter };
                 card.Controls.AddRange(new Control[] { title, subtitle, badge, headline, proxyStep, nodeStep, verificationStep, localizationStep, launchStep, progress, footer });
                 form.Controls.Add(card);
@@ -360,6 +371,8 @@ internal static class AntigravityLauncher
                 Application.DoEvents();
 
                 long logStartOffset = GetLogLength();
+                int displayedProgress = 1;
+                int animationTick = 0;
                 using (var process = Process.Start(CreateSupervisorStartInfo(recoveryReason)))
                 {
                     if (process == null) throw new InvalidOperationException("Windows 未能启动检查进程。");
@@ -378,7 +391,16 @@ internal static class AntigravityLauncher
                         verificationStep.Text = status.Verification;
                         localizationStep.Text = status.Localization;
                         launchStep.Text = status.Launch;
-                        progress.ProgressValue = status.Progress;
+                        animationTick++;
+                        if (displayedProgress < status.Progress)
+                        {
+                            displayedProgress += Math.Max(1, (status.Progress - displayedProgress + 3) / 4);
+                        }
+                        else if (displayedProgress < status.Ceiling && animationTick % 2 == 0)
+                        {
+                            displayedProgress++;
+                        }
+                        progress.ProgressValue = displayedProgress;
                         Application.DoEvents();
                         Thread.Sleep(250);
                     }
