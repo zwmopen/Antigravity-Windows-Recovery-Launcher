@@ -99,8 +99,10 @@
 
 ## 当前状态和下一步
 
-- 状态：0.7.0 源码、真实模型门禁、公开构建脚本和集中私有配置引用已完成；本机运行监督器为 2.3.0，AccountWatcher 为 0.5.2。
-- 下一步：完成私有 Git 远端备份，再以脱敏源码创建独立公开仓库和 0.7.0 Release；发布后从公开 ZIP 重新校验安装、快捷方式和真实模型门禁。
+- 状态：0.7.0 已完成私有 Git 备份、公开仓库、MIT 许可证、Windows CI 和正式 Release。公开 ZIP 重新下载后 SHA-256 一致，不含 `agy.exe`、日志或 Mihomo 生成配置；从该 ZIP 安装后桌面仅一个主入口，13:22:32 真实模型门禁通过，13:23:04 Antigravity ready，language server 有 10 条 17897 连接，7897 仍为原 PID 8240。
+- 私有仓库：`https://github.com/zwmopen/antigravity-windows-recovery-launcher-private`。
+- 公开仓库：`https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher`；Release：`v0.7.0`。
+- 下一步：维护观察真实出口稳定性；若所有普通机房候选长期被拒绝，增加用户自有的干净 ISP/住宅出口适配，但不得把凭据或节点配置写入仓库。
 - 下一位维护者先读：`README.md` 和 `docs/DESIGN.md`。
 - 禁止：删除登录态/会话、伪造账号地区、修改全局 7897、刷新全部订阅、改变 Clash 日常规则模式、修改 `app.asar`，或用 Google 204 冒充模型成功。
 
