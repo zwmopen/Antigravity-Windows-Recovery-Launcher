@@ -21,7 +21,7 @@ New-Item -ItemType Directory -Path (Join-Path $stage 'releases\current') -Force 
 New-Item -ItemType Directory -Path $outRoot -Force | Out-Null
 
 Copy-Item -Path (Join-Path $releaseRoot '*') -Destination (Join-Path $stage 'releases\current') -Recurse -Force
-foreach ($file in @('install.ps1', 'README.md', 'LICENSE', 'SECURITY.md')) {
+foreach ($file in @('Install.cmd', 'install.ps1', 'README.md', 'LICENSE', 'SECURITY.md')) {
     Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $stage $file) -Force
 }
 Copy-Item -LiteralPath (Join-Path $root 'docs\THIRD-PARTY-NOTICES.txt') -Destination (Join-Path $stage 'THIRD-PARTY-NOTICES.txt') -Force

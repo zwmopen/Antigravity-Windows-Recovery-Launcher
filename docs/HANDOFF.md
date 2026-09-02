@@ -25,7 +25,7 @@
 - `Set-AntigravityLocalization.ps1` + 两个 `.cmd`：中文启用/英文恢复的可逆开关。
 - `Antigravity-Chinese-Assistant.exe`：可对外分享的独立便携界面，只负责查找官方客户端、动态汉化、英文恢复和桌面入口，不依赖本机代理恢复链。
 - `build-shareable.ps1`：构建独立 Windows x64 ZIP、校验清单和用户说明。
-- `build.ps1` 构建；`install.ps1` 备份并安装桌面入口和 HKCU Run 监控器。
+- `build.ps1` 构建；公开 ZIP 根目录的 `Install.cmd` 是普通用户双击安装入口，内部调用 `install.ps1` 备份并安装桌面入口和 HKCU Run 监控器。
 
 ## 数据、同步、迁移、备份和恢复
 
@@ -44,6 +44,7 @@
 - 中文扩展随发布包复制到 `%LOCALAPPDATA%\Antigravity\launcher\localization-extension`；启动器默认追加 `--load-extension`，英文恢复标记存在时跳过该参数。
 - 可分享版输出到 `releases/shareable/Antigravity-Chinese-Assistant-<version>-windows-x64.zip`；只包含中文助手、Loader、词库、使用说明、第三方说明和 SHA-256 清单，不包含监督器、账号监控器或任何代理配置。
 - 安装会创建一次性的 `localization-extension-pending.flag`，防止升级时监控器立即重启用户正在使用的窗口；显式中文/英文启动成功后由监督器清除。
+- 公开 ZIP 根目录包含 `Install.cmd`；它只切换到自身目录并以 Bypass 策略调用同目录 `install.ps1`，失败时保留窗口和退出码，核心安装逻辑仍保持模块化、可审计。
 - 桌面与用户开始菜单均维护 `Antigravity.lnk`，启动器每次运行会校验并在变更前备份；安装更新时只停止本项目旧监控器并替换稳定运行副本。
 - 回滚：恢复 `shortcut-backups` 中的快捷方式，删除 HKCU Run 的 `AntigravityAccountWatcher` 值并停止本项目监控器；不删除用户数据。
 
@@ -52,6 +53,7 @@
 - 2026-09-02 12:25–12:41：官方 `agy 1.1.24` 经官方 SHA-512 校验安装。基础 Google/OAuth/US 预检出现多次假阳性，真实模型门禁准确识别地区 400 与断流；候选 `E64D…3C7` 连续两次最小真实生成返回 `OK`，桌面端随后以 17897 启动，language server 建立专用连接，7897 保持原 PID 与规则模式。
 - 2026-09-02：监督器 2.3.0 将真实生成门禁加入每个候选；LocationFailure 先复核活动候选，修复旧失败会话日志回放造成的误轮换。策略测试、Watcher 14 项策略测试、中文扩展测试、独立助手隔离测试和 Windows x64 构建全部通过。
 - 2026-09-02：0.7.0 公开发布边界完成初审：仓库和历史未发现代理协议链接、订阅 Token、refresh token、client secret 或私钥；公开 ZIP 不包含 `agy.exe`、订阅缓存、生成配置、账号数据或日志。
+- 2026-09-02：公开 ZIP 增加根目录双击安装入口 `Install.cmd` 后重新构建；AccountWatcher 14 项、17 候选故障转移、中文扩展和独立助手隔离测试全部通过。ZIP 共 19 个文件，包含 `Install.cmd`，不含 `agy.exe` 或日志；SHA-256 为 `B60564428A74EEC9709D1F698B8566F9EA01ECAA2A87F6F3CF9819FF588A4E4D`。
 
 - 2026-09-02：连续真实请求再次出现 `FAILED_PRECONDITION 400: User location is not supported`，旧监督状态显示候选池仅 4 条且全部同源。安装 Clash Party 2.0.2 后逐卡更新 4 份有效订阅；一元机场订阅端点返回 HTTP 200 空内容，未导入。
 - 2026-09-02：新增订阅的 6 条美国线路经隔离临时端口完成两轮 Google、OAuth 与 US 出口测试，6/6 通过。监督器 2.2.0 改为读取 Clash Verge 与 Clash Party 的全部本地订阅缓存，按完整节点定义去重、按订阅来源交叉排列，实机策略探测得到 17 个唯一美国候选，策略测试通过。
@@ -99,7 +101,7 @@
 
 ## 当前状态和下一步
 
-- 状态：0.7.0 已完成私有 Git 备份、公开仓库、MIT 许可证、Windows CI 和正式 Release。公开 ZIP 重新下载后 SHA-256 一致，不含 `agy.exe`、日志或 Mihomo 生成配置；从该 ZIP 安装后桌面仅一个主入口，13:22:32 真实模型门禁通过，13:23:04 Antigravity ready，language server 有 10 条 17897 连接，7897 仍为原 PID 8240。
+- 状态：0.7.0 已完成私有 Git 备份、公开仓库、MIT 许可证、Windows CI 和正式 Release；发布 ZIP 已补充普通用户可双击的 `Install.cmd`。公开 ZIP 重新下载后须保持 SHA-256 一致，不含 `agy.exe`、日志或 Mihomo 生成配置；从该 ZIP 安装后桌面仅一个主入口，并以真实模型门禁、17897 language server 连接和 7897 不变作为实机验收。
 - 私有仓库：`https://github.com/zwmopen/antigravity-windows-recovery-launcher-private`。
 - 公开仓库：`https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher`；Release：`v0.7.0`。
 - 下一步：维护观察真实出口稳定性；若所有普通机房候选长期被拒绝，增加用户自有的干净 ISP/住宅出口适配，但不得把凭据或节点配置写入仓库。

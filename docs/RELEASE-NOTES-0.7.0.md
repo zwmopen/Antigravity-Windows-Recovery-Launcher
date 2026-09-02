@@ -17,10 +17,10 @@
 1. 安装并登录官方 Antigravity。
 2. 安装 Clash Verge 或兼容的 Mihomo 客户端，并由用户自行导入合法订阅。
 3. 解压本 Release 的 ZIP。
-4. 在解压目录运行 `install.ps1`。
+4. 双击解压目录根部的 `Install.cmd`，等待安装完成。
 5. 双击桌面的 `Antigravity 启动器`，等待真实模型门禁完成。
 
-安装脚本会从 Google 官方更新清单下载 `agy` 并校验官方 SHA-512；Release 本身不分发 `agy.exe`、Mihomo、代理订阅或任何凭据。
+`Install.cmd` 会调用同目录中可审计的 `install.ps1`。安装脚本会从 Google 官方更新清单下载 `agy` 并校验官方 SHA-512；Release 本身不分发 `agy.exe`、Mihomo、代理订阅或任何凭据。
 
 ## 已知限制
 

@@ -53,9 +53,15 @@
 
 桌面只创建一个 `Antigravity 启动器.lnk`，指向正式恢复 EXE。中文启用、英文恢复和官方原版入口只保留在开始菜单，避免桌面出现多个容易混淆的图标。
 
-构建输出目录：`releases/current/`；安装后的稳定运行目录：`%LOCALAPPDATA%\Antigravity\launcher\`。构建运行 `build.ps1`（会先安全停止本项目旧监控器），安装运行 `install.ps1`。
+构建输出目录：`releases/current/`；安装后的稳定运行目录：`%LOCALAPPDATA%\Antigravity\launcher\`。普通用户解压公开 ZIP 后双击根目录的 `Install.cmd` 即可安装一次；开发构建运行 `build.ps1`（会先安全停止本项目旧监控器），底层安装逻辑保留在可审计的 `install.ps1`。
 
-首次安装或升级：
+普通用户首次安装或升级：
+
+1. 完整解压 Release ZIP。
+2. 双击根目录的 `Install.cmd`。
+3. 安装成功后只使用桌面的 `Antigravity 启动器`。
+
+源码开发与本机调试：
 
 ```powershell
 Set-Location 'D:\AICode\工具开发\projects\antigravity-recovery-launcher'
