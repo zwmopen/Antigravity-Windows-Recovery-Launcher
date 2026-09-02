@@ -8,7 +8,7 @@ param(
 )
 
 # Antigravity private proxy supervisor
-# Version: 2.3.0
+# Version: 2.4.0
 # Purpose: run one private Mihomo listener for Antigravity only.
 # The executable core is ASCII-only for Windows PowerShell 5.1 compatibility.
 
@@ -1049,6 +1049,7 @@ $candidates = @(Get-CandidateNodeDefinitions)
 if ($candidates.Count -eq 0) {
     Stop-WithMessage -Event 'target_node_not_found'
 }
+Write-SafeLog -Event 'candidate_discovery_completed' -Values @{ candidate_count = $candidates.Count }
 
 $failoverState = Get-FailoverState
 if ($RecoveryReason -eq 'NetworkFailure' -and -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id)) {
@@ -1178,7 +1179,7 @@ if ($localizationEnabled -and $localizationMode -eq 'cdp-loader') {
 }
 
 $state = [ordered]@{
-    version = '2.3.0'
+    version = '2.4.0'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId

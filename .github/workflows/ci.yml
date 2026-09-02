@@ -33,7 +33,9 @@ jobs:
           }
       - name: Account watcher policy tests
         shell: powershell
-        run: .\tests\run-account-watcher-tests.ps1
+        run: |
+          .\tests\run-account-watcher-tests.ps1
+          .\tests\launcher-ui.test.ps1
       - name: Localization tests
         shell: pwsh
         run: |

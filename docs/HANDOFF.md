@@ -1,7 +1,7 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：0.7.0
+> 对应版本：0.8.0
 > 最后核对：2026-09-02。
 
 ## 项目定位和范围
@@ -17,9 +17,9 @@
 
 ## 架构、模块和启动方式
 
-- `Antigravity-Recovery-Launcher.exe`：稳定桌面入口、进度窗口、调用监督器。
+- `Antigravity-Recovery-Launcher.exe`：稳定桌面入口和克制玻璃中文实时状态窗口；从本次新增的脱敏事件显示独立代理、候选数量、Google/OAuth、出口、真实模型、中文注入和应用就绪状态，再调用监督器完成恢复。
 - `Antigravity-AccountWatcher.exe`：监控 Cockpit 当前账号、无代理 `--reuse-window` 实例，以及 17897 到 Google/OAuth 的持续健康；0.5.0 连续 3 次网络失败或新地区 400 才触发有界后台恢复。
-- `Antigravity-ProxySupervisor.ps1`：监督器 2.3.0 从 Clash Verge 与 Mihomo Party 本地缓存发现跨来源美国候选，维护失败冷却，配置/启动 17897，并以官方 `agy` 最小真实生成作为桌面启动前门禁。
+- `Antigravity-ProxySupervisor.ps1`：监督器 2.4.0 从 Clash Verge 与 Mihomo Party 本地缓存发现跨来源美国候选，维护失败冷却，配置/启动 17897，并以官方 `agy` 最小真实生成作为桌面启动前门禁；新增脱敏候选数量事件供中文启动器显示。
 - `localization-extension/translation-core.js`：可审查的词库和纯替换核心；完整句子、UI 短词、权限/额度/时间/数量/模型动态规则分层。
 - `localization-extension/content.js`：本地 UI DOM 观察、属性翻译和防抖调度；保护虚拟列表对话标题及用户内容。
 - `Set-AntigravityLocalization.ps1` + 两个 `.cmd`：中文启用/英文恢复的可逆开关。
@@ -37,7 +37,7 @@
 
 ## 版本、构建、发布和回滚
 
-- 当前本机恢复链版本：0.7.0；监督器 2.3.0、AccountWatcher 0.5.2。
+- 当前本机恢复链版本：0.8.0；监督器 2.4.0、AccountWatcher 0.5.2、启动器 0.8.0。
 - 独立分享版仍为 0.4.0，且不包含监控组件、节点池或代理配置。
 - 构建：Windows .NET Framework 4.0 C# 编译器生成两个 winexe，脚本执行语法检查。
 - 发布：`releases/current`；安装时复制到 `%LOCALAPPDATA%\Antigravity\launcher`，桌面快捷方式和开机监控指向该稳定运行目录，不依赖源码目录路径。
@@ -50,6 +50,8 @@
 
 ## 测试和当前验收
 
+- 2026-09-02 13:43–13:44：0.8.0 中文状态窗口首次实机验收。Computer Use 读取到窗口标题、全部中文步骤和无裁切布局；本次事件实际显示 17 条候选、独立 17897、Google/OAuth 连通、US 出口和真实模型 OK。随后 Antigravity PID 45172 ready，language server PID 18228 建立 10 条 17897 连接，中文 Loader 成功；7897 保持 PID 8240。用户随后指定使用个人开发系统中的“克制玻璃”视觉真源，并增加自绘百分比进度条，需再次完成视觉和发布包验收。
+- 2026-09-02 13:52–13:53：克制玻璃最终视觉复验通过，圆角黑边/锯齿已消除，动态进度显示 76%；完整启动再次发现 17 条候选，Google/OAuth、US 出口和真实模型 OK 通过，Antigravity PID 23784 ready，language server PID 15048 建立 8 条 17897 连接，中文注入成功，7897 仍为 PID 8240。全部策略/UI/中文/隔离测试通过；0.8.0 ZIP 为 75,507 字节，SHA-256 `4D7524B773C1B3638896C9C00DAC080452D14D9B404874370F7E2B9180300E4A`。
 - 2026-09-02 12:25–12:41：官方 `agy 1.1.24` 经官方 SHA-512 校验安装。基础 Google/OAuth/US 预检出现多次假阳性，真实模型门禁准确识别地区 400 与断流；候选 `E64D…3C7` 连续两次最小真实生成返回 `OK`，桌面端随后以 17897 启动，language server 建立专用连接，7897 保持原 PID 与规则模式。
 - 2026-09-02：监督器 2.3.0 将真实生成门禁加入每个候选；LocationFailure 先复核活动候选，修复旧失败会话日志回放造成的误轮换。策略测试、Watcher 14 项策略测试、中文扩展测试、独立助手隔离测试和 Windows x64 构建全部通过。
 - 2026-09-02：0.7.0 公开发布边界完成初审：仓库和历史未发现代理协议链接、订阅 Token、refresh token、client secret 或私钥；公开 ZIP 不包含 `agy.exe`、订阅缓存、生成配置、账号数据或日志。
@@ -104,9 +106,9 @@
 
 ## 当前状态和下一步
 
-- 状态：0.7.0 已完成私有 Git 备份、公开仓库、MIT 许可证、Windows CI 和正式 Release；发布 ZIP 包含普通用户可双击的 `Install.cmd`。公开 ZIP 已重新下载并通过 Windows PowerShell 5.1 安装，SHA-256 一致，不含 `agy.exe`、日志或 Mihomo 生成配置；桌面只有一个主入口，真实模型门禁通过，17897 language server 连接正常且 7897 未变。
+- 状态：0.8.0 已完成中文实时状态、克制玻璃界面、百分比进度、完整测试、实机启动和公开 ZIP 构建；待同步私有/公开仓库并发布 v0.8.0 Release。0.7.0 的双击安装、脱敏和公开发布证据继续保留。
 - 私有仓库：`https://github.com/zwmopen/antigravity-windows-recovery-launcher-private`。
-- 公开仓库：`https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher`；Release：`v0.7.0`。
+- 公开仓库：`https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher`；当前稳定 Release 目标：`v0.8.0`。
 - 下一步：维护观察真实出口稳定性；若所有普通机房候选长期被拒绝，增加用户自有的干净 ISP/住宅出口适配，但不得把凭据或节点配置写入仓库。
 - 下一位维护者先读：`README.md` 和 `docs/DESIGN.md`。
 - 禁止：删除登录态/会话、伪造账号地区、修改全局 7897、刷新全部订阅、改变 Clash 日常规则模式、修改 `app.asar`，或用 Google 204 冒充模型成功。
