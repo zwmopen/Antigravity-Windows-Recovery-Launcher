@@ -9,6 +9,11 @@ $outRoot = Join-Path $root 'releases\public'
 $stage = Join-Path $root ('.work\public-release-' + $version)
 $archive = Join-Path $outRoot ('Antigravity-Windows-Recovery-Launcher-' + $version + '-windows-x64.zip')
 
+$installerBytes = [System.IO.File]::ReadAllBytes((Join-Path $root 'install.ps1'))
+if ($installerBytes.Length -lt 3 -or $installerBytes[0] -ne 0xEF -or $installerBytes[1] -ne 0xBB -or $installerBytes[2] -ne 0xBF) {
+    throw 'install_ps1_requires_utf8_bom_for_windows_powershell'
+}
+
 & (Join-Path $root 'build.ps1') | Out-Null
 if (-not (Test-Path -LiteralPath (Join-Path $releaseRoot 'Antigravity-Recovery-Launcher.exe'))) {
     throw 'release_build_missing'
