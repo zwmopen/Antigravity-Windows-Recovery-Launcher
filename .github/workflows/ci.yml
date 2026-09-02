@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $files = @(
+            'src/Antigravity-ProxySupervisor.ps1',
+            'install.ps1',
+            'build.ps1',
+            'build-release.ps1',
+            'tests/run-account-watcher-tests.ps1',
+            'tests/run-failover-policy-tests.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { throw "PowerShell syntax failed: $file" }
+          }
+      - name: Account watcher policy tests
+        shell: powershell
+        run: .\tests\run-account-watcher-tests.ps1
+      - name: Localization tests
+        shell: pwsh
+        run: |
+          node .\tests\localization-extension.test.js
+          node .\tests\shareable-assistant.test.js
+      - name: Build Windows binaries
+        shell: powershell
+        run: .\build.ps1
+      - name: Verify release boundary
+        shell: pwsh
+        run: |
+          if (Test-Path releases/current/tools/agy/agy.exe) { throw 'agy must not be bundled' }
+          if (-not (Test-Path releases/current/Antigravity-Recovery-Launcher.exe)) { throw 'launcher missing' }
+          if (-not (Test-Path releases/current/Antigravity-AccountWatcher.exe)) { throw 'watcher missing' }
