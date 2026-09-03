@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -20,18 +20,22 @@ namespace AntigravityNodeTray
         [STAThread]
         private static void Main(string[] args)
         {
+            bool showPanel = args != null && Array.Exists(args, delegate(string a) {
+                return string.Equals(a, "--show-panel", StringComparison.OrdinalIgnoreCase);
+            });
+
             bool createdNew;
             singleInstanceMutex = new Mutex(true, @"Local\AntigravityNodeTraySingleInstance", out createdNew);
             if (!createdNew)
             {
-                // 已有实例，如果带了 --show-panel 参数，发信号呼出面板
+                // 已有实例在跑，发信号呼出面板
                 TrayAppContext.SignalShowPanel();
                 return;
             }
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new TrayAppContext());
+            Application.Run(new TrayAppContext(showPanel));
         }
     }
 
@@ -48,7 +52,7 @@ namespace AntigravityNodeTray
         private string currentServer = "";
         private int notRunningCount = 0;
 
-        public TrayAppContext()
+        public TrayAppContext(bool showPanelOnStartup = false)
         {
             InitializeTray();
             InitializeNamedEventWatcher();
@@ -57,6 +61,11 @@ namespace AntigravityNodeTray
             pollTimer = new System.Windows.Forms.Timer { Interval = 15000 };
             pollTimer.Tick += delegate { OnTimerTick(); };
             pollTimer.Start();
+
+            if (showPanelOnStartup)
+            {
+                ShowControlPanel();
+            }
         }
 
         public static void SignalShowPanel()
@@ -702,8 +711,18 @@ namespace AntigravityNodeTray
 
         private bool HotSwitchNode(NodeItem node)
         {
+            Mutex crossProcessLock = null;
+            bool lockTaken = false;
             try
             {
+                crossProcessLock = new Mutex(false, @"Local\AntigravityMihomoLock");
+                try { lockTaken = crossProcessLock.WaitOne(3000); } catch { lockTaken = true; }
+                if (!lockTaken)
+                {
+                    MessageBox.Show("后台自愈程序正在测试节点，请稍候 3 秒后再切换！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return false;
+                }
+
                 string proxyRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Antigravity\private-proxy");
                 string configFile = Path.Combine(proxyRoot, "mihomo-antigravity.yaml");
                 string pidFile = Path.Combine(proxyRoot, "mihomo.pid");
@@ -782,6 +801,14 @@ namespace AntigravityNodeTray
             catch
             {
                 return false;
+            }
+            finally
+            {
+                if (lockTaken && crossProcessLock != null)
+                {
+                    try { crossProcessLock.ReleaseMutex(); } catch { }
+                    crossProcessLock.Dispose();
+                }
             }
         }
 
