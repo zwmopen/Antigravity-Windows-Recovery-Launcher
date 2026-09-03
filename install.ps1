@@ -128,6 +128,10 @@ if (-not [string]::Equals($sourceAppFull, $installRootFull, [System.StringCompar
     if (Test-Path -LiteralPath $sourcePanel) {
         Copy-Item -LiteralPath $sourcePanel -Destination (Join-Path $installRoot 'Antigravity-Panel.py') -Force
     }
+    $sourceTray = Join-Path $app 'Antigravity-Tray.py'
+    if (Test-Path -LiteralPath $sourceTray) {
+        Copy-Item -LiteralPath $sourceTray -Destination (Join-Path $installRoot 'Antigravity-Tray.py') -Force
+    }
 }
 
 # The official CLI does not currently declare a redistribution license. Do

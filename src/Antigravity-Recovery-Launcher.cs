@@ -531,15 +531,44 @@ internal static class AntigravityLauncher
         catch { }
     }
 
+    private static void EnsureTrayRunning()
+    {
+        try
+        {
+            string trayScript = Path.Combine(AppDirectory, "Antigravity-Tray.py");
+            if (!File.Exists(trayScript))
+            {
+                string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Antigravity\launcher-v1.0\Antigravity-Tray.py");
+                if (File.Exists(fallback)) trayScript = fallback;
+            }
+            if (!File.Exists(trayScript)) return;
+
+            string pythonw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Python\Python311\pythonw.exe");
+            if (!File.Exists(pythonw)) pythonw = "pythonw.exe";
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = pythonw,
+                Arguments = "\"" + trayScript + "\"",
+                WorkingDirectory = Path.GetDirectoryName(trayScript),
+                UseShellExecute = true,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+        }
+        catch { }
+    }
+
     [STAThread]
     private static int Main(string[] args)
     {
         bool backgroundMode = HasArgument(args, "--background");
         bool forceLaunch = HasArgument(args, "--force-launch");
 
-        // 一体化二合一：当 Antigravity 已经运行时，双击启动器绝不重启软件，直接呼出「节点中控台」
+        // 一体化二合一：当 Antigravity 已经运行时，双击启动器绝不重启软件，直接呼出「节点中控台」并确保托盘常驻
         if (!backgroundMode && !forceLaunch && IsAntigravityRunning())
         {
+            EnsureTrayRunning();
             OpenNodeControlPanel();
             return 0;
         }
@@ -686,7 +715,11 @@ internal static class AntigravityLauncher
                         allowClose = true;
                         form.Close();
                     }
-                    if (result == 0) EnsureWatcherRunning();
+                    if (result == 0)
+                    {
+                        EnsureWatcherRunning();
+                        EnsureTrayRunning();
+                    }
                     return result;
                 }
             }

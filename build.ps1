@@ -38,6 +38,9 @@ Copy-Item -LiteralPath (Join-Path $source 'Antigravity-ProxySupervisor.ps1') -De
 if (Test-Path -LiteralPath (Join-Path $source 'Antigravity-Panel.py')) {
     Copy-Item -LiteralPath (Join-Path $source 'Antigravity-Panel.py') -Destination (Join-Path $release 'Antigravity-Panel.py') -Force
 }
+if (Test-Path -LiteralPath (Join-Path $source 'Antigravity-Tray.py')) {
+    Copy-Item -LiteralPath (Join-Path $source 'Antigravity-Tray.py') -Destination (Join-Path $release 'Antigravity-Tray.py') -Force
+}
 foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd')) {
     Copy-Item -LiteralPath (Join-Path $source $helper) -Destination (Join-Path $release $helper) -Force
 }
