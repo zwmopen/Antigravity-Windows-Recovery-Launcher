@@ -505,63 +505,31 @@ internal static class AntigravityLauncher
         catch { return false; }
     }
 
-    private static string ResolveLauncherScript(string scriptName)
-    {
-        string primary = Path.Combine(AppDirectory, scriptName);
-        if (File.Exists(primary)) return primary;
-
-        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string[] candidates = new string[]
-        {
-            Path.Combine(localAppData, @"Antigravity\launcher", scriptName),
-            Path.Combine(localAppData, @"Antigravity\launcher-v1.0", scriptName)
-        };
-        foreach (string c in candidates)
-        {
-            if (File.Exists(c)) return c;
-        }
-        return string.Empty;
-    }
-
-    private static void OpenNodeControlPanel()
+    private static void EnsureNodeTrayRunning()
     {
         try
         {
-            string panelScript = ResolveLauncherScript("Antigravity-Panel.py");
-            if (string.IsNullOrEmpty(panelScript)) return;
-
-            string pythonw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Python\Python311\pythonw.exe");
-            if (!File.Exists(pythonw)) pythonw = "pythonw.exe";
+            string trayExe = Path.Combine(AppDirectory, "Antigravity-NodeTray.exe");
+            if (!File.Exists(trayExe))
+            {
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string[] candidates = new string[]
+                {
+                    Path.Combine(localAppData, @"Antigravity\launcher\Antigravity-NodeTray.exe"),
+                    Path.Combine(localAppData, @"Antigravity\launcher-v1.0\Antigravity-NodeTray.exe")
+                };
+                foreach (string c in candidates)
+                {
+                    if (File.Exists(c)) { trayExe = c; break; }
+                }
+            }
+            if (!File.Exists(trayExe)) return;
 
             Process.Start(new ProcessStartInfo
             {
-                FileName = pythonw,
-                Arguments = "\"" + panelScript + "\"",
-                WorkingDirectory = Path.GetDirectoryName(panelScript),
+                FileName = trayExe,
+                WorkingDirectory = Path.GetDirectoryName(trayExe),
                 UseShellExecute = true
-            });
-        }
-        catch { }
-    }
-
-    private static void EnsureTrayRunning()
-    {
-        try
-        {
-            string trayScript = ResolveLauncherScript("Antigravity-Tray.py");
-            if (string.IsNullOrEmpty(trayScript)) return;
-
-            string pythonw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Python\Python311\pythonw.exe");
-            if (!File.Exists(pythonw)) pythonw = "pythonw.exe";
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = pythonw,
-                Arguments = "\"" + trayScript + "\"",
-                WorkingDirectory = Path.GetDirectoryName(trayScript),
-                UseShellExecute = true,
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden
             });
         }
         catch { }
@@ -571,15 +539,6 @@ internal static class AntigravityLauncher
     private static int Main(string[] args)
     {
         bool backgroundMode = HasArgument(args, "--background");
-        bool forceLaunch = HasArgument(args, "--force-launch");
-
-        // 一体化二合一：当 Antigravity 已经运行时，双击启动器绝不重启软件，直接呼出「节点中控台」并确保托盘常驻
-        if (!backgroundMode && !forceLaunch && IsAntigravityRunning())
-        {
-            EnsureTrayRunning();
-            OpenNodeControlPanel();
-            return 0;
-        }
 
         // Background repairs must never occupy the foreground launcher's
         // single-instance slot. Otherwise a hidden watcher repair makes a
@@ -726,7 +685,7 @@ internal static class AntigravityLauncher
                     if (result == 0)
                     {
                         EnsureWatcherRunning();
-                        EnsureTrayRunning();
+                        EnsureNodeTrayRunning();
                     }
                     return result;
                 }

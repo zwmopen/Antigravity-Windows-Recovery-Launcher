@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$TargetNodeOverride = '',
     [string]$ExpectedEgressCountryOverride = '',
@@ -69,7 +69,9 @@ $SettingsPath = Join-Path $env:APPDATA 'Antigravity\User\settings.json'
 $SettingsBackupRoot = Join-Path $RuntimeRoot 'settings-backups'
 $LauncherPath = Join-Path $ScriptRoot 'Antigravity-Recovery-Launcher.exe'
 $ShortcutBackupRoot = Join-Path $RuntimeRoot 'shortcut-backups'
-$DesktopShortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Antigravity 启动器.lnk'
+$desktopFolder = [Environment]::GetFolderPath('Desktop')
+$previewShortcut = Join-Path $desktopFolder 'Antigravity 启动器 (v1.0 体验版).lnk'
+$DesktopShortcutPath = if (Test-Path -LiteralPath $previewShortcut) { $previewShortcut } else { Join-Path $desktopFolder 'Antigravity 启动器.lnk' }
 $StartMenuShortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 启动器.lnk'
 $CanonicalLauncherPath = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\Antigravity-Recovery-Launcher.exe'
 $SupervisorMutex = $null

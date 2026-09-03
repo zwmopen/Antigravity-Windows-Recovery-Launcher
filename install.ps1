@@ -13,6 +13,8 @@ $sourceLauncher = Join-Path $app 'Antigravity-Recovery-Launcher.exe'
 $sourceWatcher = Join-Path $app 'Antigravity-AccountWatcher.exe'
 $launcher = Join-Path $installRoot 'Antigravity-Recovery-Launcher.exe'
 $watcher = Join-Path $installRoot 'Antigravity-AccountWatcher.exe'
+$sourceTray = Join-Path $app 'Antigravity-NodeTray.exe'
+$installedTray = Join-Path $installRoot 'Antigravity-NodeTray.exe'
 $sourceLocalizationLoader = Join-Path $app 'Antigravity-CdpLocalizationLoader.exe'
 $installedLocalizationLoader = Join-Path $installRoot 'Antigravity-CdpLocalizationLoader.exe'
 $sourceSupervisor = Join-Path $app 'Antigravity-ProxySupervisor.ps1'
@@ -124,14 +126,10 @@ if (-not [string]::Equals($sourceAppFull, $installRootFull, [System.StringCompar
     Copy-Item -LiteralPath $sourceRestoreEnglish -Destination $installedRestoreEnglish -Force
     New-Item -ItemType Directory -Path $installedExtension -Force | Out-Null
     Copy-Item -Path (Join-Path $sourceExtension '*') -Destination $installedExtension -Recurse -Force
-    $sourcePanel = Join-Path $app 'Antigravity-Panel.py'
-    if (Test-Path -LiteralPath $sourcePanel) {
-        Copy-Item -LiteralPath $sourcePanel -Destination (Join-Path $installRoot 'Antigravity-Panel.py') -Force
-    }
-    $sourceTray = Join-Path $app 'Antigravity-Tray.py'
     if (Test-Path -LiteralPath $sourceTray) {
-        Copy-Item -LiteralPath $sourceTray -Destination (Join-Path $installRoot 'Antigravity-Tray.py') -Force
+        Copy-Item -LiteralPath $sourceTray -Destination $installedTray -Force
     }
+    Remove-Item (Join-Path $installRoot 'Antigravity-Panel.py'), (Join-Path $installRoot 'Antigravity-Tray.py'), (Join-Path $installRoot 'Antigravity-SmartLauncher.py'), (Join-Path $installRoot 'Antigravity-TrayManager.py') -Force -ErrorAction SilentlyContinue
 }
 
 # The official CLI does not currently declare a redistribution license. Do
