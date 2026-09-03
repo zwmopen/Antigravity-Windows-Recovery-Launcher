@@ -495,10 +495,54 @@ internal static class AntigravityLauncher
         return new Label { Text = text, AutoSize = false, Left = 34, Top = top, Width = 540, Height = 25, Font = new Font("Microsoft YaHei UI", 9F), ForeColor = Color.FromArgb(55, 65, 81) };
     }
 
+    private static bool IsAntigravityRunning()
+    {
+        try
+        {
+            Process[] procs = Process.GetProcessesByName("Antigravity");
+            return procs != null && procs.Length > 0;
+        }
+        catch { return false; }
+    }
+
+    private static void OpenNodeControlPanel()
+    {
+        try
+        {
+            string panelScript = Path.Combine(AppDirectory, "Antigravity-Panel.py");
+            if (!File.Exists(panelScript))
+            {
+                string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Antigravity\launcher-v1.0\Antigravity-Panel.py");
+                if (File.Exists(fallback)) panelScript = fallback;
+            }
+            if (!File.Exists(panelScript)) return;
+
+            string pythonw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Python\Python311\pythonw.exe");
+            if (!File.Exists(pythonw)) pythonw = "pythonw.exe";
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = pythonw,
+                Arguments = "\"" + panelScript + "\"",
+                WorkingDirectory = Path.GetDirectoryName(panelScript),
+                UseShellExecute = true
+            });
+        }
+        catch { }
+    }
+
     [STAThread]
     private static int Main(string[] args)
     {
         bool backgroundMode = HasArgument(args, "--background");
+        bool forceLaunch = HasArgument(args, "--force-launch");
+
+        // 一体化二合一：当 Antigravity 已经运行时，双击启动器绝不重启软件，直接呼出「节点中控台」
+        if (!backgroundMode && !forceLaunch && IsAntigravityRunning())
+        {
+            OpenNodeControlPanel();
+            return 0;
+        }
 
         // Background repairs must never occupy the foreground launcher's
         // single-instance slot. Otherwise a hidden watcher repair makes a

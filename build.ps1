@@ -35,6 +35,9 @@ if ($LASTEXITCODE -ne 0) { throw 'watcher_build_failed' }
 & $csc /nologo /target:winexe /optimize+ /reference:System.dll ("/out:" + $loaderOutput) $loaderSource
 if ($LASTEXITCODE -ne 0) { throw 'localization_loader_build_failed' }
 Copy-Item -LiteralPath (Join-Path $source 'Antigravity-ProxySupervisor.ps1') -Destination (Join-Path $release 'Antigravity-ProxySupervisor.ps1') -Force
+if (Test-Path -LiteralPath (Join-Path $source 'Antigravity-Panel.py')) {
+    Copy-Item -LiteralPath (Join-Path $source 'Antigravity-Panel.py') -Destination (Join-Path $release 'Antigravity-Panel.py') -Force
+}
 foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd')) {
     Copy-Item -LiteralPath (Join-Path $source $helper) -Destination (Join-Path $release $helper) -Force
 }

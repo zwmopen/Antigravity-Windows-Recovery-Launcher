@@ -56,6 +56,9 @@ $actualDesktopShortcutName = if (-not [string]::IsNullOrWhiteSpace($DesktopShort
 } else {
     'Antigravity 启动器.lnk'
 }
+if (-not $actualDesktopShortcutName.EndsWith('.lnk', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $actualDesktopShortcutName += '.lnk'
+}
 
 $shortcutTargets = @(
     @{ Path = (Join-Path $desktop $actualDesktopShortcutName); Target = $launcher; Description = 'Antigravity recovery launcher'; Key = 'desktop-launcher' },
@@ -121,6 +124,10 @@ if (-not [string]::Equals($sourceAppFull, $installRootFull, [System.StringCompar
     Copy-Item -LiteralPath $sourceRestoreEnglish -Destination $installedRestoreEnglish -Force
     New-Item -ItemType Directory -Path $installedExtension -Force | Out-Null
     Copy-Item -Path (Join-Path $sourceExtension '*') -Destination $installedExtension -Recurse -Force
+    $sourcePanel = Join-Path $app 'Antigravity-Panel.py'
+    if (Test-Path -LiteralPath $sourcePanel) {
+        Copy-Item -LiteralPath $sourcePanel -Destination (Join-Path $installRoot 'Antigravity-Panel.py') -Force
+    }
 }
 
 # The official CLI does not currently declare a redistribution license. Do
@@ -196,6 +203,7 @@ foreach ($legacyShortcut in @(
     (Join-Path $desktop 'Antigravity 中文版.lnk'),
     (Join-Path $desktop 'Antigravity 英文恢复.lnk'),
     (Join-Path $desktop 'Antigravity 原版.lnk'),
+    (Join-Path $desktop 'Antigravity 节点中控台.lnk'),
     (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity.lnk')
 )) {
     if (Test-Path -LiteralPath $legacyShortcut) {
