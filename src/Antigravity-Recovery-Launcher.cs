@@ -505,17 +505,30 @@ internal static class AntigravityLauncher
         catch { return false; }
     }
 
+    private static string ResolveLauncherScript(string scriptName)
+    {
+        string primary = Path.Combine(AppDirectory, scriptName);
+        if (File.Exists(primary)) return primary;
+
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string[] candidates = new string[]
+        {
+            Path.Combine(localAppData, @"Antigravity\launcher", scriptName),
+            Path.Combine(localAppData, @"Antigravity\launcher-v1.0", scriptName)
+        };
+        foreach (string c in candidates)
+        {
+            if (File.Exists(c)) return c;
+        }
+        return string.Empty;
+    }
+
     private static void OpenNodeControlPanel()
     {
         try
         {
-            string panelScript = Path.Combine(AppDirectory, "Antigravity-Panel.py");
-            if (!File.Exists(panelScript))
-            {
-                string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Antigravity\launcher-v1.0\Antigravity-Panel.py");
-                if (File.Exists(fallback)) panelScript = fallback;
-            }
-            if (!File.Exists(panelScript)) return;
+            string panelScript = ResolveLauncherScript("Antigravity-Panel.py");
+            if (string.IsNullOrEmpty(panelScript)) return;
 
             string pythonw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Python\Python311\pythonw.exe");
             if (!File.Exists(pythonw)) pythonw = "pythonw.exe";
@@ -535,13 +548,8 @@ internal static class AntigravityLauncher
     {
         try
         {
-            string trayScript = Path.Combine(AppDirectory, "Antigravity-Tray.py");
-            if (!File.Exists(trayScript))
-            {
-                string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Antigravity\launcher-v1.0\Antigravity-Tray.py");
-                if (File.Exists(fallback)) trayScript = fallback;
-            }
-            if (!File.Exists(trayScript)) return;
+            string trayScript = ResolveLauncherScript("Antigravity-Tray.py");
+            if (string.IsNullOrEmpty(trayScript)) return;
 
             string pythonw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Python\Python311\pythonw.exe");
             if (!File.Exists(pythonw)) pythonw = "pythonw.exe";

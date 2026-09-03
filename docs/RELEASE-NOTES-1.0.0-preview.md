@@ -33,8 +33,8 @@
 
 | 文件名 | 类型 | SHA-256 |
 | :--- | :---: | :--- |
-| `Antigravity-Windows-Recovery-Setup-1.0.0-preview-windows-x64.exe` | Windows 安装程序 | `2CBA3B0F18D52708D69A6993E34482F78FA37724E0FDE32F93A1A816DA2FBB72` |
-| `Antigravity-Windows-Recovery-Launcher-1.0.0-preview-windows-x64.zip` | 绿色免安装压缩包 | `8D8036432BBA80475B520717B91ABA53E826D91960EC82AEF88ADDC4AD93202E` |
+| `Antigravity-Windows-Recovery-Setup-1.0.0-preview-windows-x64.exe` | Windows 安装程序 | `1C5B366086E0F99F68697DFB38683E593797F1E629E90F7D6BC84D4B27AA14FB` |
+| `Antigravity-Windows-Recovery-Launcher-1.0.0-preview-windows-x64.zip` | 绿色免安装压缩包 | `011703A08539F1EC786A171666309226F200EC6997393E7A2D7C4C24985DAAC2` |
 
 ---
 

@@ -43,12 +43,38 @@ PID_FILE = PROXY_ROOT / 'mihomo.pid'
 CLASH_PROFILES_DIR = Path(os.environ['APPDATA']) / 'io.github.clash-verge-rev.clash-verge-rev' / 'profiles'
 CLASH_PROFILES_INDEX = Path(os.environ['APPDATA']) / 'io.github.clash-verge-rev.clash-verge-rev' / 'profiles.yaml'
 
-MIHOMO_CANDIDATES = [
-    r"D:\Program Files\Clash Verge\verge-mihomo.exe",
-    os.path.join(os.environ.get('ProgramFiles', ''), r'Clash Verge\verge-mihomo.exe'),
-    os.path.join(os.environ.get('LOCALAPPDATA', ''), r'Programs\Clash Verge\verge-mihomo.exe'),
-]
-MIHOMO_PATH = next((p for p in MIHOMO_CANDIDATES if os.path.exists(p)), r"D:\Program Files\Clash Verge\verge-mihomo.exe")
+def resolve_mihomo_path():
+    candidates = [
+        r"D:\Program Files\Clash Verge\verge-mihomo.exe",
+        os.path.join(os.environ.get('ProgramFiles', ''), r'Clash Verge\verge-mihomo.exe'),
+        os.path.join(os.environ.get('LOCALAPPDATA', ''), r'Programs\Clash Verge\verge-mihomo.exe'),
+        os.path.join(os.environ.get('LOCALAPPDATA', ''), r'Programs\Mihomo Party\resources\sidecar\mihomo-windows-amd64.exe'),
+        os.path.join(os.environ.get('ProgramFiles', ''), r'Mihomo Party\resources\sidecar\mihomo-windows-amd64.exe'),
+        os.path.join(os.environ.get('LOCALAPPDATA', ''), r'Programs\Flclash\mihomo.exe'),
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    import shutil
+    for name in ['verge-mihomo.exe', 'mihomo.exe', 'clash-meta.exe']:
+        found = shutil.which(name)
+        if found:
+            return found
+    return r"D:\Program Files\Clash Verge\verge-mihomo.exe"
+
+MIHOMO_PATH = resolve_mihomo_path()
+
+def activate_existing_window():
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.FindWindowW(None, "Antigravity 私有代理中控台 (v2.0 独立版)")
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def load_supervisor_state():
@@ -170,7 +196,7 @@ rules:
         PID_FILE.write_text(str(proc.pid), encoding='ascii')
         time.sleep(0.8)
 
-        state = load_supervisor_state()
+        state = load_supervisor_state() or {}
         state['started_at'] = time.strftime('%Y-%m-%dT%H:%M:%S+08:00')
         state['mihomo_pid'] = proc.pid
         state['active_node_id'] = 'HOT-SWITCHED-' + str(node_proxy_dict.get('server', ''))
@@ -624,5 +650,7 @@ class NodeManagerWindow:
 
 
 if __name__ == '__main__':
+    if activate_existing_window():
+        sys.exit(0)
     app = NodeManagerWindow()
     app.root.mainloop()
