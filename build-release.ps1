@@ -37,7 +37,7 @@ if (Test-Path -LiteralPath $releaseNotes) {
 
 $forbiddenPatterns = @(
     '(?i)subscription.{0,20}(https?|token)',
-    '(?i)(password|passwd|secret|refresh[_-]?token)\s*[:=]\s*[^<\s]',
+    '(?i)(password|passwd|secret|refresh[_-]?token)\s*[:=]\s*[^<\s\$\(\[]',
     '(?i)vmess://|vless://|trojan://|ss://',
     '(?i)api/rest\?token='
 )

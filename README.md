@@ -1,7 +1,7 @@
 # Antigravity 恢复启动器
 
 > 项目 ID：`antigravity-recovery-launcher`  
-> 版本：0.9.0
+> 版本：0.9.1
 > 状态：维护  
 > 服务对象：AI基础设施与 Windows 工作环境  
 > 创建日期：2026-08-29
@@ -14,7 +14,7 @@
 
 ## 目标用户
 
-在 Windows 上通过 Cockpit Tools 切换 Antigravity 多个 Google 账号，并需要稳定专用代理的个人用户；默认日本优先，美国兜底。
+在 Windows 上通过 Cockpit Tools 切换 Antigravity 多个 Google 账号，并需要稳定专用代理的个人用户；默认美国优先，日本兜底。
 
 ## 核心使用流程
 
@@ -23,9 +23,11 @@
 3. 小应用关闭 Cockpit 遗留的无代理或黑屏实例，再以 `127.0.0.1:17897` 完整重启。
 4. 后台监控器同时检查 Cockpit 真实切号、运行时代理绕过，以及 `17897 → Google/OAuth` 的持续健康状态。
 
-0.9.0 延续“克制玻璃”中文实时状态窗口。窗口只读取本次启动产生的脱敏事件，依次显示独立代理、实际候选数量、Google/OAuth、出口地区、真实模型 `OK`、中文注入和 Antigravity 就绪状态；候选数量、出口和结果均来自当前电脑的实时检测，不使用固定演示值。
+0.9.1 延续“克制玻璃”中文实时状态窗口。窗口只读取本次启动产生的脱敏事件，依次显示独立代理、实际候选数量、Google/OAuth、出口地区、真实模型 `OK`、中文注入和 Antigravity 就绪状态；候选数量、出口和结果均来自当前电脑的实时检测，不使用固定演示值。
 
-启动器会按候选节点声明校验专用代理的实际出口国家，优先日本，找不到可用日本线路时再尝试美国。0.9.0 从 Clash Verge 与 Mihomo Party 的本地订阅缓存发现最多 32 条日美候选，按不同订阅交叉排列，并使用 Google 官方 Antigravity CLI 发出最小 `OK` 生成探针。只有真实生成成功的候选才会启动桌面客户端；断流、出口不一致和地区 400 会隔离或淘汰当前候选。后台每 20 秒检查 Google 与 OAuth，连续 3 次失败才恢复；旧失败会话回放的地区错误会先真实复核当前节点，避免误杀和重启风暴。
+0.9.1 修复“旧缓存被当成当前候选”和“失败后仍显示旧 ready”的问题：只从 Clash 的订阅索引读取仍在有效期内的缓存，当前有效候选会生成脱敏来源统计到 `%LOCALAPPDATA%\Antigravity\private-proxy\subscription-report.json`；日本仍先于美国，真实模型门禁仍是唯一接管条件。失败运行会写 `status=failed` 和本次失败阶段，启动器不会继续拿昨天的成功状态做判断。
+
+启动器会按候选节点声明校验专用代理的实际出口国家，优先美国，找不到可用美国线路时再尝试日本。0.9.1 从 Clash Verge 与 Mihomo Party 的订阅索引和本地缓存发现最多 96 条日美候选，先排除索引中已过期的订阅，再按不同订阅交叉排列；当前电脑这次发现 25 条（日本 12、美国 13）。每个候选都要通过 Google/OAuth、实际出口和 Google 官方 Antigravity CLI 最小 `OK` 生成探针，一次真实 `SUCCESS + OK` 即可启动桌面客户端。断流和地区 400 进入冷却；出口不一致、配置无效和结构化非 `OK` 结果才永久淘汰。后台每 20 秒检查 Google 与 OAuth，连续 3 次失败才恢复；旧失败会话回放的地区错误会先真实复核当前节点，避免误杀和重启风暴。
 
 自动恢复只重建 Antigravity 专用 `17897` 并在必要时重启 Antigravity；全程不刷新订阅、不切换 Clash 规则/全局/直连、不修改日常节点或系统代理 `7897`。后台恢复不弹窗口，最多重试 3 次并退避，所有候选不可用时停止折腾并留下脱敏原因。
 
@@ -55,10 +57,10 @@
 
 桌面只创建一个 `Antigravity 启动器.lnk`，指向正式恢复 EXE。中文启用、英文恢复和官方原版入口只保留在开始菜单，避免桌面出现多个容易混淆的图标。
 
-0.9.0 提供两种安装包：
+0.9.1 提供两种安装包：
 
-- 推荐：下载 `Antigravity-Windows-Recovery-Setup-0.9.0-windows-x64.exe`，双击后按中文向导安装。目标文件夹输入框可以直接粘贴路径，也可以点击“浏览”选择目录；默认安装到 `%LOCALAPPDATA%\Antigravity\launcher`，也可选择 D 盘。完成页可选择立即启动或打开安装目录。
-- 备用：下载 `Antigravity-Windows-Recovery-Launcher-0.9.0-windows-x64.zip`，完整解压后双击 `Install.cmd`。它使用默认目录安装并同样创建桌面唯一入口。
+- 推荐：下载 `Antigravity-Windows-Recovery-Setup-0.9.1-windows-x64.exe`，双击后按中文向导安装。目标文件夹输入框可以直接粘贴路径，也可以点击“浏览”选择目录；默认安装到 `%LOCALAPPDATA%\Antigravity\launcher`，也可选择 D 盘。完成页可选择立即启动或打开安装目录。
+- 备用：下载 `Antigravity-Windows-Recovery-Launcher-0.9.1-windows-x64.zip`，完整解压后双击 `Install.cmd`。它使用默认目录安装并同样创建桌面唯一入口。
 
 Setup 默认按当前用户安装，不要求管理员权限；升级安装会记住上一次目录。Windows“已安装的应用”提供标准卸载。卸载只移除本启动器、快捷方式、开机监控和安装目录内可重建组件，不删除 Antigravity 登录态、会话、项目、Clash 订阅或 `%LOCALAPPDATA%\Antigravity\private-proxy` 运行数据。
 
@@ -76,7 +78,6 @@ Setup 默认按当前用户安装，不要求管理员权限；升级安装会�
 Set-Location 'D:\AICode\工具开发\projects\antigravity-recovery-launcher'
 & .\build.ps1
 & .\install.ps1
-& .\build-installer.ps1
 ```
 
 安装后：
@@ -85,6 +86,8 @@ Set-Location 'D:\AICode\工具开发\projects\antigravity-recovery-launcher'
 - `Antigravity 启动器`：直接启动恢复入口；默认保留上一次的中文/英文选择。
 - `Antigravity 英文恢复`：设置可逆英文模式标记，启动不加载扩展的原始英文 UI，但仍保留现有专用代理恢复流程。
 - `Antigravity 原版`：直接启动官方程序，不经过本项目的代理恢复流程。
+
+本地开发不需要在这台电脑构建 Setup.exe。源码改动后只执行 `build.ps1` 编译本地运行组件，再执行 `install.ps1` 更新稳定运行目录并做实机验证；公开 Setup.exe/ZIP 由 GitHub Actions 根据 `VERSION` 在远端构建和上传 Release。监督器使用本机已安装的官方 `agy` 和用户现有订阅缓存，不把节点配置或订阅链接写进源码。
 
 `install.ps1` 不携带或读取本项目中的密钥。它会从 Google 官方更新清单下载当前 Windows `agy`，校验官方 SHA-512 后安装到 `%LOCALAPPDATA%\Antigravity\launcher\tools\agy\agy.exe`。Google 登录由系统 keyring 复用，代理订阅继续由用户自己的代理客户端管理。
 
@@ -122,13 +125,13 @@ Set-Location 'D:\AICode\工具开发\projects\antigravity-recovery-launcher'
 - `17897` 从 Clash Verge 和 Clash Party 的本地订阅缓存提取候选直连；候选必须实时通过 Google、OAuth 与其声明的 JP/US 出口预检。本工具不修改全局节点或代理设置，也不依赖 Clash Party 常驻。
 - Clash 界面模式与生成 YAML 可能短暂不一致；诊断日常模式时以界面当前选中状态和运行证据为准，不能只读 `clash-verge.yaml`。
 - 当前成功组合是本机当前账号 + 当前时间 + 已验证的日本或美国出口；节点未来更新后仍需以真实模型请求验收。
-- 自动候选只有通过 Google、OAuth、实际出口和真实模型预检后才会接管；若候选返回地区 400，监控器会将它永久淘汰，网络断流则进入冷却。启动器遇到后台恢复竞态会等待正在进行的检查，不会把 `supervisor_run_busy` 误报成失败。
+- 自动候选只有通过 Google、OAuth、实际出口和一次真实 `SUCCESS + OK` 后才会接管；地区 400 和网络断流只进入冷却并保留历史成功记录，因为同一出口可能出现间歇性 Google 地区误判。启动器遇到后台恢复竞态会等待正在进行的检查，不会把 `supervisor_run_busy` 误报成失败。
 - 动态注入依赖 Antigravity 当前仍提供 DevTools 调试目标；若未来版本关闭该入口或更换本地 UI 协议，程序仍可按英文原版启动，但汉化不会生效。
 
 ## 源码与发布
 
 - 源码真源：本目录 Git 仓库的 `src/`。
-- 发布包：`releases/`；大型二进制不进 Git。
+- 发布包：`releases/`；大型二进制不进 Git，远端 CI 负责生成公开发布包。
 - 桌面快捷方式和开机监控使用 `%LOCALAPPDATA%\Antigravity\launcher\` 中的运行副本，不依赖源码目录是否移动。
 - 中间产物：`.work/`、`build/`、`dist/`，可重建、可删除。
 - 完整公开安装 ZIP：运行 `build-release.ps1`，输出到 `releases/public/`；ZIP 不包含订阅、节点、账号、日志、用户数据或 `agy.exe`。

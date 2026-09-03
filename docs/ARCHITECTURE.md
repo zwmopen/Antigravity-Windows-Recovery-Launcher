@@ -22,7 +22,7 @@
 ```text
 桌面 EXE / 后台监控
 → PowerShell 监督器
-→ Clash Verge 与 Clash Party 本地订阅缓存中的跨来源粘性候选池
+→ Clash Verge 与 Clash Party 订阅索引 + 本地缓存中的跨来源粘性候选池（先排除过期项）
 → 专用 Mihomo 17897
 → Google/OAuth/JP 或 US 出口基础门禁
 → 官方 agy 最小真实模型门禁
@@ -31,7 +31,7 @@
 → CDP Loader 向本地页面注入词库与 content.js（MV3 参数保留为兼容回退）
 → content.js 监听本地 UI DOM，按文本/UI上下文选择词库并防抖替换
 → language server 连接验证
-→ supervisor-state.json
+→ supervisor-state.json / subscription-report.json
 ```
 
 ## 安装、升级与卸载
@@ -50,9 +50,10 @@ Inno Setup 使用固定 AppId、`PrivilegesRequired=lowest` 与 `UsePreviousAppD
 
 - AccountWatcher 0.5.2 只在存在合规 Antigravity 主进程时，每 20 秒经 `17897` 检查 Google 204 和 Google OAuth HTTP 响应。
 - 单次或两次失败只计数；连续 3 次失败才以 `NetworkFailure` 后台启动监督器。语言日志新增 `User location is not supported` 时以 `LocationFailure` 立即轮换。
-- 监督器从 Clash Verge 与 Clash Party 的本地订阅缓存解析日本和美国内联节点，兼容单引号、双引号和未加引号，按完整节点定义去重并按订阅来源交叉排列，最多保留 32 条；日本候选优先，美国候选兜底。
-- 当前候选 ID 由来源、名称和定义的哈希组成，来源只保存短指纹，不保存订阅 URL、节点服务器、UUID、密码或完整配置。失败候选写入 `failover-state.json` 并冷却 20 分钟。
+- 监督器从 Clash Verge 与 Clash Party 的订阅索引定位本地缓存，再解析日本和美国内联节点；兼容单引号、双引号和未加引号，按完整节点定义去重并按订阅来源交叉排列。索引中已经过期或没有缓存文件的远程订阅不进入候选池，状态过滤完成后最多保留 96 条，并为美国兜底保留最多 16 个位置；日本候选优先，美国候选兜底。
+- 当前候选 ID 由来源、名称和定义的哈希组成，来源只保存短指纹，不保存订阅 URL、节点服务器、UUID、密码或完整配置。默认美国优先、日本兜底。网络失败和 `model_location` 写入 `failover-state.json` 并冷却 20 分钟；地区 400 保留历史成功记录，避免 Google 间歇误判把曾真实通过的节点永久拉黑。
 - 每个候选必须依次通过 Mihomo 配置测试、Google/API 连通、候选声明的 JP/US 出口和官方 CLI 最小真实生成检查才可接管；`/model`、Google 204 和 IP 地区不能代替真实生成。全部失败时停止，不修改 `7897` 或 Clash UI 状态。
+- 每次启动先生成脱敏 `subscription-report.json`，记录来源、日美数量、有效/验证/淘汰/冷却数量和订阅时间信息；不保存订阅 URL、服务器、UUID、密码、Token 或账号标识。失败运行会用 `status=failed` 覆盖旧的 `ready` 快照，并记录本轮失败阶段与 `candidate_index/candidate_total`。
 - `agy.exe` 不进入源码仓库或发布 ZIP。安装脚本从 Google 官方更新清单下载并校验 SHA-512，安装到 `%LOCALAPPDATA%\Antigravity\launcher\tools\agy`。
 - 新候选接管后 Antigravity 完整重启以清理旧长连接。后台恢复无窗口、最多 3 次退避；真实模型成功仍由后续正常对话的 `ResponseID` 证明。
 
@@ -80,6 +81,8 @@ Inno Setup 使用固定 AppId、`PrivilegesRequired=lowest` 与 `UsePreviousAppD
 - 缓存：Mihomo 运行缓存，可重建。
 - 备份和恢复：快捷方式和设置修改前带时间戳备份；不触碰用户会话数据。
 - 迁移和兼容：源码使用环境目录解析；Mihomo 路径和目标节点目前仍是本机配置，跨电脑安装前需发现并配置。
+
+本地调试只需运行 `build.ps1`、`install.ps1`；Setup.exe、公开 ZIP 和 Release 资产由远端 CI 在打 tag 后构建，不把本机订阅和账号状态带入构建。
 
 ## 安全和权限
 

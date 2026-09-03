@@ -25,7 +25,8 @@ jobs:
             'build-release.ps1',
             'build-installer.ps1',
             'tests/run-account-watcher-tests.ps1',
-            'tests/run-failover-policy-tests.ps1'
+            'tests/run-failover-policy-tests.ps1',
+            'tests/supervisor-state-contract.test.ps1'
           )
           foreach ($file in $files) {
             $tokens = $null
@@ -38,6 +39,8 @@ jobs:
         run: |
           .\tests\run-account-watcher-tests.ps1
           .\tests\launcher-ui.test.ps1
+          .\tests\supervisor-state-contract.test.ps1
+          .\tests\candidate-cap-fairness.test.ps1
           .\tests\installer-contract.test.ps1
       - name: Localization tests
         shell: pwsh
@@ -53,7 +56,8 @@ jobs:
       - name: Verify release boundary
         shell: pwsh
         run: |
+          $version = (Get-Content VERSION -Raw).Trim()
           if (Test-Path releases/current/tools/agy/agy.exe) { throw 'agy must not be bundled' }
           if (-not (Test-Path releases/current/Antigravity-Recovery-Launcher.exe)) { throw 'launcher missing' }
           if (-not (Test-Path releases/current/Antigravity-AccountWatcher.exe)) { throw 'watcher missing' }
-          if (-not (Test-Path releases/public/Antigravity-Windows-Recovery-Setup-0.9.0-windows-x64.exe)) { throw 'setup missing' }
+          if (-not (Test-Path ("releases/public/Antigravity-Windows-Recovery-Setup-" + $version + "-windows-x64.exe"))) { throw 'setup missing' }

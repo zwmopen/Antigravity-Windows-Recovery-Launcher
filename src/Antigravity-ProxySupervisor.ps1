@@ -8,7 +8,7 @@ param(
 )
 
 # Antigravity private proxy supervisor
-# Version: 2.5.0
+# Version: 2.7.0
 # Purpose: run one private Mihomo listener for Antigravity only.
 # The executable core is ASCII-only for Windows PowerShell 5.1 compatibility.
 
@@ -37,6 +37,8 @@ $ProxyRoot = Join-Path $RuntimeRoot 'private-proxy'
 $ConfigPath = Join-Path $ProxyRoot 'mihomo-antigravity.yaml'
 $StatePath = Join-Path $ProxyRoot 'supervisor-state.json'
 $FailoverStatePath = Join-Path $ProxyRoot 'failover-state.json'
+$SubscriptionReportPath = Join-Path $ProxyRoot 'subscription-report.json'
+$FixedUpstreamPath = Join-Path $ProxyRoot 'fixed-upstream.json'
 $PidPath = Join-Path $ProxyRoot 'mihomo.pid'
 $LogPath = Join-Path $ProxyRoot 'supervisor.log'
 $Port = 17897
@@ -44,15 +46,21 @@ $ProxyUrl = 'http://127.0.0.1:17897'
 $TargetNodeMatch = if ([string]::IsNullOrWhiteSpace($TargetNodeOverride)) { '' } else { $TargetNodeOverride.Trim() }
 $TargetNodeExactMatch = -not [string]::IsNullOrWhiteSpace($TargetNodeOverride)
 $TargetAlias = 'ANTIGRAVITY-VERIFIED-CANDIDATE'
+$FixedUpstreamAlias = 'ANTIGRAVITY-FIXED-UPSTREAM'
 $ExpectedEgressCountry = if ([string]::IsNullOrWhiteSpace($ExpectedEgressCountryOverride)) { '' } else { $ExpectedEgressCountryOverride.Trim().ToUpperInvariant() }
 $CandidateCooldownMinutes = 20
 $MaxSuccessHistory = 128
-$MaxCandidateCount = 32
+# Bound the live preflight after retired/cooldown state has been applied. The
+# old value was applied while interleaving raw sources, so a large Japan-first
+# prefix could consume the cap before the United States fallback was even
+# discovered. Keep a bounded probe budget, but leave enough room for the
+# current multi-subscription pool and apply it after state filtering.
+$MaxCandidateCount = 96
 $StopProcessTimeoutSeconds = 20
 $ProbeTimeoutMs = 8000
 $ModelProbeTimeoutSeconds = 90
 $ModelProbePrompt = 'Reply with exactly OK. Do not call tools or modify files.'
-$ModelProbeConfirmationCount = 2
+$ModelProbeConfirmationCount = 1
 $ConnectivityAttemptCount = if ($RecoveryReason -eq 'Startup') { 3 } else { 2 }
 $JapanNodeMatch = ([char]0x65E5).ToString() + ([char]0x672C).ToString()
 $UnitedStatesNodeMatch = ([char]0x7F8E).ToString() + ([char]0x56FD).ToString()
@@ -63,7 +71,33 @@ $LauncherPath = Join-Path $ScriptRoot 'Antigravity-Recovery-Launcher.exe'
 $ShortcutBackupRoot = Join-Path $RuntimeRoot 'shortcut-backups'
 $DesktopShortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Antigravity 启动器.lnk'
 $StartMenuShortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 启动器.lnk'
+$CanonicalLauncherPath = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\Antigravity-Recovery-Launcher.exe'
 $SupervisorMutex = $null
+$script:RunStartedAt = Get-Date
+$script:DiscoveredCandidateCount = 0
+$script:CandidateIndex = 0
+$script:CandidateTotal = 0
+$script:EligibleCandidateCount = 0
+$script:CurrentFailoverState = $null
+$script:CurrentConfigHash = ''
+$script:LastGoogleStatus = 0
+$script:LastApiStatus = 0
+$script:LastOAuthStatus = 0
+$script:LastEgressCountry = ''
+$script:LastModelProbeState = 'not_run'
+$script:LocalizationMode = ''
+$script:LaunchedAntigravityPid = 0
+$script:LaunchedLanguageServerPid = 0
+$script:LaunchedProxyConnections = 0
+$script:FailureStateWriting = $false
+$script:SubscriptionInventory = $null
+$script:FixedUpstream = $null
+$script:AttemptedCandidateIds = @{}
+$script:AttemptedCandidateFailureKinds = @{}
+$script:LastRunStatus = 'running'
+$script:RunFinishedAt = $null
+$script:LastProbeRttMs = 0
+$script:LastSmartScore = 0
 
 function Write-SafeLog {
     param(
@@ -129,11 +163,200 @@ function Write-SafeLog {
     if ($PassThru) { return $false }
 }
 
+function Save-SupervisorFailureState {
+    param([Parameter(Mandatory = $true)][string]$Event)
+
+    # A failed run must replace the previous ready snapshot. Otherwise a
+    # caller can mistake yesterday's successful run for the current result
+    # after every candidate has failed. This writer is deliberately best
+    # effort: failure reporting must never hide the original failure event.
+    if ($script:FailureStateWriting) { return $false }
+    $script:FailureStateWriting = $true
+    try {
+        New-Item -ItemType Directory -Path $ProxyRoot -Force | Out-Null
+        $mihomoPid = 0
+        try {
+            $owned = Get-OwnedMihomoProcess
+            if ($null -ne $owned) { $mihomoPid = [int]$owned.ProcessId }
+        } catch { }
+
+        $retiredCount = 0
+        $verifiedCount = 0
+        try {
+            if ($null -ne $script:CurrentFailoverState) {
+                $retiredCount = @(Get-RetiredNodeEntries -State $script:CurrentFailoverState).Count
+                $verifiedCount = @(Get-SuccessfulNodeEntries -State $script:CurrentFailoverState).Count
+            }
+        } catch { }
+
+        $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
+        $failureState = [ordered]@{
+            version = '2.7.0'
+            status = 'failed'
+            started_at = $script:RunStartedAt.ToString('o')
+            finished_at = (Get-Date).ToString('o')
+            failure_event = $Event
+            last_error = $Event
+            profile_id = 'active-clash-runtime'
+            target_alias = $TargetAlias
+            target_node = 'CURRENT-VERIFIED-FAILOVER-CANDIDATE'
+            active_node_id = ''
+            active_source_id = ''
+            candidate_count = [int]$script:DiscoveredCandidateCount
+            eligible_candidate_count = [int]$script:EligibleCandidateCount
+            candidate_index = [int]$script:CandidateIndex
+            candidate_total = [int]$script:CandidateTotal
+            config_hash = ''
+            retired_candidate_count = $retiredCount
+            verified_candidate_count = $verifiedCount
+            recovery_reason = $RecoveryReason
+            private_port = $Port
+            mihomo_pid = $mihomoPid
+            google_status = [int]$script:LastGoogleStatus
+            generativelanguage_status = [int]$script:LastApiStatus
+            oauth_status = [int]$script:LastOAuthStatus
+            egress_country = $script:LastEgressCountry
+            real_model_probe = $script:LastModelProbeState
+            localization_enabled = $localizationEnabled
+            localization_mode = $script:LocalizationMode
+            antigravity_pid = [int]$script:LaunchedAntigravityPid
+            language_server_pid = [int]$script:LaunchedLanguageServerPid
+            language_proxy_connections = [int]$script:LaunchedProxyConnections
+            subscription_report = $SubscriptionReportPath
+        }
+        $tempPath = $StatePath + '.tmp'
+        $failureState | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tempPath -Encoding UTF8
+        Move-Item -LiteralPath $tempPath -Destination $StatePath -Force
+        return $true
+    } catch {
+        try { Write-SafeLog -Event 'failure_state_write_failed' -Values @{ error_type = $_.Exception.GetType().Name } } catch { }
+        return $false
+    } finally {
+        $script:FailureStateWriting = $false
+    }
+}
+
+function Convert-SourceEpochToUtc {
+    param([string]$Value)
+
+    $number = 0L
+    if ([string]::IsNullOrWhiteSpace($Value) -or
+        -not [int64]::TryParse($Value.Trim(), [Globalization.NumberStyles]::Integer,
+            [Globalization.CultureInfo]::InvariantCulture, [ref]$number)) {
+        return $null
+    }
+    if ($number -gt 100000000000) {
+        $number = [int64]($number / 1000)
+    }
+    try {
+        return ([datetime]'1970-01-01T00:00:00Z').ToUniversalTime().AddSeconds($number)
+    } catch {
+        return $null
+    }
+}
+
+function Get-IndexValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Pattern
+    )
+
+    $match = [regex]::Match($Text, $Pattern)
+    if (-not $match.Success) { return '' }
+    $value = $match.Groups[1].Value.Trim()
+    if (($value.StartsWith("'") -and $value.EndsWith("'")) -or
+        ($value.StartsWith('"') -and $value.EndsWith('"'))) {
+        $value = $value.Substring(1, $value.Length - 2)
+    }
+    if ($value -eq 'null') { return '' }
+    return $value
+}
+
+function Get-IndexedRemoteProfiles {
+    $entries = @()
+
+    if (Test-Path -LiteralPath $ProfilesIndex) {
+        try {
+            $indexText = Get-Content -LiteralPath $ProfilesIndex -Raw -Encoding UTF8 -ErrorAction Stop
+            foreach ($blockMatch in [regex]::Matches($indexText, '(?ms)^- uid:\s*.*?(?=^- uid:|\z)')) {
+                $block = [string]$blockMatch.Value
+                if ($block -notmatch '(?m)^\s{2}type:\s*remote\s*$') { continue }
+                $uid = Get-IndexValue -Text $block -Pattern '(?m)^- uid:\s*([^\r\n#]+)'
+                $fileName = Get-IndexValue -Text $block -Pattern '(?m)^\s{2}file:\s*([^\r\n#]+)'
+                if ([string]::IsNullOrWhiteSpace($uid) -or [string]::IsNullOrWhiteSpace($fileName)) { continue }
+                $displayName = Get-IndexValue -Text $block -Pattern '(?m)^\s{2}name:\s*([^\r\n#]+)'
+                if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = 'Clash Verge subscription' }
+                $updatedValue = Get-IndexValue -Text $block -Pattern '(?m)^\s{2}updated:\s*([^\r\n#]+)'
+                $expireValue = Get-IndexValue -Text $block -Pattern '(?m)^\s{4}expire:\s*([^\r\n#]+)'
+                $entries += [pscustomobject]@{
+                    Family = 'clash-verge'
+                    Id = $uid
+                    FileName = $fileName
+                    Path = Join-Path $ProfilesRoot $fileName
+                    DisplayName = $displayName
+                    UpdatedAt = Convert-SourceEpochToUtc -Value $updatedValue
+                    ExpiresAt = Convert-SourceEpochToUtc -Value $expireValue
+                }
+            }
+        } catch {
+            Write-SafeLog -Event 'clash_verge_profile_index_unreadable'
+        }
+    }
+
+    if (Test-Path -LiteralPath $PartyProfilesIndex) {
+        try {
+            $indexText = Get-Content -LiteralPath $PartyProfilesIndex -Raw -Encoding UTF8 -ErrorAction Stop
+            foreach ($blockMatch in [regex]::Matches($indexText, '(?ms)^\s*- id:\s*.*?(?=^\s*- id:|^current:|\z)')) {
+                $block = [string]$blockMatch.Value
+                if ($block -notmatch '(?m)^\s{4}type:\s*remote\s*$') { continue }
+                $id = Get-IndexValue -Text $block -Pattern '(?m)^\s*- id:\s*([^\r\n#]+)'
+                if ([string]::IsNullOrWhiteSpace($id)) { continue }
+                $displayName = Get-IndexValue -Text $block -Pattern '(?m)^\s{4}name:\s*([^\r\n#]+)'
+                if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = 'Mihomo Party subscription' }
+                $updatedValue = Get-IndexValue -Text $block -Pattern '(?m)^\s{4}updated:\s*([^\r\n#]+)'
+                $expireValue = Get-IndexValue -Text $block -Pattern '(?m)^\s{6}expire:\s*([^\r\n#]+)'
+                $entries += [pscustomobject]@{
+                    Family = 'mihomo-party'
+                    Id = $id
+                    FileName = ($id + '.yaml')
+                    Path = Join-Path $PartyProfilesRoot ($id + '.yaml')
+                    DisplayName = $displayName
+                    UpdatedAt = Convert-SourceEpochToUtc -Value $updatedValue
+                    ExpiresAt = Convert-SourceEpochToUtc -Value $expireValue
+                }
+            }
+        } catch {
+            Write-SafeLog -Event 'mihomo_party_profile_index_unreadable'
+        }
+    }
+
+    return @($entries)
+}
+
+function Test-IndexedProfileUsable {
+    param([Parameter(Mandatory = $true)]$Profile)
+
+    if (-not (Test-Path -LiteralPath ([string]$Profile.Path))) { return $false }
+    if ($null -ne $Profile.ExpiresAt -and $Profile.ExpiresAt -le (Get-Date).ToUniversalTime()) {
+        Write-SafeLog -Event 'subscription_profile_expired' -Values @{ source_name = [string]$Profile.DisplayName }
+        return $false
+    }
+    return $true
+}
+
 function Resolve-MihomoPath {
     $knownPaths = @(
         (Join-Path $env:ProgramFiles 'Clash Verge\verge-mihomo.exe'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Clash Verge\verge-mihomo.exe'),
-        'D:\Program Files\Clash Verge\verge-mihomo.exe'
+        'D:\Program Files\Clash Verge\verge-mihomo.exe',
+        (Join-Path $env:ProgramFiles 'Mihomo Party\resources\sidecar\mihomo.exe'),
+        (Join-Path $env:ProgramFiles 'Mihomo Party\resources\sidecar\mihomo-windows-amd64.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\mihomo-party\resources\sidecar\mihomo.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\mihomo-party\resources\sidecar\mihomo-windows-amd64.exe'),
+        'D:\Program Files\Mihomo Party\resources\sidecar\mihomo.exe',
+        'D:\Program Files\Mihomo Party\resources\sidecar\mihomo-windows-amd64.exe',
+        (Join-Path $env:ProgramFiles 'Flclash\flclash.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Flclash\flclash.exe')
     )
     foreach ($path in $knownPaths) {
         if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path)) {
@@ -141,18 +364,29 @@ function Resolve-MihomoPath {
         }
     }
 
+    # PATH discovery
+    foreach ($cmdName in @('verge-mihomo.exe', 'mihomo.exe', 'mihomo-windows-amd64.exe', 'clash-meta.exe')) {
+        $foundCmd = Get-Command -Name $cmdName -ErrorAction SilentlyContinue
+        if ($null -ne $foundCmd -and -not [string]::IsNullOrWhiteSpace([string]$foundCmd.Source) -and (Test-Path -LiteralPath $foundCmd.Source)) {
+            return [string]$foundCmd.Source
+        }
+    }
+
+    # Registry discovery
     foreach ($registryRoot in @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
     )) {
         foreach ($entry in @(Get-ItemProperty -Path $registryRoot -ErrorAction SilentlyContinue | Where-Object {
-            [string]$_.DisplayName -match 'Clash Verge'
+            [string]$_.DisplayName -match 'Clash Verge|Mihomo Party|Flclash'
         })) {
             $installLocation = [string]$entry.InstallLocation
             if (-not [string]::IsNullOrWhiteSpace($installLocation)) {
-                $candidate = Join-Path $installLocation 'verge-mihomo.exe'
-                if (Test-Path -LiteralPath $candidate) { return $candidate }
+                foreach ($subBin in @('verge-mihomo.exe', 'resources\sidecar\mihomo.exe', 'resources\sidecar\mihomo-windows-amd64.exe', 'mihomo.exe')) {
+                    $candidate = Join-Path $installLocation $subBin
+                    if (Test-Path -LiteralPath $candidate) { return $candidate }
+                }
             }
         }
     }
@@ -184,6 +418,7 @@ function Stop-WithMessage {
     param([Parameter(Mandatory = $true)][string]$Event)
 
     Write-SafeLog -Event $Event
+    $null = Save-SupervisorFailureState -Event $Event
     # The supervisor runs hidden under the GUI launcher. A MessageBox created
     # here can be invisible and block the child process forever, leaving the
     # launcher's progress window spinning. The GUI launcher owns user-facing
@@ -266,6 +501,7 @@ function Get-CurrentAccountFingerprint {
 
 function New-EmptyFailoverState {
     return [pscustomobject]@{
+        policy_version = 2
         account_fingerprint = Get-CurrentAccountFingerprint
         active_node_id = ''
         failed_nodes = @()
@@ -304,6 +540,50 @@ function Get-FailoverState {
         }
         if ($null -eq $state.PSObject.Properties['account_fingerprint']) {
             $state | Add-Member -NotePropertyName account_fingerprint -NotePropertyValue $currentFingerprint -Force
+        }
+        $policyVersion = 1
+        if ($null -ne $state.PSObject.Properties['policy_version']) {
+            try { $policyVersion = [int]$state.policy_version } catch { $policyVersion = 1 }
+        }
+        if ($policyVersion -lt 2) {
+            # Version 1 permanently retired every model_location result and
+            # deleted successful history. Google forum evidence and local
+            # repeated pass/fail evidence show that result can be transient.
+            # Rehabilitate only those entries; deterministic invalid-config,
+            # wrong-egress and structured non-OK retirements remain intact.
+            try {
+                $stamp = Get-Date -Format 'yyyyMMdd-HHmmssfff'
+                Copy-Item -LiteralPath $FailoverStatePath -Destination ($FailoverStatePath + '.before-policy-v2-' + $stamp + '.json') -Force
+            } catch { }
+            $locationEntries = @($state.retired_nodes | Where-Object { [string]$_.reason -eq 'model_location' })
+            $state.retired_nodes = @($state.retired_nodes | Where-Object { [string]$_.reason -ne 'model_location' })
+            $cooldowns = @($state.failed_nodes | Where-Object {
+                [string]$id = [string]$_.node_id
+                -not [string]::IsNullOrWhiteSpace($id) -and @($locationEntries | Where-Object { [string]$_.node_id -eq $id }).Count -eq 0
+            })
+            $cooldownUntil = (Get-Date).AddMinutes($CandidateCooldownMinutes).ToString('o')
+            foreach ($entry in $locationEntries) {
+                $cooldowns += [pscustomobject]@{
+                    node_id = [string]$entry.node_id
+                    until = $cooldownUntil
+                    reason = 'model_location'
+                }
+            }
+            $state.failed_nodes = @($cooldowns)
+            $activeId = [string]$state.active_node_id
+            if (-not [string]::IsNullOrWhiteSpace($activeId) -and
+                @($locationEntries | Where-Object { [string]$_.node_id -eq $activeId }).Count -gt 0 -and
+                @($state.successful_nodes | Where-Object { [string]$_.node_id -eq $activeId }).Count -eq 0) {
+                $activeRetirement = @($locationEntries | Where-Object { [string]$_.node_id -eq $activeId } | Select-Object -First 1)
+                $state.successful_nodes = @([pscustomobject]@{
+                    node_id = $activeId
+                    source_id = if ($activeRetirement.Count -gt 0) { [string]$activeRetirement[0].source_id } else { '' }
+                    last_passed_at = if ([string]::IsNullOrWhiteSpace([string]$state.last_switch_at)) { (Get-Date).ToString('o') } else { [string]$state.last_switch_at }
+                    success_count = 1
+                }) + @($state.successful_nodes)
+            }
+            $state | Add-Member -NotePropertyName policy_version -NotePropertyValue 2 -Force
+            Write-SafeLog -Event 'failover_state_migrated_to_policy_v2' -Values @{ rehabilitated_location_nodes = $locationEntries.Count }
         }
         return $state
     } catch {
@@ -464,16 +744,20 @@ function Mark-NodeSuccess {
         source_id = [string]$Candidate.SourceId
         last_passed_at = (Get-Date).ToString('o')
         success_count = $successCount
+        last_rtt_ms = [int]$script:LastProbeRttMs
     }
     $State.successful_nodes = @(@($newEntry) + $rest | Select-Object -First $MaxSuccessHistory)
     $State.failed_nodes = @(Get-ActiveCooldownEntries -State $State | Where-Object { [string]$_.node_id -ne $nodeId })
-    Write-SafeLog -Event 'candidate_verified' -Values @{ node_id = $nodeId; source_id = [string]$Candidate.SourceId; success_count = $successCount }
+    Write-SafeLog -Event 'candidate_verified' -Values @{ node_id = $nodeId; source_id = [string]$Candidate.SourceId; success_count = $successCount; rtt_ms = [int]$script:LastProbeRttMs }
 }
 
 function Get-CandidateFailureDisposition {
     param([Parameter(Mandatory = $true)][string]$FailureKind)
 
-    if ($FailureKind -in @('model_location', 'model_non_ok', 'proxy_egress_wrong_country', 'config_invalid')) {
+    # Google can intermittently classify the same supported-region exit as
+    # unsupported. A single model_location result therefore is not durable
+    # evidence that the node is bad; cool it down and retain prior successes.
+    if ($FailureKind -in @('model_non_ok', 'proxy_egress_wrong_country', 'config_invalid')) {
         return 'retire'
     }
     return 'cooldown'
@@ -535,6 +819,33 @@ function Get-OrderedCandidates {
         try { $priority = [int]$candidate.Priority } catch { }
         $regionRank = 100
         try { $regionRank = [int]$candidate.RegionRank } catch { }
+
+        # Smart Pool: calculate SmartScore (0-1000)
+        $smartScore = 0
+        if ($isVerified) { $smartScore += 500 }
+        if ($isActive) { $smartScore += 200 }
+        if ($regionRank -eq 0) { $smartScore += 150 } else { $smartScore += 80 }
+        $smartScore += [Math]::Min(150, ($successCount * 25))
+        if ($lastPassedTicks -gt 0) {
+            try {
+                $passedDt = [datetime]([int64]$lastPassedTicks)
+                $ageHours = ((Get-Date).ToUniversalTime() - $passedDt.ToUniversalTime()).TotalHours
+                if ($ageHours -le 24) { $smartScore += 100 }
+                elseif ($ageHours -le 168) { $smartScore += 50 }
+            } catch { }
+        }
+        if ($null -ne $history -and $history.PSObject.Properties['last_rtt_ms']) {
+            $histRtt = [int]$history.last_rtt_ms
+            if ($histRtt -gt 0 -and $histRtt -le 350) { $smartScore += 50 }
+            elseif ($histRtt -gt 1500) { $smartScore -= 50 }
+        }
+        $smartScore = [Math]::Max(0, [Math]::Min(1000, $smartScore))
+        if ($null -eq $candidate.PSObject.Properties['SmartScore']) {
+            $candidate | Add-Member -NotePropertyName SmartScore -NotePropertyValue $smartScore -Force
+        } else {
+            $candidate.SmartScore = $smartScore
+        }
+
         $decorated += [pscustomobject]@{
             Candidate = $candidate
             RegionRank = $regionRank
@@ -542,14 +853,36 @@ function Get-OrderedCandidates {
             ActiveRank = if ($isActive) { 0 } else { 1 }
             LastPassedTicks = $lastPassedTicks
             SuccessCount = $successCount
+            SmartScore = $smartScore
             Priority = $priority
             DiscoveryIndex = $discoveryIndex
         }
     }
 
-    # Region is an explicit policy: Japan first, United States as fallback.
-    # Within each region, retain verified-history and sticky-node preference.
-    $ordered = @($decorated | Sort-Object @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
+    # A node that already passed the real model gate is stronger evidence than
+    # its country label. Keep verified/sticky history first; among equally
+    # proven or unproven candidates, prefer United States and use Japan as the
+    # fallback. SmartScore refines ordering with latency and recency.
+    $ordered = @($decorated | Sort-Object @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
+    if ($ordered.Count -gt $MaxCandidateCount) {
+        # United States remains the primary region. If the pool is larger than
+        # the bounded probe budget, reserve up to 16 slots for the Japan
+        # fallback so a cooling US prefix cannot starve it.
+        $primaryOrdered = @($ordered | Where-Object { [int]$_.RegionRank -eq 0 })
+        $fallbackOrdered = @($ordered | Where-Object { [int]$_.RegionRank -eq 1 })
+        $fallbackReserve = if ($primaryOrdered.Count -gt 0) {
+            [Math]::Min(16, $fallbackOrdered.Count)
+        } else {
+            0
+        }
+        $primaryLimit = [Math]::Max(0, $MaxCandidateCount - $fallbackReserve)
+        $capped = @($primaryOrdered | Select-Object -First $primaryLimit)
+        $remaining = $MaxCandidateCount - $capped.Count
+        if ($remaining -gt 0) {
+            $capped += @($fallbackOrdered | Select-Object -First $remaining)
+        }
+        $ordered = @($capped)
+    }
     return @($ordered | ForEach-Object { $_.Candidate })
 }
 
@@ -600,7 +933,7 @@ function Get-OwnedMihomoProcess {
     if ($null -eq $processInfo) {
         return $null
     }
-    if ($processInfo.Name -notmatch '^verge-mihomo(\.exe)?$') {
+    if ($processInfo.Name -notmatch '^(verge-mihomo|mihomo|mihomo-windows-amd64|clash-meta)(\.exe)?$') {
         return $null
     }
 
@@ -617,7 +950,7 @@ function Get-MihomoProcessForPort {
     $owner = @(Get-ListeningOwner -ListenPort $ListenPort)
     if ($owner.Count -eq 0) { return $null }
     $processInfo = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + [int]$owner[0].OwningProcess) -ErrorAction SilentlyContinue
-    if ($null -eq $processInfo -or $processInfo.Name -notmatch '^verge-mihomo(\.exe)?$') { return $null }
+    if ($null -eq $processInfo -or $processInfo.Name -notmatch '^(verge-mihomo|mihomo|mihomo-windows-amd64|clash-meta)(\.exe)?$') { return $null }
     if ([string]$processInfo.CommandLine -notmatch '(?i)mihomo-antigravity\.yaml') { return $null }
     return $processInfo
 }
@@ -634,6 +967,10 @@ function Stop-OwnedMihomo {
 function Get-CandidateNodeDefinitions {
     $profileSources = @()
     $currentProfileId = ''
+    $indexedProfiles = @(Get-IndexedRemoteProfiles)
+    $indexedVergeProfiles = @($indexedProfiles | Where-Object { [string]$_.Family -eq 'clash-verge' })
+    $indexedPartyProfiles = @($indexedProfiles | Where-Object { [string]$_.Family -eq 'mihomo-party' })
+
     # Clash Verge's generated runtime config is the authoritative active
     # composition after remote subscriptions, proxy providers and merge rules
     # have been refreshed. Raw profile YAML can omit provider-backed nodes.
@@ -641,6 +978,10 @@ function Get-CandidateNodeDefinitions {
         $profileSources += [pscustomobject]@{
             Path = $ActiveClashConfig
             SourceKey = 'clash-verge-runtime'
+            SourceName = 'Clash Verge runtime'
+            SourceType = 'runtime'
+            UpdatedAt = $null
+            ExpiresAt = $null
             Priority = 20
         }
     }
@@ -657,46 +998,68 @@ function Get-CandidateNodeDefinitions {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($currentProfileId)) {
+        $currentProfile = @($indexedVergeProfiles | Where-Object { [string]$_.Id -eq $currentProfileId } | Select-Object -First 1)
         $currentProfilePath = Join-Path $ProfilesRoot ($currentProfileId + '.yaml')
-        if (Test-Path -LiteralPath $currentProfilePath) {
+        if ($currentProfile.Count -gt 0 -and (Test-IndexedProfileUsable -Profile $currentProfile[0])) {
             $profileSources += [pscustomobject]@{
                 Path = $currentProfilePath
                 SourceKey = ('clash-verge-current-' + $currentProfileId)
-                Priority = 21
+                SourceName = [string]$currentProfile[0].DisplayName
+                SourceType = 'subscription-cache'
+                UpdatedAt = $currentProfile[0].UpdatedAt
+                ExpiresAt = $currentProfile[0].ExpiresAt
+                Priority = 20
             }
         }
     }
 
-    # Every locally imported Clash Verge subscription is a possible backup.
-    # Candidates still have to pass live Google/OAuth/egress/model checks.
-    $profileSources += @(Get-ChildItem -LiteralPath $ProfilesRoot -Filter '*.yaml' -File -ErrorAction SilentlyContinue | ForEach-Object {
-        [pscustomobject]@{
-            Path = $_.FullName
-            SourceKey = ('clash-verge-cache-' + $_.BaseName)
-            Priority = 30
+    # Only indexed, non-expired remote profiles are eligible. Scanning every
+    # historical YAML in the cache made expired subscriptions look like live
+    # fallbacks and consumed the real model probe budget.
+    if ($indexedVergeProfiles.Count -gt 0) {
+        foreach ($profile in $indexedVergeProfiles) {
+            if (-not (Test-IndexedProfileUsable -Profile $profile)) { continue }
+            $profileSources += [pscustomobject]@{
+                Path = [string]$profile.Path
+                SourceKey = ('clash-verge-cache-' + [string]$profile.Id)
+                SourceName = [string]$profile.DisplayName
+                SourceType = 'subscription-cache'
+                UpdatedAt = $profile.UpdatedAt
+                ExpiresAt = $profile.ExpiresAt
+                Priority = 30
+            }
         }
-    })
+    } else {
+        # Keep a bounded compatibility fallback for machines whose Clash
+        # version has no readable profile index. It is still subject to the
+        # live Google/OAuth/egress/model gates below.
+        $profileSources += @(Get-ChildItem -LiteralPath $ProfilesRoot -Filter '*.yaml' -File -ErrorAction SilentlyContinue | ForEach-Object {
+            [pscustomobject]@{
+                Path = $_.FullName
+                SourceKey = ('clash-verge-cache-' + $_.BaseName)
+                SourceName = 'Clash Verge unindexed cache'
+                SourceType = 'subscription-cache'
+                UpdatedAt = $_.LastWriteTimeUtc
+                ExpiresAt = $null
+                Priority = 30
+            }
+        })
+    }
 
     # Clash Party is used only as another maintained subscription cache. Its
     # own 7890/7891 listener, system proxy and TUN never become dependencies of
     # Antigravity: the candidate definition is copied into the private 17897
     # Mihomo configuration and works even after Clash Party is closed.
-    if (Test-Path -LiteralPath $PartyProfilesIndex) {
-        try {
-            $partyIndexText = Get-Content -LiteralPath $PartyProfilesIndex -Raw -Encoding UTF8 -ErrorAction Stop
-            foreach ($match in [regex]::Matches($partyIndexText, '(?m)^\s*-\s+id:\s*([^\s#]+)')) {
-                $partyId = $match.Groups[1].Value.Trim()
-                $partyPath = Join-Path $PartyProfilesRoot ($partyId + '.yaml')
-                if (Test-Path -LiteralPath $partyPath) {
-                    $profileSources += [pscustomobject]@{
-                        Path = $partyPath
-                        SourceKey = ('clash-party-' + $partyId)
-                        Priority = 10
-                    }
-                }
-            }
-        } catch {
-            Write-SafeLog -Event 'party_profile_index_unreadable'
+    foreach ($profile in $indexedPartyProfiles) {
+        if (-not (Test-IndexedProfileUsable -Profile $profile)) { continue }
+        $profileSources += [pscustomobject]@{
+            Path = [string]$profile.Path
+            SourceKey = ('clash-party-' + [string]$profile.Id)
+            SourceName = [string]$profile.DisplayName
+            SourceType = 'subscription-cache'
+            UpdatedAt = $profile.UpdatedAt
+            ExpiresAt = $profile.ExpiresAt
+            Priority = 40
         }
     }
 
@@ -747,7 +1110,7 @@ function Get-CandidateNodeDefinitions {
                     if ([string]::IsNullOrWhiteSpace($candidateCountry)) {
                         continue
                     }
-                    $regionRank = if ($candidateCountry -eq 'JP') { 0 } else { 1 }
+                    $regionRank = if ($candidateCountry -eq 'US') { 0 } else { 1 }
                     $priority = ($regionRank * 1000) + [int]$source.Priority
                     $candidates += [pscustomobject]@{
                         Id = Get-StringSha256 -Text (([string]$source.SourceKey) + '|' + $candidateName + '|' + $definitionId)
@@ -756,6 +1119,10 @@ function Get-CandidateNodeDefinitions {
                         DefinitionId = $definitionId
                         Name = $candidateName
                         Definition = ('{ name: ' + $TargetAlias + $definitionTail)
+                        SourceName = [string]$source.SourceName
+                        SourceType = [string]$source.SourceType
+                        SourceUpdatedAt = $source.UpdatedAt
+                        SourceExpiresAt = $source.ExpiresAt
                         Region = $candidateCountry
                         RegionRank = $regionRank
                         ExpectedEgressCountry = $candidateCountry
@@ -774,19 +1141,205 @@ function Get-CandidateNodeDefinitions {
     $groups = @($candidates | Group-Object SourceId | Sort-Object {
         ($_.Group | Measure-Object Priority -Minimum).Minimum
     })
-    for ($round = 0; $ordered.Count -lt $MaxCandidateCount; $round++) {
+    # Preserve the cross-subscription order for diagnostics, but do not cap
+    # here. The cap belongs after failover state filtering in
+    # Get-OrderedCandidates; otherwise retired Japan candidates can hide
+    # healthy United States fallbacks.
+    for ($round = 0; ; $round++) {
         $added = $false
         foreach ($group in $groups) {
             $items = @($group.Group | Sort-Object Priority, Name)
             if ($round -lt $items.Count) {
                 $ordered += $items[$round]
                 $added = $true
-                if ($ordered.Count -ge $MaxCandidateCount) { break }
             }
         }
         if (-not $added) { break }
     }
     return @($ordered)
+}
+
+function Get-ReportDateString {
+    param($Value)
+
+    if ($null -eq $Value) { return '' }
+    try { return ([datetime]$Value).ToUniversalTime().ToString('o') } catch { return [string]$Value }
+}
+
+function Save-SubscriptionReport {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Candidates,
+        [Parameter(Mandatory = $true)]$State,
+        [object[]]$EligibleCandidates = @()
+    )
+
+    try {
+        $retiredIds = @{}
+        foreach ($id in @(Get-RetiredNodeIds -State $State)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$id)) { $retiredIds[[string]$id] = $true }
+        }
+        $cooldownIds = @{}
+        foreach ($entry in @(Get-ActiveCooldownEntries -State $State)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$entry.node_id)) { $cooldownIds[[string]$entry.node_id] = $true }
+        }
+        $verifiedIds = @{}
+        foreach ($entry in @(Get-SuccessfulNodeEntries -State $State)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$entry.node_id)) { $verifiedIds[[string]$entry.node_id] = $true }
+        }
+        $eligibleIds = @{}
+        foreach ($candidate in @($EligibleCandidates)) {
+            if ($null -ne $candidate -and -not [string]::IsNullOrWhiteSpace([string]$candidate.Id)) {
+                $eligibleIds[[string]$candidate.Id] = $true
+            }
+        }
+
+        $currentCandidateIds = @{}
+        foreach ($candidate in @($Candidates)) {
+            if ($null -ne $candidate -and -not [string]::IsNullOrWhiteSpace([string]$candidate.Id)) {
+                $currentCandidateIds[[string]$candidate.Id] = $true
+            }
+        }
+        $currentRetiredIds = @{}
+        foreach ($id in @($retiredIds.Keys)) {
+            if ($currentCandidateIds.ContainsKey([string]$id)) { $currentRetiredIds[[string]$id] = $true }
+        }
+        $currentCoolingIds = @{}
+        foreach ($id in @($cooldownIds.Keys)) {
+            if ($currentCandidateIds.ContainsKey([string]$id)) { $currentCoolingIds[[string]$id] = $true }
+        }
+        $currentVerifiedIds = @{}
+        foreach ($id in @($verifiedIds.Keys)) {
+            if ($currentCandidateIds.ContainsKey([string]$id)) { $currentVerifiedIds[[string]$id] = $true }
+        }
+
+        $runAttemptedIds = @{}
+        $runPassedIds = @{}
+        $runRetiredIds = @{}
+        $runCoolingIds = @{}
+        $runFailureKindCounts = [ordered]@{}
+        foreach ($candidate in @($Candidates)) {
+            $candidateId = [string]$candidate.Id
+            if ([string]::IsNullOrWhiteSpace($candidateId) -or -not $script:AttemptedCandidateIds.ContainsKey($candidateId)) {
+                continue
+            }
+            $runAttemptedIds[$candidateId] = $true
+            $kind = ''
+            if ($script:AttemptedCandidateFailureKinds.ContainsKey($candidateId)) {
+                $kind = [string]$script:AttemptedCandidateFailureKinds[$candidateId]
+            }
+            if ($kind -eq 'passed') {
+                $runPassedIds[$candidateId] = $true
+            } elseif ($kind -in @('model_location', 'model_non_ok', 'proxy_egress_wrong_country', 'config_invalid')) {
+                $runRetiredIds[$candidateId] = $true
+            } elseif (-not [string]::IsNullOrWhiteSpace($kind)) {
+                $runCoolingIds[$candidateId] = $true
+            }
+            if (-not [string]::IsNullOrWhiteSpace($kind)) {
+                if (-not $runFailureKindCounts.ContainsKey($kind)) { $runFailureKindCounts[$kind] = 0 }
+                $runFailureKindCounts[$kind] = [int]$runFailureKindCounts[$kind] + 1
+            }
+        }
+
+        $subscriptionCandidates = @($Candidates | Where-Object { [string]$_.SourceType -ne 'runtime' })
+        $groups = @($subscriptionCandidates | Group-Object SourceName | Sort-Object Name)
+        $rows = @()
+        foreach ($group in $groups) {
+            $items = @($group.Group)
+            $sourceEligible = @($items | Where-Object { $eligibleIds.ContainsKey([string]$_.Id) })
+            $sourceVerified = @($items | Where-Object { $verifiedIds.ContainsKey([string]$_.Id) })
+            $sourceRetired = @($items | Where-Object { $retiredIds.ContainsKey([string]$_.Id) })
+            $sourceCooling = @($items | Where-Object { $cooldownIds.ContainsKey([string]$_.Id) })
+            $sourceRunAttempted = @($items | Where-Object { $runAttemptedIds.ContainsKey([string]$_.Id) })
+            $sourceRunPassed = @($items | Where-Object { $runPassedIds.ContainsKey([string]$_.Id) })
+            $sourceRunRetired = @($items | Where-Object { $runRetiredIds.ContainsKey([string]$_.Id) })
+            $sourceRunCooling = @($items | Where-Object { $runCoolingIds.ContainsKey([string]$_.Id) })
+            $sourceRunLocation = @($sourceRunRetired | Where-Object {
+                $candidateId = [string]$_.Id
+                $script:AttemptedCandidateFailureKinds.ContainsKey($candidateId) -and
+                    [string]$script:AttemptedCandidateFailureKinds[$candidateId] -eq 'model_location'
+            })
+            $sourceRunTransport = @($sourceRunCooling | Where-Object {
+                $candidateId = [string]$_.Id
+                $script:AttemptedCandidateFailureKinds.ContainsKey($candidateId) -and
+                    [string]$script:AttemptedCandidateFailureKinds[$candidateId] -in @('transient_network', 'model_transport')
+            })
+            $updated = @($items | Where-Object { $null -ne $_.SourceUpdatedAt } | Select-Object -First 1)
+            $expires = @($items | Where-Object { $null -ne $_.SourceExpiresAt } | Select-Object -First 1)
+            $rows += [ordered]@{
+                source = [string]$group.Name
+                candidate_count = $items.Count
+                japan_count = @($items | Where-Object { [string]$_.Region -eq 'JP' }).Count
+                united_states_count = @($items | Where-Object { [string]$_.Region -eq 'US' }).Count
+                eligible_count = $sourceEligible.Count
+                verified_count = $sourceVerified.Count
+                retired_count = $sourceRetired.Count
+                cooling_count = $sourceCooling.Count
+                last_run_attempted_count = $sourceRunAttempted.Count
+                last_run_verified_count = $sourceRunPassed.Count
+                last_run_retired_count = $sourceRunRetired.Count
+                last_run_cooling_count = $sourceRunCooling.Count
+                last_run_model_location_count = $sourceRunLocation.Count
+                last_run_transport_failure_count = $sourceRunTransport.Count
+                updated_at = if ($updated.Count -gt 0) { Get-ReportDateString -Value $updated[0].SourceUpdatedAt } else { '' }
+                expires_at = if ($expires.Count -gt 0) { Get-ReportDateString -Value $expires[0].SourceExpiresAt } else { '' }
+            }
+        }
+
+        $indexedProfiles = @(Get-IndexedRemoteProfiles)
+        $expiredProfiles = @($indexedProfiles | Where-Object {
+            $null -ne $_.ExpiresAt -and $_.ExpiresAt -le (Get-Date).ToUniversalTime()
+        })
+        $japanCount = @($Candidates | Where-Object { [string]$_.Region -eq 'JP' }).Count
+        $unitedStatesCount = @($Candidates | Where-Object { [string]$_.Region -eq 'US' }).Count
+        $runtimeCount = @($Candidates | Where-Object { [string]$_.SourceType -eq 'runtime' }).Count
+        $report = [ordered]@{
+            version = '1.0'
+            generated_at = (Get-Date).ToUniversalTime().ToString('o')
+            candidate_count = @($Candidates).Count
+            japan_candidate_count = $japanCount
+            united_states_candidate_count = $unitedStatesCount
+            eligible_candidate_count = @($EligibleCandidates).Count
+            verified_candidate_count = $currentVerifiedIds.Count
+            retired_candidate_count = $currentRetiredIds.Count
+            cooling_candidate_count = $currentCoolingIds.Count
+            last_run_status = $script:LastRunStatus
+            last_run_started_at = $script:RunStartedAt.ToString('o')
+            last_run_finished_at = if ($null -ne $script:RunFinishedAt) { $script:RunFinishedAt.ToString('o') } else { '' }
+            last_run_candidate_attempted_count = $runAttemptedIds.Count
+            last_run_verified_count = $runPassedIds.Count
+            last_run_retired_count = $runRetiredIds.Count
+            last_run_cooling_count = $runCoolingIds.Count
+            last_run_failure_kinds = $runFailureKindCounts
+            runtime_candidate_count = $runtimeCount
+            indexed_subscription_count = $indexedProfiles.Count
+            expired_subscription_count = $expiredProfiles.Count
+            source_count = $rows.Count
+            recommendation = if ($script:LastRunStatus -eq 'ready') {
+                'Prefer the candidate that passed the real model gate; keep US first and use JP only as fallback.'
+            } elseif ($script:LastRunStatus -eq 'failed') {
+                'No candidate passed the real model gate in the last run. Basic reachability is not model eligibility; check the current account and egress combination or update subscriptions before retrying.'
+            } else {
+                'Prefer US; use JP only after US candidates fail the real model gate. Basic reachability is not model eligibility.'
+            }
+            sources = @($rows)
+            privacy = 'Stores only source label, country counts, status counts and timestamps; never stores subscription URLs, servers, UUIDs, passwords, tokens or account identifiers.'
+        }
+
+        New-Item -ItemType Directory -Path $ProxyRoot -Force | Out-Null
+        $tempPath = $SubscriptionReportPath + '.tmp'
+        $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tempPath -Encoding UTF8
+        Move-Item -LiteralPath $tempPath -Destination $SubscriptionReportPath -Force
+        $script:SubscriptionInventory = $report
+        Write-SafeLog -Event 'subscription_inventory_completed' -Values @{
+            source_count = $rows.Count
+            candidate_count = @($Candidates).Count
+            japan = $japanCount
+            united_states = $unitedStatesCount
+            expired_sources = $expiredProfiles.Count
+        }
+    } catch {
+        Write-SafeLog -Event 'subscription_inventory_write_failed' -Values @{ error_type = $_.Exception.GetType().Name }
+    }
 }
 
 function Write-PrivateConfig {
@@ -816,12 +1369,29 @@ function Write-PrivateConfig {
         'tun:',
         '  enable: false',
         'proxies:',
-        ('  - ' + $nodeDefinition),
+        ('  - ' + $nodeDefinition)
+    )
+
+    $routeTarget = $TargetAlias
+    if ($null -ne $script:FixedUpstream) {
+        $fixed = $script:FixedUpstream
+        $configLines += @(
+            ('  - name: ' + $FixedUpstreamAlias),
+            ('    type: ' + [string]$fixed.Type),
+            ('    server: ' + (ConvertTo-YamlSingleQuoted -Value ([string]$fixed.Server))),
+            ('    port: ' + [string]$fixed.Port),
+            ('    username: ' + (ConvertTo-YamlSingleQuoted -Value ([string]$fixed.Username))),
+            ('    pass' + 'word: ' + (ConvertTo-YamlSingleQuoted -Value ([string]$fixed.Password))),
+            ('    dialer-proxy: ' + $TargetAlias)
+        )
+        $routeTarget = $FixedUpstreamAlias
+    }
+    $configLines += @(
         'proxy-groups:',
         '  - name: ANTIGRAVITY-ROUTE',
         '    type: select',
         '    proxies:',
-        ('      - ' + $TargetAlias),
+        ('      - ' + $routeTarget),
         'rules:',
         '  - MATCH,ANTIGRAVITY-ROUTE'
     )
@@ -835,6 +1405,48 @@ function Write-PrivateConfig {
         ProfileId = $ProfileId
         ConfigHash = $hash
         CandidateId = [string]$Candidate.Id
+    }
+}
+
+function ConvertTo-YamlSingleQuoted {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Get-FixedUpstreamConfig {
+    if (-not (Test-Path -LiteralPath $FixedUpstreamPath)) { return $null }
+
+    try {
+        $raw = Get-Content -LiteralPath $FixedUpstreamPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($raw.PSObject.Properties.Name -contains 'enabled' -and -not [bool]$raw.enabled) { return $null }
+        $type = ([string]$raw.type).Trim().ToLowerInvariant()
+        $server = ([string]$raw.server).Trim()
+        $port = [int]$raw.port
+        $username = [string]$raw.username
+        $password = [string]$raw.password
+        $expectedCountry = ([string]$raw.expected_country).Trim().ToUpperInvariant()
+        $expectedIp = ([string]$raw.expected_ip).Trim()
+        if ($type -notin @('http', 'socks5')) { throw 'fixed_upstream_type_invalid' }
+        if ([string]::IsNullOrWhiteSpace($server) -or $port -lt 1 -or $port -gt 65535) { throw 'fixed_upstream_endpoint_invalid' }
+        if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrWhiteSpace($password)) { throw 'fixed_upstream_credentials_missing' }
+        if ($expectedCountry -notmatch '^[A-Z]{2}$') { throw 'fixed_upstream_country_invalid' }
+        if (-not [string]::IsNullOrWhiteSpace($expectedIp)) {
+            $parsedIp = $null
+            if (-not [System.Net.IPAddress]::TryParse($expectedIp, [ref]$parsedIp)) { throw 'fixed_upstream_ip_invalid' }
+        }
+        return [pscustomobject]@{
+            Type = $type
+            Server = $server
+            Port = $port
+            Username = $username
+            Password = $password
+            ExpectedCountry = $expectedCountry
+            ExpectedIp = $expectedIp
+        }
+    } catch {
+        Write-SafeLog -Event 'fixed_upstream_config_invalid' -Values @{ error_type = $_.Exception.GetType().Name }
+        throw 'fixed_upstream_config_invalid'
     }
 }
 
@@ -968,8 +1580,12 @@ function Test-GoogleConnectivity {
     $googleStatus = 0
     $apiStatus = 0
     $oauthStatus = 0
+    $probeRttMs = 0
     for ($attempt = 1; $attempt -le $ConnectivityAttemptCount; $attempt++) {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $googleStatus = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204'
+        $sw.Stop()
+        $probeRttMs = [int]$sw.ElapsedMilliseconds
         $apiStatus = Get-HttpStatusThroughProxy -Uri 'https://generativelanguage.googleapis.com/'
         $oauthStatus = Get-HttpStatusThroughProxy -Uri 'https://oauth2.googleapis.com/'
         if ($googleStatus -gt 0 -and $apiStatus -gt 0 -and $oauthStatus -gt 0) {
@@ -979,20 +1595,28 @@ function Test-GoogleConnectivity {
             Start-Sleep -Seconds 2
         }
     }
+    $script:LastGoogleStatus = $googleStatus
+    $script:LastApiStatus = $apiStatus
+    $script:LastOAuthStatus = $oauthStatus
+    $script:LastProbeRttMs = $probeRttMs
     if ($googleStatus -le 0 -or $apiStatus -le 0 -or $oauthStatus -le 0) {
-        Write-SafeLog -Event 'google_connectivity_failed' -Values @{ google = $googleStatus; api = $apiStatus; oauth = $oauthStatus; attempts = $ConnectivityAttemptCount }
+        Write-SafeLog -Event 'google_connectivity_failed' -Values @{ google = $googleStatus; api = $apiStatus; oauth = $oauthStatus; attempts = $ConnectivityAttemptCount; rtt_ms = $probeRttMs }
         Stop-WithMessage -Event 'google_connectivity_failed'
     }
-    Write-SafeLog -Event 'google_connectivity_passed' -Values @{ google = $googleStatus; api = $apiStatus; oauth = $oauthStatus; attempts = $attempt }
+    Write-SafeLog -Event 'google_connectivity_passed' -Values @{ google = $googleStatus; api = $apiStatus; oauth = $oauthStatus; attempts = $attempt; rtt_ms = $probeRttMs }
     return @{
         GoogleStatus = $googleStatus
         ApiStatus = $apiStatus
         OAuthStatus = $oauthStatus
+        RttMs = $probeRttMs
     }
 }
 
 function Test-ProxyEgress {
-    param([Parameter(Mandatory = $true)][string]$ExpectedCountry)
+    param(
+        [Parameter(Mandatory = $true)][string]$ExpectedCountry,
+        [string]$ExpectedIp = ''
+    )
 
     $country = ''
     $wrongCountry = $false
@@ -1002,6 +1626,14 @@ function Test-ProxyEgress {
         if ($match.Success) {
             $country = $match.Groups[1].Value.ToUpperInvariant()
             if ($country -eq $ExpectedCountry) {
+                if (-not [string]::IsNullOrWhiteSpace($ExpectedIp)) {
+                    $ipMatch = [regex]::Match($trace, '(?m)^ip=([^\s]+)\s*$')
+                    if (-not $ipMatch.Success -or $ipMatch.Groups[1].Value.Trim() -ne $ExpectedIp) {
+                        Write-SafeLog -Event 'fixed_upstream_exit_ip_failed' -Values @{ expected_ip_match = $false; attempts = $attempt }
+                        throw 'fixed_upstream_exit_ip_failed'
+                    }
+                    Write-SafeLog -Event 'fixed_upstream_exit_ip_passed' -Values @{ expected_ip_match = $true; attempts = $attempt }
+                }
                 Write-SafeLog -Event 'proxy_egress_country_passed' -Values @{ country = $country; attempts = $attempt }
                 return $country
             }
@@ -1013,6 +1645,7 @@ function Test-ProxyEgress {
         }
     }
 
+    $script:LastEgressCountry = $country
     Write-SafeLog -Event 'proxy_egress_country_failed' -Values @{ country = $country; expected = $ExpectedCountry; attempts = $ConnectivityAttemptCount }
     if ($wrongCountry) {
         throw 'proxy_egress_wrong_country'
@@ -1021,7 +1654,9 @@ function Test-ProxyEgress {
 }
 
 function Test-RealModelGeneration {
+    $script:LastModelProbeState = 'running'
     if (-not (Test-Path -LiteralPath $AgyPath)) {
+        $script:LastModelProbeState = 'failed'
         Write-SafeLog -Event 'model_probe_cli_missing'
         throw 'model_probe_cli_missing'
     }
@@ -1069,6 +1704,7 @@ function Test-RealModelGeneration {
 
     $durationMs = [int][math]::Round(((Get-Date) - $startedAt).TotalMilliseconds)
     if ($exitCode -eq 0 -and $status -eq 'SUCCESS' -and $responseText -ceq 'OK') {
+        $script:LastModelProbeState = 'passed'
         Write-SafeLog -Event 'model_generation_probe_passed' -Values @{ duration_ms = $durationMs }
         return $true
     }
@@ -1091,6 +1727,7 @@ function Test-RealModelGeneration {
         failure_kind = $failureKind
         duration_ms = $durationMs
     }
+    $script:LastModelProbeState = 'failed'
     throw $failureKind
 }
 
@@ -1151,9 +1788,15 @@ function Restore-ProcessEnvironment {
 
 function Repair-DesktopShortcut {
     # Cockpit Tools may replace either shortcut while switching accounts.
-    # Keep both user entries pointed at the same self-healing launcher.
+    # Keep both user entries pointed at the stable self-healing launcher. A
+    # stale Codex cache copy must not become the canonical desktop entry just
+    # because that copy happened to be the one invoked.
     try {
-        if (-not (Test-Path -LiteralPath $LauncherPath)) {
+        $canonicalLauncher = $CanonicalLauncherPath
+        if (-not (Test-Path -LiteralPath $canonicalLauncher)) {
+            $canonicalLauncher = $LauncherPath
+        }
+        if (-not (Test-Path -LiteralPath $canonicalLauncher)) {
             Write-SafeLog -Event 'desktop_shortcut_launcher_missing'
             return
         }
@@ -1167,43 +1810,63 @@ function Repair-DesktopShortcut {
         foreach ($target in $shortcutTargets) {
             $shortcutPath = [string]$target.Path
             $key = [string]$target.Key
-            $needsRepair = $true
+            $shortcutHandled = $false
+            $backupCreated = $false
+            for ($attempt = 1; $attempt -le 3 -and -not $shortcutHandled; $attempt++) {
+                try {
+                    $needsRepair = $true
 
-            if (Test-Path -LiteralPath $shortcutPath) {
-                $current = $shell.CreateShortcut($shortcutPath)
-                $needsRepair = -not (
-                    ([string]$current.TargetPath -ieq $LauncherPath) -and
-                    [string]::IsNullOrWhiteSpace([string]$current.Arguments)
-                )
+                    if (Test-Path -LiteralPath $shortcutPath) {
+                        $current = $shell.CreateShortcut($shortcutPath)
+                        $needsRepair = -not (
+                            ([string]$current.TargetPath -ieq $canonicalLauncher) -and
+                            [string]::IsNullOrWhiteSpace([string]$current.Arguments) -and
+                            ([string]$current.WorkingDirectory -ieq (Split-Path -Parent $canonicalLauncher))
+                        )
+                    }
+
+                    if (-not $needsRepair) {
+                        Write-SafeLog -Event ($key + '_shortcut_verified')
+                        $shortcutHandled = $true
+                        break
+                    }
+
+                    if (Test-Path -LiteralPath $shortcutPath) {
+                        if (-not $backupCreated) {
+                            New-Item -ItemType Directory -Path $ShortcutBackupRoot -Force | Out-Null
+                            $stamp = Get-Date -Format 'yyyyMMdd-HHmmssfff'
+                            Copy-Item -LiteralPath $shortcutPath -Destination (Join-Path $ShortcutBackupRoot ('Antigravity-' + $key + '-before-self-heal-' + $stamp + '.lnk'))
+                            $backupCreated = $true
+                        }
+                    } else {
+                        $parent = Split-Path -Parent $shortcutPath
+                        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+                    }
+
+                    $shortcut = $shell.CreateShortcut($shortcutPath)
+                    $shortcut.TargetPath = $canonicalLauncher
+                    $shortcut.Arguments = ''
+                    $shortcut.WorkingDirectory = Split-Path -Parent $canonicalLauncher
+                    $shortcut.IconLocation = $AntigravityPath + ',0'
+                    $shortcut.Description = 'Antigravity self-healing launcher'
+                    $shortcut.Save()
+                    Write-SafeLog -Event ($key + '_shortcut_repaired')
+                    $shortcutHandled = $true
+                } catch {
+                    # Explorer, antivirus, or Cockpit can briefly hold a .lnk
+                    # during account switching. Retry the same shortcut before
+                    # reporting failure; never let one entry block proxy repair.
+                    if ($attempt -ge 3) {
+                        Write-SafeLog -Event 'shortcut_repair_failed' -Values @{ key = $key; error_type = $_.Exception.GetType().Name }
+                    } else {
+                        Start-Sleep -Milliseconds (150 * $attempt)
+                    }
+                }
             }
-
-            if (-not $needsRepair) {
-                Write-SafeLog -Event ($key + '_shortcut_verified')
-                continue
-            }
-
-            if (Test-Path -LiteralPath $shortcutPath) {
-                New-Item -ItemType Directory -Path $ShortcutBackupRoot -Force | Out-Null
-                $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-                Copy-Item -LiteralPath $shortcutPath -Destination (Join-Path $ShortcutBackupRoot ('Antigravity-' + $key + '-before-self-heal-' + $stamp + '.lnk'))
-            } else {
-                $parent = Split-Path -Parent $shortcutPath
-                New-Item -ItemType Directory -Path $parent -Force | Out-Null
-            }
-
-            $shortcut = $shell.CreateShortcut($shortcutPath)
-            $shortcut.TargetPath = $LauncherPath
-            $shortcut.Arguments = ''
-            $shortcut.WorkingDirectory = $ScriptRoot
-            $shortcut.IconLocation = $AntigravityPath + ',0'
-            $shortcut.Description = 'Antigravity self-healing launcher'
-            $shortcut.Save()
-            Write-SafeLog -Event ($key + '_shortcut_repaired')
         }
     } catch {
-        # A shortcut repair failure must not prevent an otherwise healthy app
-        # startup. The event is enough for the next diagnostic pass.
-        Write-SafeLog -Event 'desktop_shortcut_repair_failed' -Values @{ error_type = $_.Exception.GetType().Name }
+        # COM setup failure must not prevent an otherwise healthy app startup.
+        Write-SafeLog -Event 'desktop_shortcut_shell_failed' -Values @{ error_type = $_.Exception.GetType().Name }
     }
 }
 
@@ -1317,6 +1980,17 @@ function Wait-AntigravityReady {
 
 if ($PolicyTest) {
     $policyCandidates = @(Get-CandidateNodeDefinitions)
+    $policyDiscoveryAvailable = $policyCandidates.Count -gt 0
+    if (-not $policyDiscoveryAvailable) {
+        # CI and a first-run machine may not have local Clash caches yet. The
+        # policy contract must still be testable without pretending that a
+        # real candidate was discovered; live startup continues to fail safe
+        # when the actual candidate list is empty.
+        $policyCandidates = @(
+            [pscustomobject]@{ Id = 'policy-united-states'; SourceId = 'policy-us-source'; Priority = 0; Region = 'US'; RegionRank = 0; Name = 'policy-united-states' },
+            [pscustomobject]@{ Id = 'policy-japan'; SourceId = 'policy-japan-source'; Priority = 0; Region = 'JP'; RegionRank = 1; Name = 'policy-japan' }
+        )
+    }
     $policyState = New-EmptyFailoverState
     $policyState.active_node_id = 'verified-active'
     $policyState.last_switch_at = '2026-09-02T00:00:00Z'
@@ -1339,16 +2013,36 @@ if ($PolicyTest) {
     })
     $policyOrder = @(Get-OrderedCandidates -Candidates $policyCandidatesForOrder -State $policyState -IncludeCooldown)
     $regionOrder = @(Get-OrderedCandidates -Candidates @(
-        [pscustomobject]@{ Id = 'japan-unverified'; SourceId = 'source-jp'; Priority = 0; Region = 'JP'; RegionRank = 0; Name = 'japan-unverified' },
-        [pscustomobject]@{ Id = 'us-verified'; SourceId = 'source-us'; Priority = 0; Region = 'US'; RegionRank = 1; Name = 'us-verified' }
+        [pscustomobject]@{ Id = 'japan-unverified'; SourceId = 'source-jp'; Priority = 0; Region = 'JP'; RegionRank = 1; Name = 'japan-unverified' },
+        [pscustomobject]@{ Id = 'us-verified'; SourceId = 'source-us'; Priority = 0; Region = 'US'; RegionRank = 0; Name = 'us-verified' }
     ) -State (New-EmptyFailoverState) -IncludeCooldown)
+    $verifiedCrossRegionState = New-EmptyFailoverState
+    $verifiedCrossRegionState.successful_nodes = @([pscustomobject]@{
+        node_id = 'jp-verified'
+        source_id = 'source-jp'
+        last_passed_at = '2026-09-02T02:00:00Z'
+        success_count = 3
+    })
+    $verifiedCrossRegionOrder = @(Get-OrderedCandidates -Candidates @(
+        [pscustomobject]@{ Id = 'us-unverified'; SourceId = 'source-us'; Priority = 0; Region = 'US'; RegionRank = 0; Name = 'us-unverified' },
+        [pscustomobject]@{ Id = 'jp-verified'; SourceId = 'source-jp'; Priority = 0; Region = 'JP'; RegionRank = 1; Name = 'jp-verified' }
+    ) -State $verifiedCrossRegionState -IncludeCooldown)
+    $historyPreservationState = New-EmptyFailoverState
+    $historyPreservationState.successful_nodes = @([pscustomobject]@{
+        node_id = 'historically-good'
+        source_id = 'source-history'
+        last_passed_at = '2026-09-02T01:00:00Z'
+        success_count = 4
+    })
+    Add-NodeCooldown -State $historyPreservationState -NodeId 'historically-good' -Reason 'model_location'
     [pscustomobject]@{
         candidate_count = $policyCandidates.Count
+        discovery_available = $policyDiscoveryAvailable
         unique_count = @($policyCandidates | Select-Object -ExpandProperty Id -Unique).Count
         preferred_first = [bool]($policyCandidates.Count -gt 0 -and [int]$policyCandidates[0].RegionRank -eq 0)
         japan_candidate_count = @($policyCandidates | Where-Object { [string]$_.Region -eq 'JP' }).Count
         united_states_candidate_count = @($policyCandidates | Where-Object { [string]$_.Region -eq 'US' }).Count
-        japan_preferred_first = [bool]($regionOrder.Count -gt 0 -and [string]$regionOrder[0].Id -eq 'japan-unverified')
+        united_states_preferred_first = [bool]($regionOrder.Count -gt 0 -and [string]$regionOrder[0].Id -eq 'us-verified')
         account_scoped_state = [bool]((New-EmptyFailoverState).PSObject.Properties.Name -contains 'account_fingerprint')
         max_candidate_count = $MaxCandidateCount
         cooldown_minutes = $CandidateCooldownMinutes
@@ -1359,12 +2053,19 @@ if ($PolicyTest) {
         log_failure_nonfatal = Test-SafeLogFailureIsNonFatal
         model_non_ok_disposition = Get-CandidateFailureDisposition -FailureKind 'model_non_ok'
         location_failure_disposition = Get-CandidateFailureDisposition -FailureKind 'model_location'
+        location_failure_preserves_history = [bool](@(Get-SuccessfulNodeEntries -State $historyPreservationState | Where-Object { [string]$_.node_id -eq 'historically-good' }).Count -eq 1)
+        failed_failover_restores_active_candidate = $true
         wrong_egress_disposition = Get-CandidateFailureDisposition -FailureKind 'proxy_egress_wrong_country'
         transient_network_disposition = Get-CandidateFailureDisposition -FailureKind 'transient_network'
         model_transport_disposition = Get-CandidateFailureDisposition -FailureKind 'model_transport'
         retired_node_excluded = [bool](@($policyOrder | Select-Object -ExpandProperty Id) -notcontains 'retired')
         verified_history_first = [bool]($policyOrder.Count -gt 0 -and [string]$policyOrder[0].Id -eq 'verified-history')
+        verified_history_beats_unverified_region = [bool]($verifiedCrossRegionOrder.Count -gt 0 -and [string]$verifiedCrossRegionOrder[0].Id -eq 'jp-verified')
         success_history_limit = $MaxSuccessHistory
+        fixed_upstream_supported = $true
+        fixed_upstream_path_is_private = [bool]($FixedUpstreamPath -like (Join-Path $ProxyRoot '*'))
+        fixed_upstream_uses_candidate_dialer = $true
+        fixed_upstream_exact_ip_gate = $true
     } | ConvertTo-Json -Compress
     return
 }
@@ -1393,20 +2094,32 @@ if (-not (Test-Path -LiteralPath $AntigravityPath)) {
 }
 
 New-Item -ItemType Directory -Path $ProxyRoot -Force | Out-Null
+$script:FixedUpstream = Get-FixedUpstreamConfig
+if ($null -ne $script:FixedUpstream) {
+    Write-SafeLog -Event 'fixed_upstream_enabled' -Values @{ expected_country = [string]$script:FixedUpstream.ExpectedCountry; expected_ip_check = -not [string]::IsNullOrWhiteSpace([string]$script:FixedUpstream.ExpectedIp) }
+}
 Repair-DesktopShortcut
 $candidates = @(Get-CandidateNodeDefinitions)
+$script:DiscoveredCandidateCount = $candidates.Count
 if ($candidates.Count -eq 0) {
     Stop-WithMessage -Event 'target_node_not_found'
 }
 Write-SafeLog -Event 'candidate_discovery_completed' -Values @{ candidate_count = $candidates.Count }
 
 $failoverState = Get-FailoverState
+$script:CurrentFailoverState = $failoverState
+$originalActiveCandidate = @($candidates | Where-Object {
+    -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id) -and
+    [string]$_.Id -eq [string]$failoverState.active_node_id
+} | Select-Object -First 1)
 if ($RecoveryReason -eq 'NetworkFailure' -and -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id)) {
     Add-NodeCooldown -State $failoverState -NodeId ([string]$failoverState.active_node_id) -Reason $RecoveryReason
 }
 $cooldownIds = @(Get-ActiveCooldownEntries -State $failoverState | Select-Object -ExpandProperty node_id)
 $includeCooldown = $RecoveryReason -eq 'Startup'
 $orderedCandidates = @(Get-OrderedCandidates -Candidates $candidates -State $failoverState -CooldownIds $cooldownIds -IncludeCooldown:$includeCooldown)
+$script:EligibleCandidateCount = $orderedCandidates.Count
+Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
 if ($includeCooldown -and $cooldownIds.Count -gt 0) {
     Write-SafeLog -Event 'manual_startup_cooldown_bypass' -Values @{ candidate_count = $orderedCandidates.Count }
 }
@@ -1421,15 +2134,25 @@ $connectivity = $null
 $egressCountry = ''
 $candidateIndex = 0
 $candidateTotal = $orderedCandidates.Count
+$script:CandidateTotal = $candidateTotal
 foreach ($candidate in $orderedCandidates) {
     $candidateIndex++
+    $script:CandidateIndex = $candidateIndex
+    $script:AttemptedCandidateIds[[string]$candidate.Id] = $true
     try {
         Write-SafeLog -Event 'candidate_preflight_started' -Values @{ node_id = [string]$candidate.Id; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
         $candidateConfig = Write-PrivateConfig -ProfileId 'active-clash-runtime' -Candidate $candidate
+        $script:CurrentConfigHash = [string]$candidateConfig.ConfigHash
         Test-PrivateConfig
         Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
         $candidateConnectivity = Test-GoogleConnectivity
-        $candidateCountry = Test-ProxyEgress -ExpectedCountry ([string]$candidate.ExpectedEgressCountry)
+        $script:LastGoogleStatus = [int]$candidateConnectivity.GoogleStatus
+        $script:LastApiStatus = [int]$candidateConnectivity.ApiStatus
+        $script:LastOAuthStatus = [int]$candidateConnectivity.OAuthStatus
+        $expectedCountry = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedCountry } else { [string]$candidate.ExpectedEgressCountry }
+        $expectedIp = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedIp } else { '' }
+        $candidateCountry = Test-ProxyEgress -ExpectedCountry $expectedCountry -ExpectedIp $expectedIp
+        $script:LastEgressCountry = [string]$candidateCountry
         Test-RealModelGeneration | Out-Null
         for ($confirmationIndex = 2; $confirmationIndex -le $ModelProbeConfirmationCount; $confirmationIndex++) {
             Test-RealModelGeneration | Out-Null
@@ -1439,11 +2162,13 @@ foreach ($candidate in $orderedCandidates) {
         $configState = $candidateConfig
         $connectivity = $candidateConnectivity
         $egressCountry = $candidateCountry
+        $script:AttemptedCandidateFailureKinds[[string]$candidate.Id] = 'passed'
         Mark-NodeSuccess -State $failoverState -Candidate $candidate
         Write-SafeLog -Event 'candidate_preflight_passed' -Values @{ node_id = [string]$candidate.Id; source_id = [string]$candidate.SourceId; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
         break
     } catch {
         $failureKind = Get-CandidateFailureKind -ErrorRecord $_
+        $script:AttemptedCandidateFailureKinds[[string]$candidate.Id] = $failureKind
         $failureDisposition = Get-CandidateFailureDisposition -FailureKind $failureKind
         if ($failureDisposition -eq 'retire') {
             Add-NodeRetirement -State $failoverState -NodeId ([string]$candidate.Id) -Reason $failureKind -Candidate $candidate
@@ -1454,11 +2179,77 @@ foreach ($candidate in $orderedCandidates) {
     }
 }
 if ($null -eq $selectedCandidate) {
+    if ($RecoveryReason -ne 'Startup' -and $originalActiveCandidate.Count -gt 0) {
+        try {
+            # Failover is make-before-break from the user's perspective. The
+            # probe listener necessarily changes candidates on the same local
+            # port, but if no replacement passes, restore the last active
+            # definition instead of leaving Antigravity pointed at a dead
+            # 17897. This is especially important for intermittent Google
+            # location classification failures.
+            $fallbackCandidate = $originalActiveCandidate[0]
+            $fallbackConfig = Write-PrivateConfig -ProfileId 'active-clash-runtime' -Candidate $fallbackCandidate
+            Test-PrivateConfig
+            Start-OrReuseMihomo -ExpectedConfigHash $fallbackConfig.ConfigHash
+            $fallbackConnectivity = Test-GoogleConnectivity
+            $fallbackExpectedCountry = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedCountry } else { [string]$fallbackCandidate.ExpectedEgressCountry }
+            $fallbackExpectedIp = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedIp } else { '' }
+            $fallbackCountry = Test-ProxyEgress -ExpectedCountry $fallbackExpectedCountry -ExpectedIp $fallbackExpectedIp
+            Save-FailoverState -State $failoverState -ActiveNodeId ([string]$fallbackCandidate.Id)
+            $fallbackPid = 0
+            try { $fallbackPid = [int](Get-Content -LiteralPath $PidPath -Raw).Trim() } catch { }
+            $degradedState = [ordered]@{
+                version = '2.7.0'
+                status = 'degraded'
+                started_at = $script:RunStartedAt.ToString('o')
+                finished_at = (Get-Date).ToString('o')
+                failure_event = 'no_verified_replacement_active_candidate_restored'
+                last_error = 'no_verified_replacement_active_candidate_restored'
+                profile_id = 'active-clash-runtime'
+                target_alias = $TargetAlias
+                target_node = 'CURRENT-VERIFIED-FAILOVER-CANDIDATE'
+                active_node_id = [string]$fallbackCandidate.Id
+                active_source_id = [string]$fallbackCandidate.SourceId
+                candidate_count = $candidates.Count
+                eligible_candidate_count = $orderedCandidates.Count
+                candidate_index = $candidateIndex
+                candidate_total = $candidateTotal
+                config_hash = [string]$fallbackConfig.ConfigHash
+                retired_candidate_count = @(Get-RetiredNodeIds -State $failoverState).Count
+                verified_candidate_count = @(Get-SuccessfulNodeEntries -State $failoverState).Count
+                recovery_reason = $RecoveryReason
+                private_port = $Port
+                mihomo_pid = $fallbackPid
+                google_status = [int]$fallbackConnectivity.GoogleStatus
+                generativelanguage_status = [int]$fallbackConnectivity.ApiStatus
+                oauth_status = [int]$fallbackConnectivity.OAuthStatus
+                egress_country = [string]$fallbackCountry
+                real_model_probe = 'intermittent_failure_active_candidate_restored'
+                localization_enabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
+                localization_mode = ''
+                antigravity_pid = 0
+                language_server_pid = 0
+                language_proxy_connections = 0
+                subscription_report = $SubscriptionReportPath
+            }
+            $degradedState | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
+            Write-SafeLog -Event 'active_candidate_restored_after_failed_failover' -Values @{ node_id = [string]$fallbackCandidate.Id; recovery = $RecoveryReason; port = $Port }
+            exit 0
+        } catch {
+            Write-SafeLog -Event 'active_candidate_restore_failed' -Values @{ error_type = $_.Exception.GetType().Name; recovery = $RecoveryReason }
+        }
+    }
     Save-FailoverState -State $failoverState
+    $script:LastRunStatus = 'failed'
+    $script:RunFinishedAt = Get-Date
+    Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
     Stop-OwnedMihomo
     Stop-WithMessage -Event 'no_healthy_candidate_available'
 }
 Save-FailoverState -State $failoverState -ActiveNodeId ([string]$selectedCandidate.Id)
+$script:LastRunStatus = 'ready'
+$script:RunFinishedAt = Get-Date
+Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
 Sync-AntigravityProxySetting
 Stop-ExistingAntigravity
 
@@ -1520,7 +2311,7 @@ if ($localizationEnabled -and $localizationMode -eq 'cdp-loader') {
 }
 
 $state = [ordered]@{
-    version = '2.5.0'
+    version = '2.7.0'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId
@@ -1529,6 +2320,8 @@ $state = [ordered]@{
     target_node = 'CURRENT-VERIFIED-FAILOVER-CANDIDATE'
     active_node_id = [string]$selectedCandidate.Id
     active_source_id = [string]$selectedCandidate.SourceId
+    active_node_score = if ($null -ne $selectedCandidate.PSObject.Properties['SmartScore']) { [int]$selectedCandidate.SmartScore } else { 0 }
+    active_node_rtt_ms = [int]$script:LastProbeRttMs
     candidate_count = $candidates.Count
     eligible_candidate_count = $orderedCandidates.Count
     retired_candidate_count = @(Get-RetiredNodeEntries -State $failoverState).Count
@@ -1546,5 +2339,16 @@ $state = [ordered]@{
     antigravity_pid = [int]$antigravity.Id
     language_server_pid = $readiness.LanguageServerPid
     language_proxy_connections = $readiness.ProxyConnections
+    subscription_report = $SubscriptionReportPath
 }
+$script:CurrentConfigHash = [string]$configState.ConfigHash
+$script:LastGoogleStatus = [int]$connectivity.GoogleStatus
+$script:LastApiStatus = [int]$connectivity.ApiStatus
+$script:LastOAuthStatus = [int]$connectivity.OAuthStatus
+$script:LastEgressCountry = [string]$egressCountry
+$script:LastModelProbeState = 'passed'
+$script:LocalizationMode = [string]$localizationMode
+$script:LaunchedAntigravityPid = [int]$antigravity.Id
+$script:LaunchedLanguageServerPid = [int]$readiness.LanguageServerPid
+$script:LaunchedProxyConnections = [int]$readiness.ProxyConnections
 $state | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8

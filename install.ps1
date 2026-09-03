@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Antigravity\launcher'),
-    [string]$SourceApp = ''
+    [string]$SourceApp = '',
+    [string]$DesktopShortcutName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,8 +49,16 @@ function Get-Sha512Hex {
     }
 }
 
+$actualDesktopShortcutName = if (-not [string]::IsNullOrWhiteSpace($DesktopShortcutName)) {
+    $DesktopShortcutName
+} elseif ($installRoot -match 'v1\.0') {
+    'Antigravity 启动器 (v1.0 体验版).lnk'
+} else {
+    'Antigravity 启动器.lnk'
+}
+
 $shortcutTargets = @(
-    @{ Path = (Join-Path $desktop 'Antigravity 启动器.lnk'); Target = $launcher; Description = 'Antigravity recovery launcher'; Key = 'desktop-launcher' },
+    @{ Path = (Join-Path $desktop $actualDesktopShortcutName); Target = $launcher; Description = 'Antigravity recovery launcher'; Key = 'desktop-launcher' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 启动器.lnk'); Target = $launcher; Description = 'Antigravity recovery launcher'; Key = 'start-menu-launcher' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 中文版.lnk'); Target = $installedEnableChinese; Description = 'Enable Antigravity Simplified Chinese UI'; Key = 'start-menu-chinese' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 英文恢复.lnk'); Target = $installedRestoreEnglish; Description = 'Restore the original English UI'; Key = 'start-menu-english' },
@@ -129,12 +138,18 @@ if (Test-Path -LiteralPath $agyPath) {
     $agyReady = ((Get-Sha512Hex -LiteralPath $agyPath) -eq $agyExpectedHash)
 }
 if (-not $agyReady) {
-    $defaultAgy = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\tools\agy\agy.exe'
-    if (-not [string]::Equals($defaultAgy, $agyPath, [System.StringComparison]::OrdinalIgnoreCase) -and
-        (Test-Path -LiteralPath $defaultAgy) -and
-        ((Get-Sha512Hex -LiteralPath $defaultAgy) -eq $agyExpectedHash)) {
-        Copy-Item -LiteralPath $defaultAgy -Destination $agyPath -Force
-        $agyReady = $true
+    $candidateAgys = @(
+        (Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\tools\agy\agy.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Antigravity\launcher-v0.9.1\tools\agy\agy.exe')
+    )
+    foreach ($cand in $candidateAgys) {
+        if (-not [string]::Equals($cand, $agyPath, [System.StringComparison]::OrdinalIgnoreCase) -and
+            (Test-Path -LiteralPath $cand) -and
+            ((Get-Sha512Hex -LiteralPath $cand) -eq $agyExpectedHash)) {
+            Copy-Item -LiteralPath $cand -Destination $agyPath -Force
+            $agyReady = $true
+            break
+        }
     }
 }
 if (-not $agyReady) {

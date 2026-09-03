@@ -2,15 +2,15 @@
 
 记录可重复执行的语法、单元、集成、回归和手动验收方法。不要只写“已测试”，必须包含命令、环境和真实结果。
 
-## 0.9.0 Windows 安装器
+## 0.9.1 Windows 本地回归与远端安装器
 
 ```powershell
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\installer-contract.test.ps1
-& .\build-release.ps1
-& .\build-installer.ps1
+& .\build.ps1
+& .\install.ps1
 ```
 
-安装器构建会优先使用本机 Inno Setup；缺失时从官方 GitHub Release 下载并校验固定 SHA-256 与 Authenticode 签名。应分别验收 Setup.exe 的默认路径、粘贴/浏览自定义路径、升级复用路径、完成页“立即启动/打开安装目录”、Windows 标准卸载，以及卸载后 Antigravity 用户数据、Clash 数据和 `private-proxy` 仍存在。Setup 与 ZIP 都不得包含 `agy.exe`、订阅、节点、Token 或日志。
+本机只验证源码构建、安装和真实运行链。Setup.exe 与公开 ZIP 由远端 GitHub Actions 构建；远端应另外执行 `build-release.ps1`、`build-installer.ps1`，再扫描秘密边界并上传 Release 资产。实机应验收 Setup 的默认路径、粘贴/浏览自定义路径、升级复用路径、完成页“立即启动/打开安装目录”、Windows 标准卸载，以及卸载后 Antigravity 用户数据、Clash 数据和 `private-proxy` 仍存在。
 
 ## 0.7.0 真实模型门禁与公开包
 
@@ -31,7 +31,7 @@ node .\tests\shareable-assistant.test.js
 & .\tests\run-failover-policy-tests.ps1
 ```
 
-策略测试要求：一次和两次网络失败不切换，连续三次才恢复；新地区 400 立即轮换；后台原因只映射到三种受控监督器模式。节点池测试只读取当前活动 Clash 配置，不改运行状态；本机应发现至少 2 条唯一日美候选、日本优先、冷却不少于 15 分钟。
+策略测试要求：一次和两次网络失败不切换，连续三次才恢复；新地区 400 立即轮换但只冷却并保留成功历史；后台原因只映射到三种受控监督器模式。节点池测试只读取当前活动 Clash 配置，不改运行状态；本机应发现至少 2 条唯一日美候选、美国优先、冷却不少于 15 分钟。
 
 实机验收还必须确认：断流恢复只改变 `17897` 专用 Mihomo；`7897` PID、系统代理和 Clash 规则模式不变；后台不弹窗；新候选通过 Google/OAuth/JP 或 US 出口预检；最终由官方 CLI 真实生成或用户正常对话后的新 `ResponseID` 确认模型可用。
 

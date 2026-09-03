@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.Drawing;
@@ -9,9 +9,9 @@ using System.Threading;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 
-[assembly: AssemblyVersion("0.9.0.0")]
-[assembly: AssemblyFileVersion("0.9.0.0")]
-[assembly: AssemblyInformationalVersion("0.9.0")]
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyInformationalVersion("1.0.0-preview")]
 
 internal static class AntigravityLauncher
 {
@@ -336,7 +336,9 @@ internal static class AntigravityLauncher
             }
             else if (line.Contains("google_connectivity_passed"))
             {
-                view.Verification = "● Google 与 OAuth 已连通，正在确认出口和模型";
+                string rttStr = GetValue(line, "rtt_ms");
+                string rttSuffix = string.IsNullOrEmpty(rttStr) ? "" : (" · 延迟 " + rttStr + "ms");
+                view.Verification = "● Google 与 OAuth 已连通" + rttSuffix + "，正在确认出口和模型";
                 view.Progress = Math.Max(view.Progress, 48);
                 view.Ceiling = Math.Max(view.Ceiling, 56);
             }
@@ -367,7 +369,9 @@ internal static class AntigravityLauncher
             else if (line.Contains("model_generation_probe_passed"))
             {
                 string countryLabel = egressCountry.Length == 0 ? "目标地区" : (egressCountry == "US" ? "US（美国）" : egressCountry);
-                view.Verification = "✅ Google / OAuth 连通，出口 " + countryLabel + "；真实模型 OK 验证通过";
+                string rttStr = GetValue(line, "rtt_ms");
+                string rttSuffix = string.IsNullOrEmpty(rttStr) ? "" : (" · 延迟 " + rttStr + "ms");
+                view.Verification = "✅ Google / OAuth 连通，出口 " + countryLabel + rttSuffix + "；真实模型 OK 验证通过";
                 view.Headline = "网络与真实模型均已通过";
                 view.Progress = Math.Max(view.Progress, 76);
                 view.Ceiling = Math.Max(view.Ceiling, 82);
@@ -539,7 +543,7 @@ internal static class AntigravityLauncher
                 var card = new GlassPanel { Left = 18, Top = 16, Width = 604, Height = 396 };
                 var title = new Label { Text = "Antigravity 智能启动器", Left = 28, Top = 20, Width = 548, Height = 34, Font = new Font("Microsoft YaHei UI", 16F, FontStyle.Bold), ForeColor = Color.FromArgb(20, 35, 55) };
                 var subtitle = new Label { Text = "自动检查独立代理、节点、真实模型与中文界面", Left = 30, Top = 56, Width = 544, Height = 22, ForeColor = Color.FromArgb(92, 110, 132) };
-                var badge = new Label { Text = "独立代理 17897   ·   日本优先，美国兜底   ·   Clash 7897 保持不变", Left = 28, Top = 88, Width = 548, Height = 30, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(220, 231, 245), ForeColor = Color.FromArgb(30, 82, 160), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
+                var badge = new Label { Text = "独立代理 17897   ·   美国优先，日本兜底   ·   Clash 7897 保持不变", Left = 28, Top = 88, Width = 548, Height = 30, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(220, 231, 245), ForeColor = Color.FromArgb(30, 82, 160), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
                 var headline = new Label { Text = "正在读取本机代理配置…", Left = 30, Top = 132, Width = 544, Height = 28, Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold), ForeColor = Color.FromArgb(31, 50, 72) };
                 var proxyStep = MakeStepLabel("● 正在建立 Antigravity 独立代理 127.0.0.1:17897", 168);
                 var nodeStep = MakeStepLabel("○ 正在发现本机候选节点", 196);
@@ -547,7 +551,7 @@ internal static class AntigravityLauncher
                 var localizationStep = MakeStepLabel("○ 等待注入中文翻译", 252);
                 var launchStep = MakeStepLabel("○ 等待启动 Antigravity", 280);
                 var progress = new StatusProgress { Left = 30, Top = 320, Width = 544, Font = new Font("Segoe UI", 8.5F, FontStyle.Bold), ProgressValue = 1 };
-                var footer = new Label { Text = "日本优先、美国兜底；线路不合格时自动切换，不修改 Clash 模式或日常节点。", Left = 30, Top = 357, Width = 544, Height = 24, ForeColor = Color.FromArgb(92, 110, 132), TextAlign = ContentAlignment.MiddleCenter };
+                var footer = new Label { Text = "美国优先、日本兜底；地区误判先冷却，不修改 Clash 模式或日常节点。", Left = 30, Top = 357, Width = 544, Height = 24, ForeColor = Color.FromArgb(92, 110, 132), TextAlign = ContentAlignment.MiddleCenter };
                 card.Controls.AddRange(new Control[] { title, subtitle, badge, headline, proxyStep, nodeStep, verificationStep, localizationStep, launchStep, progress, footer });
                 form.Controls.Add(card);
                 form.Show();
