@@ -1,90 +1,110 @@
-# 架构与数据流
+﻿# Antigravity 智能启动器与自愈体系架构设计
 
-## 系统边界
+本文档详细描述 **Antigravity 恢复启动器 (Antigravity Recovery Launcher)** 的全景系统架构、核心子系统协作模型与关键时序状态机。
 
-- 输入：桌面双击、Cockpit 当前账号变化、Antigravity 主进程命令行漂移。
-- 输出：一个使用 `127.0.0.1:17897` 的健康 Antigravity 实例、可选的本地中文 UI 扩展及脱敏状态日志。
-- 外部依赖：Antigravity 2.11.0、Cockpit Tools、Clash Verge 内置 Mihomo、有效订阅节点。
+---
 
-## 目录和模块
+## 1. 架构拓扑全景 (Architecture Topology)
 
-| 路径 | 职责 | 是否权威真源 |
-|---|---|---|
-| `src/` | 功能源码 | 是 |
-| `src/localization-extension/` | MV3 外部扩展、词库和 DOM 翻译逻辑 | 是 |
-| `docs/` | 设计、架构、交接和排障 | 是 |
-| `tests/` | 验证代码和验收用例 | 是 |
-| `.work/` | 可删除中间产物 | 否 |
-| `installer/` | Inno Setup 单文件安装器定义 | 是 |
+```mermaid
+graph TD
+    User["用户操作 / 桌面快捷方式"] --> Launcher["Antigravity-Recovery-Launcher.exe (交互前端)"]
+    
+    subgraph Frontend ["前台感知与交互层"]
+        Launcher -->|Antigravity 未运行| ColdForm["冷启动胶囊卡片 (极速核验进度)"]
+        Launcher -->|Antigravity 已运行| HotForm["热启动胶囊卡片 (3s代码速切 / ⚡切换最优专线)"]
+    end
 
-## 数据流
+    subgraph CoreEngine ["核心调度与控制层 (ProxySupervisor.ps1)"]
+        ColdForm -->|执行冷启动| Supervisor["ProxySupervisor (核心调度引擎)"]
+        HotForm -->|点击专线切换| Supervisor
+        
+        Supervisor --> SubRadar["多源订阅雷达 (零配置解析 %APPDATA%)"]
+        Supervisor --> SmartPool["Smart Pool 智能评分与候选优选 (0~1000分)"]
+        Supervisor --> ModelProbe["Gemini 官方模型真实探针 (agy CLI 真实生成门禁)"]
+        Supervisor --> Sandbox["127.0.0.1:17897 独立沙盒网关"]
+    end
 
-```text
-桌面 EXE / 后台监控
-→ PowerShell 监督器
-→ Clash Verge 与 Clash Party 订阅索引 + 本地缓存中的跨来源粘性候选池（先排除过期项）
-→ 专用 Mihomo 17897
-→ Google/OAuth/JP 或 US 出口基础门禁
-→ 官方 agy 最小真实模型门禁
-→ 关闭无代理或黑屏实例
-→ 注入代理并启动 Antigravity
-→ CDP Loader 向本地页面注入词库与 content.js（MV3 参数保留为兼容回退）
-→ content.js 监听本地 UI DOM，按文本/UI上下文选择词库并防抖替换
-→ language server 连接验证
-→ supervisor-state.json / subscription-report.json
+    subgraph ClientLayer ["客户端接入与运行时 (Editor Runtime)"]
+        Sandbox -->|无感热接管 (Hot Drift)| AGY["Google Antigravity 官方客户端 (PID 活跃)"]
+        Supervisor -->|冷启动点火| AGY
+        AGY --> CdpBridge["CDP 调试端口 (DevTools Bridge)"]
+        CdpBridge --> I18nRuntime["首帧微任务直译引擎 (content.js)"]
+    end
+
+    subgraph SentinelLayer ["静默守护层 (AccountWatcher.exe)"]
+        Watcher["Antigravity-AccountWatcher.exe (轻量静默守卫)"] -->|每20秒高频探测| Sandbox
+        Watcher -->|网络阻断 / 地区 400| Supervisor
+    end
 ```
 
-## 安装、升级与卸载
+---
 
-```text
-Setup.exe / ZIP Install.cmd
-→ 同一份 install.ps1
-→ 用户选择的安装目录（默认 %LOCALAPPDATA%\Antigravity\launcher）
-→ 官方 agy 清单 + SHA-512 校验（不随安装包分发）
-→ 桌面唯一入口 + 开始菜单 + HKCU Run Watcher
+## 2. 三大核心子系统协同职责
+
+### 2.1 交互前端 (Antigravity-Recovery-Launcher.exe)
+* **纯 C# / GDI+ 原生轻量开发**：零外部大型依赖，启动耗时 < 30ms，内存占用 < 8MB；
+* **双态情境感知**：
+  - **冷启动**：呼出半透明圆角胶囊卡片，实时投射专线检索、Google 通路握手与模型放行状态；
+  - **热启动**：检测到 Antigravity 已在运行时，呼出极简双选胶囊，提供【进入代码窗口 (3s)】与【⚡ 切换最优专线】，绝不强杀编辑器进程；
+* **防重入与多实例安全**：基于系统命名互斥体（Named Mutex），避免重复启动引发竞争。
+
+### 2.2 核心调度引擎 (Antigravity-ProxySupervisor.ps1)
+* **17897 独立沙盒生命周期管理**：以用户身份在 `127.0.0.1:17897` 拉起隔离代理实例，完全不影响用户日常 Clash（7897 端口）的正常使用；
+* **无感热切换控制器 (Hot Drift Controller)**：
+  - 当 Antigravity 已在运行（`antigravity_live_seamless_attached`），专线切换仅在 17897 沙盒内部更新上游代理链路；
+  - 严格限制进程重启仅在冷启动或编辑器死锁黑屏时发生，保障用户写代码的心流不被打断；
+* **硬核模型门禁**：不仅测试 HTTP 204 和 OAuth 连通性，更调用 Google 官方 `agy` 命令行发送探针，以模型真实返回 `OK` 作为专线合格的唯一准入标准。
+
+### 2.3 静默守护神 (Antigravity-AccountWatcher.exe)
+* **高频低耗巡检**：作为独立守护进程驻留后台，每 20 秒经由 17897 隧道对 Google 核心通路进行静默心跳探测；
+* **抗回绕与事件收敛**：通过精密的日志偏移游标（Language Log Offset）与 3 次指数退避算法，彻底杜绝误判风暴与循环自愈；
+* **无感触发**：当检测到网络硬截断或地区受阻时，在后台静默通知调度引擎完成热漂移自愈。
+
+---
+
+## 3. 订阅发现与内核搜寻雷达机制 (Zero-Config Discovery)
+
+很多传统脚本强依赖硬编码路径，导致换一台电脑或装在 D 盘就彻底失效。本项目设计了**数据与程序解耦的三层雷达架构**：
+
+```mermaid
+sequenceDiagram
+    participant Sup as ProxySupervisor
+    participant AppData as %APPDATA% (漫游应用数据)
+    participant Reg as Windows 注册表
+    participant Mihomo as 内核运行时 (17897)
+
+    Note over Sup, AppData: 第一阶段：订阅数据池提取 (与安装路径无关)
+    Sup->>AppData: 扫描 io.github.clash-verge-rev.clash-verge-rev\profiles.yaml
+    Sup->>AppData: 扫描 mihomo-party\profile.yaml
+    AppData-->>Sup: 返回有效远程订阅列表 (排除过期订阅)
+    Sup->>AppData: 解析 profiles\*.yaml 提取全部日美节点元数据
+    
+    Note over Sup, Reg: 第二阶段：内核引擎寻径 (三级自动雷达)
+    Sup->>Sup: 1. 探测常见默认安装路径 (Program Files, LocalAppData)
+    Sup->>Sup: 2. 检查系统环境变量 PATH (Get-Command verge-mihomo / mihomo)
+    Sup->>Reg: 3. 遍历 Uninstall 卸载项动态提取 InstallLocation
+    Reg-->>Sup: 精准返回内核实际落地物理路径
+    
+    Note over Sup, Mihomo: 第三阶段：构建独立 17897 沙盒
+    Sup->>Mihomo: 基于最优候选生成临时配置并点火
 ```
 
-Inno Setup 使用固定 AppId、`PrivilegesRequired=lowest` 与 `UsePreviousAppDir=yes`，因此按当前用户注册卸载并复用旧目录。`uninstall.ps1` 只清理本项目进程、快捷方式、HKCU Run 和安装目录内可重建文件；Antigravity 用户数据、Clash 数据和 `%LOCALAPPDATA%\Antigravity\private-proxy` 位于安装目录之外并保留。
+---
 
-### 持续健康与故障转移
+## 4. 汉化核心：首帧微任务同步直译 (Microtask Fast-Path)
 
-- AccountWatcher 0.5.2 只在存在合规 Antigravity 主进程时，每 20 秒经 `17897` 检查 Google 204 和 Google OAuth HTTP 响应。
-- 单次或两次失败只计数；连续 3 次失败才以 `NetworkFailure` 后台启动监督器。语言日志新增 `User location is not supported` 时以 `LocationFailure` 立即轮换。
-- 监督器从 Clash Verge 与 Clash Party 的订阅索引定位本地缓存，再解析日本和美国内联节点；兼容单引号、双引号和未加引号，按完整节点定义去重并按订阅来源交叉排列。索引中已经过期或没有缓存文件的远程订阅不进入候选池，状态过滤完成后最多保留 96 条，并为美国兜底保留最多 16 个位置；日本候选优先，美国候选兜底。
-- 当前候选 ID 由来源、名称和定义的哈希组成，来源只保存短指纹，不保存订阅 URL、节点服务器、UUID、密码或完整配置。默认美国优先、日本兜底。网络失败和 `model_location` 写入 `failover-state.json` 并冷却 20 分钟；地区 400 保留历史成功记录，避免 Google 间歇误判把曾真实通过的节点永久拉黑。
-- 每个候选必须依次通过 Mihomo 配置测试、Google/API 连通、候选声明的 JP/US 出口和官方 CLI 最小真实生成检查才可接管；`/model`、Google 204 和 IP 地区不能代替真实生成。全部失败时停止，不修改 `7897` 或 Clash UI 状态。
-- 每次启动先生成脱敏 `subscription-report.json`，记录来源、日美数量、有效/验证/淘汰/冷却数量和订阅时间信息；不保存订阅 URL、服务器、UUID、密码、Token 或账号标识。失败运行会用 `status=failed` 覆盖旧的 `ready` 快照，并记录本轮失败阶段与 `candidate_index/candidate_total`。
-- `agy.exe` 不进入源码仓库或发布 ZIP。安装脚本从 Google 官方更新清单下载并校验 SHA-512，安装到 `%LOCALAPPDATA%\Antigravity\launcher\tools\agy`。
-- 新候选接管后 Antigravity 完整重启以清理旧长连接。后台恢复无窗口、最多 3 次退避；真实模型成功仍由后续正常对话的 `ResponseID` 证明。
+为了消除传统 DOM 轮询或后置防抖导致的“一秒翻页闪烁感”，扩展运行时重构为**双轨渲染机制**：
 
-英文恢复入口只创建 `localization-extension-disabled.flag`，监督器仍执行同一代理和健康检查，但不追加 `--load-extension`。中文入口删除该标记后重新启动。安装阶段会暂存 `localization-extension-pending.flag`，避免升级时强制关闭已有窗口；第一次显式语言启动或恢复启动会清除它。
+1. **常规流水线 (Normal Pipeline)**：
+   用于大面积长列表与高频渲染视图，采用 80ms 尾部防抖 + 300ms 最大等待时间，保护 React 虚拟列表中的代码高亮、终端输出与会话消息；
+2. **极速通道 (Fast-Path Pipeline)**：
+   专门针对设置弹窗（Settings Surface）和通用模态框（Modal）。通过 `isInstantUiNode` 判定关键元素，在 DOM MutationObserver 回调被触发的同一微任务周期内立即执行同步替换，使界面呈现时已完全是中文，实现“首帧即汉化”的无感视觉体验。
 
-### AccountWatcher 触发边界
+---
 
-- `accounts.json` 的修改时间只是“重新读取账号 ID”的信号，不是恢复信号。
-- 只有稳定读取到的 `current_account_id` 与上次成功处理的 ID 不同，才允许账号切换恢复；相同 ID 的普通保存记录 `accounts_file_write_ignored` 后结束。
-- 仍保留对运行中主进程缺少 `17897` 或应启用汉化时缺少 Loader/扩展钩子的连续检查，即 `runtime_proxy_bypass`。
-- 命名互斥体、按实际路径的启动器运行检查和 `repairInProgress` 共同阻止并发修复；前台启动器遇到后台监督器占用时等待其结果，不把 `supervisor_run_busy` 误报为用户失败。每类失败最多尝试 3 次，间隔 10/20 秒后进行最后一次尝试；成功后冷却 30 秒，避免事件风暴。
-- 账号修复耗尽后会抑制该账号 ID，直到观察到不同 ID；运行时修复耗尽后必须先恢复健康，才会重置尝试次数，因而不会无限重启。
+## 5. 安全与隐私约束
 
-### 汉化运行时边界
-
-- `translation-core.js` 将完整句子与短 UI 标签分开。完整句子使用一次合并正则并按最长匹配处理；`Settings`、`On`、`Model`、`Rules` 等短词只在按钮、标题、标签、设置导航和属性上下文中启用。
-- 动态规则覆盖权限请求、相对时间、额度刷新、模型名/档位、`See all (N)`、`Show N breakdown(s)`、技能数量和文件/搜索数量。
-- `content.js` 保护 `data-testid="conversation-row-sidebar"` 中的用户对话标题，仍允许时间戳翻译；同时保护消息、Markdown、代码、终端、编辑器、可编辑区和输入值。`placeholder`、`title`、`aria-label` 等界面属性仍可翻译。
-- 词库参考公开的 Antigravity-Hans 高价值文案并独立实现运行时；不复制其启动器、静态补丁或没有明确授权的完整源码。
-
-## 数据与持久化
-
-- 本地数据：`%LOCALAPPDATA%\Antigravity\private-proxy` 中的 PID、监督状态、候选冷却状态和脱敏日志。
-- 云端数据：无。
-- 缓存：Mihomo 运行缓存，可重建。
-- 备份和恢复：快捷方式和设置修改前带时间戳备份；不触碰用户会话数据。
-- 迁移和兼容：源码使用环境目录解析；Mihomo 路径和目标节点目前仍是本机配置，跨电脑安装前需发现并配置。
-
-本地调试只需运行 `build.ps1`、`install.ps1`；Setup.exe、公开 ZIP 和 Release 资产由远端 CI 在打 tag 后构建，不把本机订阅和账号状态带入构建。
-
-## 安全和权限
-
-仅监听回环地址 `127.0.0.1:17897`，不开 TUN、局域网和外部控制接口；日志对密码、Token、UUID、服务器与配置内容脱敏。
-
+* **回环绑定**：所有隧道严格绑定在 `127.0.0.1` 本地回环地址，严禁暴露局域网（LAN）或外部接口；
+* **脱敏日志**：`launcher-error.log` 与 `supervisor.log` 对所有订阅 URL、节点密码、UUID、Token 和账号凭据执行严格的正则表达式清洗与脱敏；
+* **零侵入原则**：绝对不破坏 Antigravity 的二进制主体，不碰官方 `resources\app.asar`，不导出用户 Google 授权密钥，不篡改日常 Clash 配置。

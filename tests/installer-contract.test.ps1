@@ -1,14 +1,14 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$install = Get-Content -LiteralPath (Join-Path $root 'install.ps1') -Raw
-$uninstall = Get-Content -LiteralPath (Join-Path $root 'uninstall.ps1') -Raw
-$buildInstaller = Get-Content -LiteralPath (Join-Path $root 'build-installer.ps1') -Raw
-$iss = Get-Content -LiteralPath (Join-Path $root 'installer\Antigravity-Recovery-Setup.iss') -Raw
+$install = Get-Content -LiteralPath (Join-Path $root 'install.ps1') -Raw -Encoding UTF8
+$uninstall = Get-Content -LiteralPath (Join-Path $root 'uninstall.ps1') -Raw -Encoding UTF8
+$buildInstaller = Get-Content -LiteralPath (Join-Path $root 'build-installer.ps1') -Raw -Encoding UTF8
+$iss = Get-Content -LiteralPath (Join-Path $root 'installer\Antigravity-Recovery-Setup.iss') -Raw -Encoding UTF8
 
 foreach ($required in @('$InstallRoot', '$SourceApp', 'OrdinalIgnoreCase', 'agy_sha512_mismatch')) {
     if (-not $install.Contains($required)) { throw ('install_contract_missing:' + $required) }
 }
-foreach ($required in @('PrivilegesRequired=lowest', 'UsePreviousAppDir=yes', 'DisableDirPage=no', 'DefaultDirName={localappdata}\Antigravity\launcher', '立即启动', '打开安装目录', '[UninstallRun]')) {
+foreach ($required in @('PrivilegesRequired=lowest', 'UsePreviousAppDir=yes', 'DisableDirPage=no', 'DefaultDirName={localappdata}\Antigravity\launcher', 'nowait postinstall skipifsilent', 'shellexec postinstall skipifsilent unchecked', '[UninstallRun]')) {
     if (-not $iss.Contains($required)) { throw ('iss_contract_missing:' + $required) }
 }
 foreach ($required in @('Test-IsccCandidate', 'ChineseSimplified.isl', 'promised Chinese installer UI')) {

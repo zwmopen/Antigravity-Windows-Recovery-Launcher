@@ -1486,14 +1486,15 @@ function Start-OrReuseMihomo {
             $loadedHash = ''
         }
     }
-    if ($null -ne $owned -and $loadedHash -ne $ExpectedConfigHash) {
+    $shouldForceRestartProxy = ($RecoveryReason -ne 'Startup')
+    if ($null -ne $owned -and ($shouldForceRestartProxy -or $loadedHash -ne $ExpectedConfigHash)) {
         Stop-OwnedMihomo
         $owned = $null
         for ($i = 0; $i -lt 20 -and (Test-LocalPort -TestPort $Port); $i++) {
             Start-Sleep -Milliseconds 250
         }
     }
-    if ($null -ne $owned -and (Test-LocalPort -TestPort $Port)) {
+    if ($null -ne $owned -and -not $shouldForceRestartProxy -and (Test-LocalPort -TestPort $Port)) {
         $reuse = $true
     } elseif ($null -ne $owned) {
         Stop-OwnedMihomo
@@ -2118,7 +2119,7 @@ $originalActiveCandidate = @($candidates | Where-Object {
     -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id) -and
     [string]$_.Id -eq [string]$failoverState.active_node_id
 } | Select-Object -First 1)
-if ($RecoveryReason -eq 'NetworkFailure' -and -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id)) {
+if ($RecoveryReason -in @('NetworkFailure', 'LocationFailure', 'UserRequestedRepair', 'Force') -and -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id)) {
     Add-NodeCooldown -State $failoverState -NodeId ([string]$failoverState.active_node_id) -Reason $RecoveryReason
 }
 $cooldownIds = @(Get-ActiveCooldownEntries -State $failoverState | Select-Object -ExpandProperty node_id)
@@ -2265,7 +2266,7 @@ $existingAntigravity = @(Get-CimInstance Win32_Process -ErrorAction SilentlyCont
     [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedAntigravityPath
 })
 $hasExistingAntigravity = $existingAntigravity.Count -gt 0
-$forceRestartRequested = ($RecoveryReason -eq 'Force')
+$forceRestartRequested = ($RecoveryReason -in @('Force', 'UserRequestedRepair', 'LocationFailure'))
 
 $antigravityPid = 0
 $readiness = @{ LanguageServerPid = 0; ProxyConnections = 0 }

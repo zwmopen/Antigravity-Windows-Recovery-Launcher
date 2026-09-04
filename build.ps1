@@ -39,16 +39,16 @@ if (Test-Path -LiteralPath $iconSource) {
 }
 $iconArg = if (Test-Path -LiteralPath $compilerIcon) { "/win32icon:$compilerIcon" } else { "" }
 
-& $csc /nologo /target:winexe /optimize+ $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $launcherOutput) $launcherSource
+& $csc /nologo /target:winexe /optimize+ /codepage:65001 $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $launcherOutput) $launcherSource
 if ($LASTEXITCODE -ne 0) { throw 'launcher_build_failed' }
-& $csc /nologo /target:winexe /optimize+ /reference:System.Management.dll ("/out:" + $watcherOutput) $watcherSource
+& $csc /nologo /target:winexe /optimize+ /codepage:65001 /reference:System.Management.dll ("/out:" + $watcherOutput) $watcherSource
 if ($LASTEXITCODE -ne 0) { throw 'watcher_build_failed' }
-& $csc /nologo /target:winexe /optimize+ /reference:System.dll ("/out:" + $loaderOutput) $loaderSource
+& $csc /nologo /target:winexe /optimize+ /codepage:65001 /reference:System.dll ("/out:" + $loaderOutput) $loaderSource
 if ($LASTEXITCODE -ne 0) { throw 'localization_loader_build_failed' }
 $trayOutput = Join-Path $release 'Antigravity-NodeTray.exe'
 $traySource = Join-Path $source 'Antigravity-NodeTray.cs'
 if (Test-Path -LiteralPath $traySource) {
-    & $csc /nologo /target:winexe /optimize+ $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $trayOutput) $traySource
+    & $csc /nologo /target:winexe /optimize+ /codepage:65001 $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $trayOutput) $traySource
     if ($LASTEXITCODE -ne 0) { throw 'nodetray_build_failed' }
 }
 Copy-Item -LiteralPath (Join-Path $source 'Antigravity-ProxySupervisor.ps1') -Destination (Join-Path $release 'Antigravity-ProxySupervisor.ps1') -Force

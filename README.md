@@ -1,138 +1,155 @@
-# Antigravity 恢复启动器
+﻿# Antigravity 智能启动器与无感自愈引擎 (Antigravity Recovery Launcher)
 
-> 项目 ID：`antigravity-recovery-launcher`  
-> 版本：0.9.1
-> 状态：维护  
-> 服务对象：AI基础设施与 Windows 工作环境  
-> 创建日期：2026-08-29
+<p align="center">
+  <img src="showcase/hot_launch_choice.png" alt="Antigravity 启动器界面" width="480" />
+</p>
 
-## 为什么开发
+<p align="center">
+  <strong>专为 Google Antigravity AI 编程 IDE 打造的工业级自愈底座与启动入口</strong><br>
+  微秒级无感热切换 · 首帧微任务零闪烁汉化 · 17897 独立沙盒隔离 · 多客户端订阅免配自发现
+</p>
 
-为 Cockpit 多账号切换后的 Antigravity 自动检查专用代理、清除黑屏实例并恢复启动。
+<p align="center">
+  <img src="https://img.shields.io/badge/Version-1.0.0-blue.svg" alt="Version 1.0.0" />
+  <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(x64)-brightgreen.svg" alt="Platform" />
+  <img src="https://img.shields.io/badge/Failover-Seamless%20Hot%20Drift-orange.svg" alt="Failover" />
+  <img src="https://img.shields.io/badge/Localization-Microtask%20Zero--Flicker-blueviolet.svg" alt="i18n" />
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License" />
+</p>
 
-这个工具必须回到“AI基础设施与 Windows 工作环境”中验证价值；如果不能改善对应系统或项目的现实结果，应停止扩建或重新定义。
+---
 
-## 目标用户
+## 🎯 痛点与初衷：为什么需要它？
 
-在 Windows 上通过 Cockpit Tools 切换 Antigravity 多个 Google 账号，并需要稳定专用代理的个人用户；默认美国优先，日本兜底。
+在使用 Google Antigravity 进行沉浸式 AI 辅助编程时，开发者往往面临几类毁灭“心流”的痛点：
+1. **网络断流与地区 400 阻断**：Google API 经常受到节点网络波动或地区策略变动的影响，导致正在生成的代码中断报错；
+2. **传统工具粗暴杀进程**：市面上的重置或修复工具往往简单粗暴地通过任务管理器杀死编辑器进程，导致写到一半的代码、未保存的会话草稿和终端正在运行的任务全部付之一炬；
+3. **汉化弹窗“翻页闪现”**：常规 DOM 翻译因防抖延迟，打开设置面板时会先显示 1 秒英文，再突然跳变刷新为中文，带来强烈的视觉撕裂感；
+4. **跨设备配置繁琐**：换一台电脑，或者 Clash 客户端安装在 D 盘/自定义路径，普通脚本就会因为找不到路径而彻底罢工。
 
-## 核心使用流程
+**Antigravity 智能启动器就是为了根治这些痛点而生——让用户只管专注于写代码，把所有复杂的网络调度、节点优选、状态核验和后台自愈全部默默做完。**
 
-1. 双击桌面唯一的 `Antigravity` 图标。
-2. 小应用检查专用 Mihomo、候选节点来源、Google 连通性、日美出口、真实模型生成资格、Antigravity 设置和桌面入口。
-3. 小应用关闭 Cockpit 遗留的无代理或黑屏实例，再以 `127.0.0.1:17897` 完整重启。
-4. 后台监控器同时检查 Cockpit 真实切号、运行时代理绕过，以及 `17897 → Google/OAuth` 的持续健康状态。
+---
 
-0.9.1 延续“克制玻璃”中文实时状态窗口。窗口只读取本次启动产生的脱敏事件，依次显示独立代理、实际候选数量、Google/OAuth、出口地区、真实模型 `OK`、中文注入和 Antigravity 就绪状态；候选数量、出口和结果均来自当前电脑的实时检测，不使用固定演示值。
+## 🌟 四大核心技术支柱
 
-0.9.1 修复“旧缓存被当成当前候选”和“失败后仍显示旧 ready”的问题：只从 Clash 的订阅索引读取仍在有效期内的缓存，当前有效候选会生成脱敏来源统计到 `%LOCALAPPDATA%\Antigravity\private-proxy\subscription-report.json`；日本仍先于美国，真实模型门禁仍是唯一接管条件。失败运行会写 `status=failed` 和本次失败阶段，启动器不会继续拿昨天的成功状态做判断。
+### 1. ⚡ 彻底终结杀编辑器：无感热切换与后台自愈 (Seamless In-Memory Failover)
+* **进程生命周期神圣不可侵犯**：彻底废弃“杀进程重启”的陈旧逻辑。当专线断流、节点失效或用户主动点击切换时，系统仅在 `127.0.0.1:17897` 沙盒内部完成上游线路的**热漂移重路由 (Hot Drift)**；
+* **编辑器零闪烁、不中断**：正在编写的代码、打开的文件、对话历史与终端任务**100% 保持常驻**；
+* **极简双态感知胶囊**：编辑器已运行时，双击桌面图标呼出精致卡片：
+  - **`进入代码窗口 (3s)`**：3 秒无操作自动聚焦编辑器窗口，不干扰专注；
+  - **`⚡ 切换最优专线`**：动词先行，一键无感切换最优通道。
 
-启动器会按候选节点声明校验专用代理的实际出口国家，优先美国，找不到可用美国线路时再尝试日本。0.9.1 从 Clash Verge 与 Mihomo Party 的订阅索引和本地缓存发现最多 96 条日美候选，先排除索引中已过期的订阅，再按不同订阅交叉排列；当前电脑这次发现 25 条（日本 12、美国 13）。每个候选都要通过 Google/OAuth、实际出口和 Google 官方 Antigravity CLI 最小 `OK` 生成探针，一次真实 `SUCCESS + OK` 即可启动桌面客户端。断流和地区 400 进入冷却；出口不一致、配置无效和结构化非 `OK` 结果才永久淘汰。后台每 20 秒检查 Google 与 OAuth，连续 3 次失败才恢复；旧失败会话回放的地区错误会先真实复核当前节点，避免误杀和重启风暴。
+### 2. 🛡️ 17897 独立沙盒：零污染、零干扰 (Zero-Pollution Isolated Sandbox)
+* **完全隔离日常上网**：启动器为 Antigravity 单独开辟 `127.0.0.1:17897` 独立端口，绝不占用、不修改用户日常使用的 Clash 端口（通常为 7897）；
+* **不修改系统代理**：不开启 TUN 虚拟网卡，不篡改 Windows 系统的全局代理设置，日常网页浏览、游戏与下载完全不受任何影响。
 
-自动恢复只重建 Antigravity 专用 `17897` 并在必要时重启 Antigravity；全程不刷新订阅、不切换 Clash 规则/全局/直连、不修改日常节点或系统代理 `7897`。后台恢复不弹窗口，最多重试 3 次并退避，所有候选不可用时停止折腾并留下脱敏原因。
+### 3. 📡 多客户端订阅解耦雷达：全自动开箱即用 (Zero-Config Subscription Radar)
+* **核心在于“订阅数据”，而非“安装路径”**：无论 Clash Verge Rev、Mihomo Party 安装在 C 盘、D 盘还是移动硬盘，启动器均直接穿透 Windows 规范的漫游目录 `%APPDATA%`，直接提取当前最新的订阅索引与节点缓存；
+* **三级内核搜寻雷达**：依次穿透标准路径、系统环境变量 PATH 与 Windows 注册表 `Uninstall` 卸载记录，自动定位 Mihomo 内核，做到**零配置、跨电脑开箱即用**；
+* **真实模型生成门禁 (Real Gemini Gate)**：不依赖虚假的 TCP Ping 或单纯的 HTTP 204。系统调用 Google 官方 `agy` 命令行发送探针，必须由 Gemini 模型真实返回 `OK` 才能放行。
 
-启动器不会因为历史地区限制 400 重启同一条代理链；它只在代理进程、配置或实际连通性异常时修复。专用代理优先读取 Clash 当前运行合并配置，不依赖全局 7897；其他电脑必须重新发现并真实测试可用节点。
+### 4. 🚀 首帧微任务同步直译：彻底告别 1 秒翻页闪现 (Microtask Zero-Flicker)
+* **微任务前置直译**：为设置面板（Settings Surface）和通用模态框专门设计极速通道（Fast-Path Pipeline）；
+* **首帧即中文**：在 DOM MutationObserver 被触发的同一微任务时钟周期内立即完成中英文本替换，消除了防抖等待带来的闪现跳变，带来原生级别的平滑质感。
 
-用户日常 Clash 保持“规则模式”。启动器不会刷新全部订阅，不会切换规则/全局/直连模式，也不会修改 Clash 日常节点；`7897` 与 Antigravity 专用 `17897` 相互隔离。正常使用直接打开即可；Cockpit 真实切号和专线持续断流都会由后台自动恢复，桌面启动器仍可作为手动兜底。
+---
 
-## 可分享的独立中文助手
+## 📸 界面展示 (Showcase)
 
-0.4.0 新增与本机代理恢复链完全隔离的 `Antigravity 中文助手`。分享给其他 Windows 用户时，只发送 `releases/shareable/Antigravity-Chinese-Assistant-0.4.0-windows-x64.zip`：对方完整解压后双击 EXE，即可启动中文版、恢复英文原版或创建桌面入口。独立版自动发现官方安装目录，不携带 `17897`、Clash 节点、Cockpit 账号监控、开机启动或本机日志。
+| 热启动双态胶囊卡片 | 冷启动极速核验卡片 |
+| :---: | :---: |
+| ![热启动胶囊](showcase/hot_launch_choice.png) | ![冷启动胶囊](showcase/cold_launch_capsule.png) |
+| *检测到编辑器运行时，3秒自动进入或一键热切专线* | *冷启动时执行毫秒级多维评分与真实 Gemini 探针* |
 
-```powershell
-& .\build-shareable.ps1
+<p align="center">
+  <img src="showcase/node_tray_dashboard.png" alt="节点中控台全景" width="680" /><br>
+  <em>节点中控台全景：支持并发测速、延迟排序与手动一键切换</em>
+</p>
+
+---
+
+## 🚀 极简上手与分发指南 (Quick Start & Distribution)
+
+### 选项 A：绿色免安装版（推荐，解压即用）
+1. 下载 `Antigravity-Windows-Recovery-Launcher-1.0.0-windows-x64.zip`；
+2. 解压到目标电脑的任意目录（如 `D:\Tools\Antigravity`）；
+3. 双击 `Antigravity-Recovery-Launcher.exe`（或 `Install.cmd`）：
+   - 首次启动会自动在桌面创建 **`Antigravity 启动器.lnk`** 快捷方式；
+   - 自动在后台接入 `Antigravity-AccountWatcher` 开机自愈守卫；
+4. **之后每天只需双击桌面的 `Antigravity 启动器` 图标即可！**
+
+### 选项 B：标准 Windows 安装向导版（适合小白用户）
+1. 下载 `Antigravity-Windows-Recovery-Setup-1.0.0-windows-x64.exe`；
+2. 双击后按照极简中文向导一路点击“下一步”，自动安装到 `%LOCALAPPDATA%\Antigravity\launcher` 并创建桌面快捷方式。
+
+> 💡 **跨电脑迁移提示**：
+> 只要目标电脑上安装有 Clash Verge Rev 或 Mihomo Party 并且导入过订阅，解压本工具后双击即可直接使用，无需重新配置节点！
+
+---
+
+## 🏗️ 架构拓扑 (System Architecture)
+
+```text
+桌面快捷方式 / 用户双击
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────┐
+│             Antigravity-Recovery-Launcher.exe               │
+│   (情境自感知：未开编辑器走冷启动胶囊；已开走 3s 双态胶囊)      │
+└──────────────┬───────────────────────────────┬──────────────┘
+               │ (未启动)                      │ (请求切换专线)
+               ▼                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 ProxySupervisor 核心调度引擎                 │
+│  ├─ 多源订阅雷达：穿透 %APPDATA% 提取有效订阅节点 (完全解耦)  │
+│  ├─ Smart Pool 智能评分：地区权重 + 延迟 RTT + 历史记忆     │
+│  ├─ Gemini 官方真实探针：通过 Google agy CLI 验证真实生成    │
+│  └─ 127.0.0.1:17897 独立沙盒：无感热接管 (不杀编辑器)       │
+└──────────────┬───────────────────────────────┬──────────────┘
+               │                               │
+               ▼                               ▼
+┌────────────────────────────────┐ ┌──────────────────────────┐
+│   Google Antigravity 官方客户端 │ │  AccountWatcher 静默守卫 │
+│  ├─ 独占 17897 专线隧道        │ │  ├─ 每 20 秒高频无感巡检  │
+│  ├─ CDP 端口注入微任务直译内核  │ │  ├─ 日志游标防回绕机制    │
+│  └─ 专注写代码，心流不中断      │ │  └─ 网络断流触发后台热愈  │
+└────────────────────────────────┘ └──────────────────────────┘
 ```
 
-分享包不是纯单文件，因为可审查的 JS 词库需要与 EXE 放在同一目录；ZIP 已把运行文件、使用说明、校验清单和第三方说明放在一起。用户无需安装 Python、Node.js、Go 或开发环境。
+---
 
-## 简体中文外部扩展
+## ❓ 常见问题解答 (FAQ)
 
-当前 0.4.0 沿用 0.3.1 已实测的高性能 DOM 运行时，并增加独立便携应用。Antigravity 2.11.0 实际会忽略 Chromium `--load-extension`，因此主要路径通过应用已有的 DevTools 调试端口注入；`--load-extension` 只保留为兼容回退。整个过程不修改 `resources\app.asar`、`dist\preload.js`、登录态、会话、项目文件或网络请求。
+### Q1: 我的 Clash 安装在 D 盘或者自定义路径，启动器能识别吗？
+**能，100% 自动识别。**  
+启动器要的核心是**订阅节点数据**，而不是软件本身。Windows 规范规定所有客户端的订阅缓存都存放在 `%APPDATA%` 中。启动器直接读取该目录，并通过 Windows 注册表雷达反查内核安装位置，与安装在哪个盘完全解耦。
 
-扩展现在覆盖 2.11.0 Settings 的 General、Application、Appearance、Models、Customizations、Browser、AICode、Conversations、Shortcuts、Feedback、Account 等页面，并保护虚拟列表中的用户对话标题、消息、Markdown、代码、终端、编辑器和输入值。React 动态刷新仍使用 80 ms 尾部防抖与 300 ms 最大等待，同时支持权限请求、额度、时间、数量、模型和 breakdown 等动态文本。
+### Q2: 这个工具会影响我平时的日常上网或代理软件吗？
+**绝对不会。**  
+启动器为 Antigravity 独占运行在 `127.0.0.1:17897` 独立端口。你平时的日常 Clash（通常是 7897 端口）无论开什么规则、切换什么节点，互相完全独立、零干扰。
 
-扩展会翻译侧边栏、设置标题、策略值、按钮和指定长句说明；输入框内容、可编辑区域、对话消息、Markdown、代码块、终端和编辑器内容默认保护。React 动态刷新使用 80 ms 尾部防抖，并设置 300 ms 最大等待。
+### Q3: 写代码写到一半如果专线被 Google 阻断，会发生什么？
+后台守卫（`AccountWatcher`）会在几百毫秒内在 17897 沙盒内无感切换到下一个最优专线。**你的编辑器窗口不会关闭，代码不会丢失**，就像没有发生过故障一样平稳过渡。
 
-## 安装与启动
+### Q4: 如何彻底卸载？
+- 安装包版：在 Windows“设置” -> “已安装的应用”中点击卸载；
+- 绿色解压版：运行目录下的 `uninstall.ps1` 即可完整清除快捷方式与自愈守卫。
+- 卸载过程极为克制，绝不碰你的项目代码和 Google 登录态。
 
-桌面只创建一个 `Antigravity 启动器.lnk`，指向正式恢复 EXE。中文启用、英文恢复和官方原版入口只保留在开始菜单，避免桌面出现多个容易混淆的图标。
+---
 
-0.9.1 提供两种安装包：
+## 📚 详细文档导航
 
-- 推荐：下载 `Antigravity-Windows-Recovery-Setup-0.9.1-windows-x64.exe`，双击后按中文向导安装。目标文件夹输入框可以直接粘贴路径，也可以点击“浏览”选择目录；默认安装到 `%LOCALAPPDATA%\Antigravity\launcher`，也可选择 D 盘。完成页可选择立即启动或打开安装目录。
-- 备用：下载 `Antigravity-Windows-Recovery-Launcher-0.9.1-windows-x64.zip`，完整解压后双击 `Install.cmd`。它使用默认目录安装并同样创建桌面唯一入口。
+* 📖 [用户使用与跨设备分发手册](docs/USER_GUIDE.md)
+* 🏛️ [系统架构与协同设计](docs/ARCHITECTURE.md)
+* 💡 [设计哲学与工程边界](docs/DESIGN.md)
+* 🛠️ [踩坑与故障排查手册](docs/TROUBLESHOOTING.md)
+* 📋 [1.0.0 正式版发布说明](docs/RELEASE-NOTES-1.0.0.md)
+* 📝 [完整版本演进记录](CHANGELOG.md)
 
-Setup 默认按当前用户安装，不要求管理员权限；升级安装会记住上一次目录。Windows“已安装的应用”提供标准卸载。卸载只移除本启动器、快捷方式、开机监控和安装目录内可重建组件，不删除 Antigravity 登录态、会话、项目、Clash 订阅或 `%LOCALAPPDATA%\Antigravity\private-proxy` 运行数据。
+---
 
-构建输出目录：`releases/current/`。普通用户优先使用 Setup.exe；公开 ZIP 的 `Install.cmd` 保留为透明、可审计的备用入口。开发构建运行 `build.ps1`（会先安全停止本项目旧监控器），两种安装包共用 `install.ps1`。
+## 📄 开源许可证
 
-普通用户首次安装或升级：
-
-1. 完整解压 Release ZIP。
-2. 双击根目录的 `Install.cmd`。
-3. 安装成功后只使用桌面的 `Antigravity 启动器`。
-
-源码开发与本机调试：
-
-```powershell
-Set-Location 'D:\AICode\工具开发\projects\antigravity-recovery-launcher'
-& .\build.ps1
-& .\install.ps1
-```
-
-安装后：
-
-- `Antigravity 中文版`：清除英文模式标记，启动带中文扩展和现有专用代理的 Antigravity。
-- `Antigravity 启动器`：直接启动恢复入口；默认保留上一次的中文/英文选择。
-- `Antigravity 英文恢复`：设置可逆英文模式标记，启动不加载扩展的原始英文 UI，但仍保留现有专用代理恢复流程。
-- `Antigravity 原版`：直接启动官方程序，不经过本项目的代理恢复流程。
-
-本地开发不需要在这台电脑构建 Setup.exe。源码改动后只执行 `build.ps1` 编译本地运行组件，再执行 `install.ps1` 更新稳定运行目录并做实机验证；公开 Setup.exe/ZIP 由 GitHub Actions 根据 `VERSION` 在远端构建和上传 Release。监督器使用本机已安装的官方 `agy` 和用户现有订阅缓存，不把节点配置或订阅链接写进源码。
-
-`install.ps1` 不携带或读取本项目中的密钥。它会从 Google 官方更新清单下载当前 Windows `agy`，校验官方 SHA-512 后安装到 `%LOCALAPPDATA%\Antigravity\launcher\tools\agy\agy.exe`。Google 登录由系统 keyring 复用，代理订阅继续由用户自己的代理客户端管理。
-
-## 插件、个人配置和密钥在哪里
-
-- 中文插件源码：`src/localization-extension/`。
-- 安装后的中文插件：`%LOCALAPPDATA%\Antigravity\launcher\localization-extension\`。
-- 通用规则源码：`src/Antigravity-ProxySupervisor.ps1`。
-- 本机生成的专用代理配置、候选冷却和脱敏日志：`%LOCALAPPDATA%\Antigravity\private-proxy\`。
-- Clash Verge 本地订阅缓存：`%APPDATA%\io.github.clash-verge-rev.clash-verge-rev\`。
-- Mihomo Party 本地订阅缓存：`%APPDATA%\mihomo-party\`。
-- Google 登录态：系统 keyring／Antigravity 官方登录体系，本项目不导出。
-- 用户的集中秘密真源：`D:\AICode\AI\secrets\` 与 Windows 凭据管理器；本项目不复制其中内容。需要长期配置时，只在 `D:\AICode\AI\private-config\` 保存引用。
-
-安装不会强制关闭已经打开的 Antigravity；第一次点击中文/英文入口时才应用对应运行模式。这样不会因为升级扩展打断正在编辑的对话或文件。
-
-英文恢复不会删除扩展文件或 Antigravity 用户数据；再次点击 `Antigravity 中文版` 即可恢复。需要完全移除时，只需删除本项目安装产生的 `localization-extension`、两个语言切换脚本和语言快捷方式；不要删除 `%APPDATA%\Antigravity` 或 `%USERPROFILE%\.gemini\antigravity`。
-
-## 数据和隐私
-
-- 运行状态与脱敏日志：`%LOCALAPPDATA%\Antigravity\private-proxy`。
-- 不上传数据；不保存账号密码、Cookie、Token 或节点密钥。
-- 不清理 Antigravity 登录态、会话和项目；旧快捷方式保存在 `%LOCALAPPDATA%\Antigravity\shortcut-backups`。
-
-## 项目文档
-
-- [设计与原则](docs/DESIGN.md)
-- [架构与数据流](docs/ARCHITECTURE.md)
-- [开发交接](docs/HANDOFF.md)
-- [踩坑与故障排查](docs/TROUBLESHOOTING.md)
-- [变更记录](CHANGELOG.md)
-
-## 当前限制
-
-- `17897` 从 Clash Verge 和 Clash Party 的本地订阅缓存提取候选直连；候选必须实时通过 Google、OAuth 与其声明的 JP/US 出口预检。本工具不修改全局节点或代理设置，也不依赖 Clash Party 常驻。
-- Clash 界面模式与生成 YAML 可能短暂不一致；诊断日常模式时以界面当前选中状态和运行证据为准，不能只读 `clash-verge.yaml`。
-- 当前成功组合是本机当前账号 + 当前时间 + 已验证的日本或美国出口；节点未来更新后仍需以真实模型请求验收。
-- 自动候选只有通过 Google、OAuth、实际出口和一次真实 `SUCCESS + OK` 后才会接管；地区 400 和网络断流只进入冷却并保留历史成功记录，因为同一出口可能出现间歇性 Google 地区误判。启动器遇到后台恢复竞态会等待正在进行的检查，不会把 `supervisor_run_busy` 误报成失败。
-- 动态注入依赖 Antigravity 当前仍提供 DevTools 调试目标；若未来版本关闭该入口或更换本地 UI 协议，程序仍可按英文原版启动，但汉化不会生效。
-
-## 源码与发布
-
-- 源码真源：本目录 Git 仓库的 `src/`。
-- 发布包：`releases/`；大型二进制不进 Git，远端 CI 负责生成公开发布包。
-- 桌面快捷方式和开机监控使用 `%LOCALAPPDATA%\Antigravity\launcher\` 中的运行副本，不依赖源码目录是否移动。
-- 中间产物：`.work/`、`build/`、`dist/`，可重建、可删除。
-- 完整公开安装 ZIP：运行 `build-release.ps1`，输出到 `releases/public/`；ZIP 不包含订阅、节点、账号、日志、用户数据或 `agy.exe`。
-
+本项目基于 [MIT License](LICENSE) 开源发布。

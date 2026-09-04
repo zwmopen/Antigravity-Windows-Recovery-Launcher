@@ -725,7 +725,7 @@ namespace AntigravityLauncher
         private Image appIcon = null;
         private string egressBadgeText = "美国专线就绪";
         private string statusBadgeText = "● 运行中";
-        private string subtitleText = "当前专线连接畅通 · 可秒切代码窗口，或一键切换最优专线";
+        private string subtitleText = "当前专线连接畅通 · 可秒切代码窗口，或一键重启自愈";
 
         internal AntigravityHotLaunchChoiceForm()
         {
@@ -782,7 +782,7 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnRepair = new HotLaunchButton("⚡ 切换最优专线")
+            btnRepair = new HotLaunchButton("⚡ 一键重启修复")
             {
                 Location = new Point(248, 78),
                 Size = new Size(212, 46)
