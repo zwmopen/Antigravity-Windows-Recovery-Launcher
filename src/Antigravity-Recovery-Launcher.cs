@@ -725,7 +725,7 @@ namespace AntigravityLauncher
         private Image appIcon = null;
         private string egressBadgeText = "美国专线就绪";
         private string statusBadgeText = "● 运行中";
-        private string subtitleText = "当前专线连接畅通 · 可秒切代码窗口，或一键重启自愈";
+        private string subtitleText = "当前专线连接畅通 · 可秒切代码窗口，或一键切换最优专线";
 
         internal AntigravityHotLaunchChoiceForm()
         {
@@ -782,7 +782,7 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnRepair = new HotLaunchButton("重启专线修复")
+            btnRepair = new HotLaunchButton("⚡ 切换最优专线")
             {
                 Location = new Point(248, 78),
                 Size = new Size(212, 46)
@@ -1209,7 +1209,7 @@ namespace AntigravityLauncher
                 googlePassed = true;
                 modelStatusText = "Gemini 编程模型验证通过";
                 modelPassed = true;
-                footerStatusText = "🚀 通路已全部就绪，正在打开 Antigravity…";
+                footerStatusText = Program.IsAntigravityRunning() ? "🚀 最优专线已就绪，正在切回代码窗口…" : "🚀 通路已全部就绪，正在打开 Antigravity…";
                 progressBar.ProgressValue = 100;
                 Invalidate();
             }));

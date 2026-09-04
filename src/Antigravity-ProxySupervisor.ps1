@@ -2265,7 +2265,7 @@ $existingAntigravity = @(Get-CimInstance Win32_Process -ErrorAction SilentlyCont
     [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedAntigravityPath
 })
 $hasExistingAntigravity = $existingAntigravity.Count -gt 0
-$forceRestartRequested = ($RecoveryReason -eq 'UserRequestedRepair' -or $RecoveryReason -eq 'Force')
+$forceRestartRequested = ($RecoveryReason -eq 'Force')
 
 $antigravityPid = 0
 $readiness = @{ LanguageServerPid = 0; ProxyConnections = 0 }
