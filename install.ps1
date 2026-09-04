@@ -27,6 +27,8 @@ $sourceRestoreEnglish = Join-Path $app 'Restore-Antigravity-English.cmd'
 $installedRestoreEnglish = Join-Path $installRoot 'Restore-Antigravity-English.cmd'
 $sourceExtension = Join-Path $app 'localization-extension'
 $installedExtension = Join-Path $installRoot 'localization-extension'
+$sourceIcon = Join-Path $app 'Antigravity-Launcher.ico'
+$installedIcon = Join-Path $installRoot 'Antigravity-Launcher.ico'
 $sourceManifest = Join-Path $app 'manifest.json'
 $installedManifest = Join-Path $installRoot 'manifest.json'
 $agyDirectory = Join-Path $installRoot 'tools\agy'
@@ -63,7 +65,7 @@ if (-not $actualDesktopShortcutName.EndsWith('.lnk', [System.StringComparison]::
 $shortcutTargets = @(
     @{ Path = (Join-Path $desktop $actualDesktopShortcutName); Target = $launcher; Arguments = ''; Description = 'Antigravity 智能启动器'; Key = 'desktop-launcher' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 智能启动器.lnk'); Target = $launcher; Arguments = ''; Description = 'Antigravity 智能启动器'; Key = 'start-menu-launcher' },
-    @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 节点中控台.lnk'); Target = $installedTray; Arguments = '--show-panel'; Description = 'Antigravity 节点中控台'; Key = 'start-menu-nodetray' },
+    @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 节点中控台.lnk'); Target = $launcher; Arguments = '--show-panel'; Description = 'Antigravity 节点中控台'; Key = 'start-menu-nodetray' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 中文版.lnk'); Target = $installedEnableChinese; Arguments = ''; Description = 'Enable Antigravity Simplified Chinese UI'; Key = 'start-menu-chinese' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 英文恢复.lnk'); Target = $installedRestoreEnglish; Arguments = ''; Description = 'Restore the original English UI'; Key = 'start-menu-english' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 原版.lnk'); Target = $officialApp; Arguments = ''; Description = 'Antigravity official app'; Key = 'start-menu-official' }
@@ -134,6 +136,9 @@ if (-not [string]::Equals($sourceAppFull, $installRootFull, [System.StringCompar
     if (Test-Path -LiteralPath $sourceTray) {
         Copy-Item -LiteralPath $sourceTray -Destination $installedTray -Force
     }
+    if (Test-Path -LiteralPath $sourceIcon) {
+        Copy-Item -LiteralPath $sourceIcon -Destination $installedIcon -Force
+    }
     Remove-Item (Join-Path $installRoot 'Antigravity-Panel.py'), (Join-Path $installRoot 'Antigravity-Tray.py'), (Join-Path $installRoot 'Antigravity-SmartLauncher.py'), (Join-Path $installRoot 'Antigravity-TrayManager.py') -Force -ErrorAction SilentlyContinue
 }
 
@@ -176,6 +181,7 @@ if (-not $agyReady) {
             $agyReady = $true
         } else {
             Remove-Item -LiteralPath $agyStaging -Force -ErrorAction SilentlyContinue
+            throw 'agy_sha512_mismatch'
         }
     }
 }
@@ -202,7 +208,7 @@ foreach ($shortcutTarget in $shortcutTargets) {
     $shortcut.TargetPath = [string]$shortcutTarget.Target
     $shortcut.Arguments = if ($shortcutTarget.ContainsKey('Arguments')) { [string]$shortcutTarget.Arguments } else { '' }
     $shortcut.WorkingDirectory = $installRoot
-    $shortcut.IconLocation = if ([string]$shortcutTarget.Key -match 'nodetray') { $installedTray + ',0' } else { $launcher + ',0' }
+    $shortcut.IconLocation = if (Test-Path -LiteralPath $installedIcon) { $installedIcon + ',0' } else { $launcher + ',0' }
     $shortcut.Description = [string]$shortcutTarget.Description
     $shortcut.Save()
 }

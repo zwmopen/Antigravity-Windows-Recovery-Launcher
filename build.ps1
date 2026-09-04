@@ -35,7 +35,7 @@ if (Test-Path -LiteralPath $iconSource) {
 }
 $iconArg = if (Test-Path -LiteralPath $iconSource) { "/win32icon:`"$iconSource`"" } else { "" }
 
-& $csc /nologo /target:winexe /optimize+ $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll ("/out:" + $launcherOutput) $launcherSource
+& $csc /nologo /target:winexe /optimize+ $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $launcherOutput) $launcherSource
 if ($LASTEXITCODE -ne 0) { throw 'launcher_build_failed' }
 & $csc /nologo /target:winexe /optimize+ /reference:System.Management.dll ("/out:" + $watcherOutput) $watcherSource
 if ($LASTEXITCODE -ne 0) { throw 'watcher_build_failed' }

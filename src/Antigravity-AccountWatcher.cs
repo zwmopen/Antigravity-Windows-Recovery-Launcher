@@ -154,10 +154,20 @@ internal static class AntigravityAccountWatcher
         return false;
     }
 
-    private static bool HasCompliantMainProcess()
+    private static void InspectAntigravityProcesses(out bool hasCompliant, out bool needsRepair)
     {
+        hasCompliant = false;
+        needsRepair = false;
         try
         {
+            Process[] procs = Process.GetProcessesByName("Antigravity");
+            if (procs == null || procs.Length == 0) return;
+
+            foreach (var p in procs) p.Dispose();
+
+            bool localizationDisabled = LocalizationIsDisabled();
+            bool localizationPending = LocalizationActivationIsPending();
+
             using (var searcher = new ManagementObjectSearcher(
                 "SELECT CommandLine FROM Win32_Process WHERE Name='Antigravity.exe'"))
             using (var results = searcher.Get())
@@ -170,15 +180,31 @@ internal static class AntigravityAccountWatcher
                     {
                         continue;
                     }
+
                     if (commandLine.IndexOf(RequiredProxyArgument, StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        return true;
+                        hasCompliant = true;
+                    }
+                    else
+                    {
+                        needsRepair = true;
+                    }
+
+                    if (!localizationDisabled && !localizationPending && !HasLocalizationHook(commandLine))
+                    {
+                        needsRepair = true;
                     }
                 }
             }
         }
         catch { }
-        return false;
+    }
+
+    private static bool HasCompliantMainProcess()
+    {
+        bool hasCompliant, needsRepair;
+        InspectAntigravityProcesses(out hasCompliant, out needsRepair);
+        return hasCompliant;
     }
 
     private static bool ProbeThroughPrivateProxy(string uri)
@@ -263,44 +289,9 @@ internal static class AntigravityAccountWatcher
 
     private static bool RuntimeNeedsRepair()
     {
-        try
-        {
-            bool foundNonCompliantMainProcess = false;
-            bool localizationDisabled = LocalizationIsDisabled();
-            bool localizationPending = LocalizationActivationIsPending();
-            using (var searcher = new ManagementObjectSearcher(
-                "SELECT CommandLine FROM Win32_Process WHERE Name='Antigravity.exe'"))
-            using (var results = searcher.Get())
-            {
-                foreach (ManagementObject process in results)
-                {
-                    string commandLine = Convert.ToString(process["CommandLine"]);
-                    if (string.IsNullOrWhiteSpace(commandLine) ||
-                        commandLine.IndexOf("--type=", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        continue;
-                    }
-
-                    if (commandLine.IndexOf(RequiredProxyArgument, StringComparison.OrdinalIgnoreCase) < 0)
-                    {
-                        foundNonCompliantMainProcess = true;
-                    }
-                    else if (!localizationDisabled && !localizationPending && !HasLocalizationHook(commandLine))
-                    {
-                        foundNonCompliantMainProcess = true;
-                    }
-                }
-            }
-
-            // Do not reopen Antigravity after the user intentionally closes it.
-            // If Cockpit left both a compliant and a non-compliant instance,
-            // the non-compliant one is still a real routing defect.
-            return foundNonCompliantMainProcess;
-        }
-        catch
-        {
-            return false;
-        }
+        bool hasCompliant, needsRepair;
+        InspectAntigravityProcesses(out hasCompliant, out needsRepair);
+        return needsRepair;
     }
 
     private static int Main()
@@ -449,7 +440,10 @@ internal static class AntigravityAccountWatcher
                     Log("proxy_location_failure_observed");
                 }
 
-                bool compliantMainRunning = HasCompliantMainProcess();
+                bool compliantMainRunning;
+                bool runtimeNeedsRepair;
+                InspectAntigravityProcesses(out compliantMainRunning, out runtimeNeedsRepair);
+
                 if (!compliantMainRunning)
                 {
                     healthFailureChecks = 0;
@@ -525,7 +519,6 @@ internal static class AntigravityAccountWatcher
                     continue;
                 }
 
-                bool runtimeNeedsRepair = RuntimeNeedsRepair();
                 if (!runtimeNeedsRepair)
                 {
                     runtimeDriftChecks = 0;
