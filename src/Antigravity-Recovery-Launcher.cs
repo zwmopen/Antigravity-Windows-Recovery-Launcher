@@ -304,6 +304,12 @@ namespace AntigravityLauncher
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);
 
+        [DllImport("user32.dll")]
+        internal static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        internal static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
+
         [DllImport("kernel32.dll")]
         private static extern uint GetCurrentThreadId();
 
@@ -521,6 +527,265 @@ namespace AntigravityLauncher
             using (var highlight = new Pen(Color.FromArgb(120, 255, 255, 255), 2F))
             {
                 e.Graphics.DrawLine(highlight, 24, 3, Width - 24, 3);
+            }
+        }
+    }
+
+    // ==========================================
+    // 拟态与玻璃卡片组件 (NeoCardPanel)
+    // ==========================================
+    internal class NeoCardPanel : Panel
+    {
+        public int CornerRadius { get; set; }
+
+        internal NeoCardPanel()
+        {
+            CornerRadius = 16;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+        }
+
+        protected override void OnResize(EventArgs eventArgs)
+        {
+            base.OnResize(eventArgs);
+            if (Width > CornerRadius * 2 && Height > CornerRadius * 2)
+            {
+                this.Region = new Region(GlassPanel.RoundedRectangle(new Rectangle(0, 0, Width, Height), CornerRadius));
+            }
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var path = GlassPanel.RoundedRectangle(bounds, CornerRadius))
+            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(250, 253, 255), Color.FromArgb(236, 245, 252), 90F))
+            using (var border = new Pen(Color.FromArgb(240, 255, 255, 255), 1.2F))
+            {
+                e.Graphics.FillPath(fill, path);
+                e.Graphics.DrawPath(border, path);
+            }
+            using (var highlight = new Pen(Color.FromArgb(140, 255, 255, 255), 2F))
+            {
+                e.Graphics.DrawLine(highlight, CornerRadius + 4, 2, Width - CornerRadius - 4, 2);
+            }
+        }
+    }
+
+    // ==========================================
+    // 自绘拟态按键与胶囊药丸组件 (NeoButton)
+    // ==========================================
+    internal class NeoButton : Control, IButtonControl
+    {
+        public bool IsPrimary { get; set; }
+        public bool IsPill { get; set; }
+        public int CornerRadius { get; set; }
+        public DialogResult DialogResult { get; set; }
+        private bool isHovered = false;
+        private bool isPressed = false;
+
+        public void NotifyDefault(bool value) { }
+        public void PerformClick() { OnClick(EventArgs.Empty); }
+
+        public NeoButton()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
+            Cursor = Cursors.Hand;
+            CornerRadius = 12;
+            Size = new Size(120, 36);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { isHovered = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { isHovered = false; isPressed = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs mevent) { if (mevent.Button == MouseButtons.Left) { isPressed = true; Invalidate(); } base.OnMouseDown(mevent); }
+        protected override void OnMouseUp(MouseEventArgs mevent) { isPressed = false; Invalidate(); base.OnMouseUp(mevent); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+            Color parentBg = Color.FromArgb(223, 234, 242);
+            if (Parent != null)
+            {
+                if (Parent.BackColor != Color.Transparent) parentBg = Parent.BackColor;
+                else if (Parent.Parent != null && Parent.Parent.BackColor != Color.Transparent) parentBg = Parent.Parent.BackColor;
+            }
+            e.Graphics.Clear(parentBg);
+
+            int radius = IsPill ? (Height / 2) : CornerRadius;
+            var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+
+            using (var path = GlassPanel.RoundedRectangle(rect, radius))
+            {
+                if (!Enabled)
+                {
+                    using (var brush = new SolidBrush(Color.FromArgb(214, 225, 235)))
+                        e.Graphics.FillPath(brush, path);
+                    using (var pen = new Pen(Color.FromArgb(198, 210, 222), 1F))
+                        e.Graphics.DrawPath(pen, path);
+                    TextRenderer.DrawText(e.Graphics, Text, Font, rect, Color.FromArgb(145, 165, 185), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    return;
+                }
+
+                if (IsPrimary)
+                {
+                    Color cTop = isPressed ? Color.FromArgb(20, 95, 205) : (isHovered ? Color.FromArgb(60, 145, 255) : Color.FromArgb(47, 127, 245));
+                    Color cBottom = isPressed ? Color.FromArgb(15, 80, 180) : (isHovered ? Color.FromArgb(35, 115, 235) : Color.FromArgb(25, 105, 225));
+                    using (var brush = new LinearGradientBrush(rect, cTop, cBottom, 90F))
+                        e.Graphics.FillPath(brush, path);
+
+                    if (!isPressed)
+                    {
+                        using (var pen = new Pen(Color.FromArgb(120, 255, 255, 255), 1.2F))
+                            e.Graphics.DrawPath(pen, path);
+                    }
+                    TextRenderer.DrawText(e.Graphics, Text, Font, rect, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+                else
+                {
+                    Color cTop = isPressed ? Color.FromArgb(218, 228, 238) : (isHovered ? Color.FromArgb(250, 252, 255) : Color.FromArgb(240, 246, 251));
+                    Color cBottom = isPressed ? Color.FromArgb(210, 220, 230) : (isHovered ? Color.FromArgb(232, 240, 248) : Color.FromArgb(224, 234, 242));
+                    using (var brush = new LinearGradientBrush(rect, cTop, cBottom, 90F))
+                        e.Graphics.FillPath(brush, path);
+
+                    using (var pen = new Pen(isPressed ? Color.FromArgb(180, 195, 210) : Color.FromArgb(255, 255, 255), 1.2F))
+                        e.Graphics.DrawPath(pen, path);
+
+                    Color textColor = isHovered ? Color.FromArgb(16, 43, 69) : Color.FromArgb(60, 85, 110);
+                    TextRenderer.DrawText(e.Graphics, Text, Font, rect, textColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // 沉浸式窗口顶栏与控制按钮 (CustomTitleBar)
+    // ==========================================
+    internal class CustomTitleBar : Panel
+    {
+        private Label lblTitle;
+        private Label lblBadge;
+        private NeoWindowButton btnMin;
+        private NeoWindowButton btnClose;
+        private Form parentForm;
+
+        public CustomTitleBar(Form form, string titleText)
+        {
+            parentForm = form;
+            Height = 42;
+            Dock = DockStyle.Top;
+            BackColor = Color.FromArgb(223, 234, 242);
+            Padding = new Padding(16, 6, 16, 6);
+
+            var picIcon = new PictureBox
+            {
+                Size = new Size(18, 18),
+                Location = new Point(18, 12),
+                SizeMode = PictureBoxSizeMode.StretchImage
+            };
+            if (File.Exists(Program.IconPath))
+            {
+                try { picIcon.Image = Image.FromFile(Program.IconPath); } catch { }
+            }
+
+            lblTitle = new Label
+            {
+                Text = titleText,
+                AutoSize = true,
+                Location = new Point(42, 11),
+                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(16, 43, 69)
+            };
+
+            lblBadge = new Label
+            {
+                Text = "独立隔离通道 17897",
+                AutoSize = true,
+                Location = new Point(195, 11),
+                Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(47, 127, 245),
+                BackColor = Color.FromArgb(214, 231, 248),
+                Padding = new Padding(6, 2, 6, 2)
+            };
+
+            btnMin = new NeoWindowButton("─", false)
+            {
+                Size = new Size(28, 28)
+            };
+            btnMin.Click += delegate { parentForm.WindowState = FormWindowState.Minimized; };
+
+            btnClose = new NeoWindowButton("✕", true)
+            {
+                Size = new Size(28, 28)
+            };
+            btnClose.Click += delegate { parentForm.Hide(); };
+
+            Controls.AddRange(new Control[] { picIcon, lblTitle, lblBadge, btnMin, btnClose });
+
+            MouseDown += OnTitleMouseDown;
+            lblTitle.MouseDown += OnTitleMouseDown;
+            lblBadge.MouseDown += OnTitleMouseDown;
+            picIcon.MouseDown += OnTitleMouseDown;
+
+            UpdateButtonsPosition();
+        }
+
+        protected override void OnResize(EventArgs eventargs)
+        {
+            base.OnResize(eventargs);
+            UpdateButtonsPosition();
+        }
+
+        private void UpdateButtonsPosition()
+        {
+            if (btnClose != null) btnClose.Location = new Point(Width - 42, 7);
+            if (btnMin != null) btnMin.Location = new Point(Width - 76, 7);
+        }
+
+        private void OnTitleMouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                Program.ReleaseCapture();
+                Program.SendMessage(parentForm.Handle, 0xA1, 0x2, 0);
+            }
+        }
+    }
+
+    internal class NeoWindowButton : Control
+    {
+        private string text;
+        private bool isClose;
+        private bool isHovered;
+
+        public NeoWindowButton(string text, bool isClose)
+        {
+            this.text = text;
+            this.isClose = isClose;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+            Cursor = Cursors.Hand;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { isHovered = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { isHovered = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var rect = new Rectangle(1, 1, Width - 3, Height - 3);
+            using (var path = GlassPanel.RoundedRectangle(rect, 8))
+            {
+                if (isHovered)
+                {
+                    Color bg = isClose ? Color.FromArgb(254, 226, 226) : Color.FromArgb(235, 244, 252);
+                    using (var b = new SolidBrush(bg)) e.Graphics.FillPath(b, path);
+                }
+                Color tc = isHovered && isClose ? Color.FromArgb(220, 38, 38) : Color.FromArgb(97, 122, 145);
+                TextRenderer.DrawText(e.Graphics, text, new Font("Segoe UI", 9F, FontStyle.Bold), rect, tc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
     }
@@ -867,7 +1132,7 @@ namespace AntigravityLauncher
     }
 
     // ==========================================
-    // 核心窗体：毛玻璃节点中控台 (Control Center)
+    // 核心窗体：克制玻璃与拟态节点中控台 (Control Center)
     // ==========================================
     internal class NodeControlForm : Form
     {
@@ -879,12 +1144,12 @@ namespace AntigravityLauncher
         private Label lblTunnelBadge;
         private Label lblFeedback;
         private ListView listNodes;
-        private Button btnTestAll;
-        private Button btnApplySelected;
-        private Button btnSwitchCode;
-        private Button btnReheal;
-        private Button btnHideToTray;
+        private NeoButton btnTestAll;
+        private NeoButton btnApplySelected;
+        private NeoButton btnSwitchCode;
+        private NeoButton btnReheal;
         private FlowLayoutPanel filterPanel;
+        private List<NeoButton> filterPillButtons = new List<NeoButton>();
         private string currentRegionFilter = "全部";
 
         private List<NodeItem> allNodes = new List<NodeItem>();
@@ -916,12 +1181,15 @@ namespace AntigravityLauncher
 
         private void InitializeComponent()
         {
-            Text = "Antigravity 智能启动器 · 控制中心";
+            Text = "Antigravity 启动与节点控制中心";
+            FormBorderStyle = FormBorderStyle.None;
             ClientSize = new Size(960, 680);
             MinimumSize = new Size(860, 600);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = Color.FromArgb(223, 234, 242);
+            DoubleBuffered = true;
+            ShowInTaskbar = true;
 
             // 关闭按钮行为：安静缩回托盘，不打断用户工作
             FormClosing += delegate(object s, FormClosingEventArgs e)
@@ -933,41 +1201,46 @@ namespace AntigravityLauncher
                 }
             };
 
-            // 1. 顶部状态只使用 supervisor-state.json 的当前真实链路。
+            // 1. 沉浸式自定义窗口标题栏 (含无边框平滑拖动)
+            var titleBar = new CustomTitleBar(this, "Antigravity 控制中心");
+
+            // 2. 顶部状态卡片 (NeoCardPanel)
             var topPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 175,
-                BackColor = Color.FromArgb(223, 234, 242),
-                Padding = new Padding(16, 12, 16, 6)
+                Height = 160,
+                BackColor = Color.Transparent,
+                Padding = new Padding(18, 8, 18, 6)
             };
 
-            var glassCard = new GlassPanel
+            var glassCard = new NeoCardPanel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(22, 12, 22, 12)
+                CornerRadius = 18,
+                Padding = new Padding(20, 12, 20, 12)
             };
 
             lblTunnelBadge = new Label
             {
-                Text = "正在读取独立隧道 127.0.0.1:17897…",
+                Text = "🟢 专属通道 127.0.0.1:17897 · 正常运行",
                 Left = 20,
                 Top = 14,
-                Width = 360,
-                Height = 24,
+                AutoSize = true,
+                Height = 22,
                 TextAlign = ContentAlignment.MiddleLeft,
-                BackColor = Color.FromArgb(214, 231, 248),
-                ForeColor = Color.FromArgb(47, 127, 245),
-                Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold)
+                BackColor = Color.FromArgb(209, 250, 229),
+                ForeColor = Color.FromArgb(6, 95, 70),
+                Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold),
+                Padding = new Padding(8, 2, 8, 2)
             };
 
             lblActiveTitle = new Label
             {
-                Text = "正在检测当前连接节点…",
+                Text = "当前连接：正在检测当前节点…",
                 AutoSize = false,
                 Left = 20,
                 Top = 42,
-                Width = 540,
+                Width = 550,
                 Height = 28,
                 Font = new Font("Microsoft YaHei UI", 13.5F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(16, 43, 69)
@@ -977,15 +1250,15 @@ namespace AntigravityLauncher
             {
                 Text = "⚡ 实时延迟: -- ms",
                 AutoSize = true,
-                Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold),
+                Font = new Font("Microsoft YaHei UI", 11.5F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(21, 128, 61),
                 Left = 22,
-                Top = 72
+                Top = 73
             };
 
             lblActiveDetails = new Label
             {
-                Text = "最终出口正在读取 · 独立隧道 17897 · Clash 7897 保持不变",
+                Text = "出口地区：-- ｜ 专属独立通道 17897（与系统 Clash 互不干扰）",
                 AutoSize = true,
                 Font = new Font("Microsoft YaHei UI", 9F),
                 ForeColor = Color.FromArgb(97, 122, 145),
@@ -995,29 +1268,24 @@ namespace AntigravityLauncher
 
             lblActiveSecurity = new Label
             {
-                Text = "等待读取 Google、OAuth 与真实模型门禁结果",
+                Text = "✔ Google 账号与 AI 编程模型已全部通畅",
                 AutoSize = true,
                 Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                ForeColor = Color.FromArgb(47, 127, 245),
+                ForeColor = Color.FromArgb(21, 128, 61),
                 Left = 22,
-                Top = 124
+                Top = 122
             };
 
-            // 核心功能按钮 1：切换至代码窗口
-            btnSwitchCode = new Button
+            // 右侧辅助功能按钮 (自绘拟态次级按钮，尺寸匀称，不抢占视觉焦点)
+            btnSwitchCode = new NeoButton
             {
-                Text = "🚀 唤醒 Antigravity",
-                Left = 580,
+                Text = "🚀 呼出代码窗口",
+                Left = 760,
                 Top = 38,
-                Width = 200,
-                Height = 42,
-                BackColor = Color.FromArgb(47, 127, 245),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold),
-                Cursor = Cursors.Hand
+                Size = new Size(140, 34),
+                CornerRadius = 10,
+                IsPrimary = false
             };
-            btnSwitchCode.FlatAppearance.BorderSize = 0;
             btnSwitchCode.Click += delegate
             {
                 bool ok = Program.ActivateExistingAntigravity();
@@ -1033,31 +1301,111 @@ namespace AntigravityLauncher
                 }
             };
 
-            // 核心功能按钮 2：强制重新自愈检测
-            btnReheal = new Button
+            btnReheal = new NeoButton
             {
-                Text = "🔄 异常自愈",
-                Left = 580,
-                Top = 90,
-                Width = 140,
-                Height = 32,
-                BackColor = Color.FromArgb(216, 229, 238),
-                ForeColor = Color.FromArgb(97, 122, 145),
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                Cursor = Cursors.Hand
+                Text = "🔄 异常诊断自愈",
+                Left = 760,
+                Top = 82,
+                Size = new Size(140, 34),
+                CornerRadius = 10,
+                IsPrimary = false
             };
-            btnReheal.FlatAppearance.BorderColor = Color.FromArgb(255, 255, 255);
-            btnReheal.FlatAppearance.BorderSize = 1;
             btnReheal.Click += delegate
             {
                 appContext.TriggerRehealWorkflow();
             };
 
+            glassCard.Resize += delegate
+            {
+                btnSwitchCode.Left = glassCard.ClientSize.Width - 160;
+                btnReheal.Left = glassCard.ClientSize.Width - 160;
+            };
+
             glassCard.Controls.AddRange(new Control[] { lblTunnelBadge, lblActiveTitle, lblActiveLatency, lblActiveDetails, lblActiveSecurity, btnSwitchCode, btnReheal });
             topPanel.Controls.Add(glassCard);
 
-            // 0. 预先初始化节点列表 ListView
+            // 3. 地区筛选栏 (真拟态胶囊分段药丸)
+            filterPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                Height = 44,
+                BackColor = Color.FromArgb(223, 234, 242),
+                Padding = new Padding(18, 6, 18, 6)
+            };
+
+            string[] regions = new string[] { "全部专线", "美国专线", "日本专线" };
+            filterPillButtons.Clear();
+            foreach (var r in regions)
+            {
+                string tag = r.Contains("美国") ? "美国" : (r.Contains("日本") ? "日本" : "全部");
+                var btnPill = new NeoButton
+                {
+                    Text = r,
+                    Size = new Size(96, 32),
+                    IsPill = true,
+                    Margin = new Padding(0, 0, 10, 0),
+                    Tag = tag,
+                    IsPrimary = (tag == "全部")
+                };
+                filterPillButtons.Add(btnPill);
+                btnPill.Click += delegate
+                {
+                    currentRegionFilter = tag;
+                    foreach (var b in filterPillButtons)
+                    {
+                        b.IsPrimary = (b.Tag.ToString() == currentRegionFilter);
+                        b.Invalidate();
+                    }
+                    FilterListView();
+                };
+                filterPanel.Controls.Add(btnPill);
+            }
+
+            // 4. 底部操作栏 (主次分明：单一主按钮 + 测速辅助 + 直觉化引导)
+            var bottomPanel = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 64,
+                BackColor = Color.FromArgb(223, 234, 242),
+                Padding = new Padding(18, 12, 18, 12)
+            };
+
+            btnTestAll = new NeoButton
+            {
+                Text = "⚡ 重新测速",
+                Size = new Size(115, 40),
+                Left = 20,
+                Top = 12,
+                CornerRadius = 12,
+                IsPrimary = false
+            };
+            btnTestAll.Click += delegate { StartSpeedTest(); };
+
+            btnApplySelected = new NeoButton
+            {
+                Text = "立即切换专线",
+                Size = new Size(160, 40),
+                Left = 145,
+                Top = 12,
+                CornerRadius = 12,
+                IsPrimary = false,
+                Enabled = false
+            };
+            btnApplySelected.Click += delegate { SwitchSelectedNode(); };
+
+            lblFeedback = new Label
+            {
+                Text = "💡 提示：双击列表中任意专线即可直接切换",
+                AutoSize = true,
+                ForeColor = Color.FromArgb(97, 122, 145),
+                Font = new Font("Microsoft YaHei UI", 9F),
+                Left = 320,
+                Top = 22
+            };
+
+            bottomPanel.Controls.AddRange(new Control[] { btnTestAll, btnApplySelected, lblFeedback });
+
+            // 5. 节点列表卡片 (NeoCardPanel 嵌套 OwnerDraw ListView)
             listNodes = new ListView
             {
                 Dock = DockStyle.Fill,
@@ -1069,139 +1417,109 @@ namespace AntigravityLauncher
                 HeaderStyle = ColumnHeaderStyle.Nonclickable,
                 Font = new Font("Microsoft YaHei UI", 9.5F),
                 BorderStyle = BorderStyle.None,
-                BackColor = Color.FromArgb(248, 251, 254)
+                BackColor = Color.FromArgb(242, 247, 251),
+                OwnerDraw = true
             };
-            listNodes.Columns.Add("地区", 110);
-            listNodes.Columns.Add("专线名称", 470);
-            listNodes.Columns.Add("实时延迟", 120);
-            listNodes.Columns.Add("状态", 150);
+
+            var imgList = new ImageList();
+            imgList.ImageSize = new Size(1, 34); // 撑开行距至 34px 舒适阅读高度
+            listNodes.SmallImageList = imgList;
+
+            listNodes.Columns.Add("地区", 100);
+            listNodes.Columns.Add("专线名称", 480);
+            listNodes.Columns.Add("实时延迟", 110);
+            listNodes.Columns.Add("状态", 140);
             listNodes.SelectedIndexChanged += delegate { UpdateSelectedAction(); };
             listNodes.DoubleClick += delegate { SwitchSelectedNode(); };
 
-            // 2. 地区筛选栏（胶囊药丸分段控件）
-            filterPanel = new FlowLayoutPanel
+            listNodes.DrawColumnHeader += delegate(object s, DrawListViewColumnHeaderEventArgs e)
             {
-                Dock = DockStyle.Top,
-                Height = 46,
-                BackColor = Color.FromArgb(223, 234, 242),
-                Padding = new Padding(20, 8, 20, 6)
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var b = new SolidBrush(Color.FromArgb(226, 237, 246)))
+                    e.Graphics.FillRectangle(b, e.Bounds);
+                using (var linePen = new Pen(Color.FromArgb(205, 220, 232), 1F))
+                    e.Graphics.DrawLine(linePen, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
+                TextRenderer.DrawText(e.Graphics, e.Header.Text, new Font("Microsoft YaHei UI", 9F, FontStyle.Bold), e.Bounds, Color.FromArgb(71, 85, 105), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
             };
 
-            string[] regions = new string[] { "全部", "🇺🇸 美国", "🇯🇵 日本" };
-            var pillButtons = new List<Button>();
-            foreach (var r in regions)
+            listNodes.DrawSubItem += delegate(object s, DrawListViewSubItemEventArgs e)
             {
-                var btnPill = new Button
+                var item = e.Item;
+                var node = item.Tag as NodeItem;
+                bool isSelected = item.Selected;
+                bool isCurrent = node != null && node.IsCurrent;
+
+                Color bg = isCurrent ? Color.FromArgb(234, 247, 238) : (isSelected ? Color.FromArgb(218, 235, 248) : (e.ItemIndex % 2 == 0 ? Color.FromArgb(248, 251, 254) : Color.FromArgb(240, 246, 251)));
+                using (var b = new SolidBrush(bg))
+                    e.Graphics.FillRectangle(b, e.Bounds);
+
+                if (isSelected && e.ColumnIndex == 0)
                 {
-                    Text = r,
-                    AutoSize = true,
-                    Height = 30,
-                    Padding = new Padding(14, 2, 14, 2),
-                    Margin = new Padding(0, 0, 10, 0),
-                    FlatStyle = FlatStyle.Flat,
-                    Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                    Cursor = Cursors.Hand,
-                    Tag = r,
-                    BackColor = (r == "全部") ? Color.FromArgb(47, 127, 245) : Color.FromArgb(237, 244, 248),
-                    ForeColor = (r == "全部") ? Color.White : Color.FromArgb(97, 122, 145)
-                };
-                btnPill.FlatAppearance.BorderSize = 0;
-                pillButtons.Add(btnPill);
-                string captured = r.Replace("🇺🇸 ", "").Replace("🇯🇵 ", "");
-                btnPill.Click += delegate
+                    using (var b = new SolidBrush(Color.FromArgb(47, 127, 245)))
+                        e.Graphics.FillRectangle(b, e.Bounds.Left, e.Bounds.Top + 2, 3, e.Bounds.Height - 4);
+                }
+
+                Rectangle textRect = new Rectangle(e.Bounds.Left + 8, e.Bounds.Top, e.Bounds.Width - 14, e.Bounds.Height);
+
+                if (e.ColumnIndex == 0)
                 {
-                    currentRegionFilter = captured;
-                    foreach (var b in pillButtons)
+                    Color tc = isCurrent ? Color.FromArgb(21, 128, 61) : Color.FromArgb(51, 65, 85);
+                    TextRenderer.DrawText(e.Graphics, e.SubItem.Text, new Font("Microsoft YaHei UI", 9F, FontStyle.Bold), textRect, tc, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                }
+                else if (e.ColumnIndex == 1)
+                {
+                    Color tc = isCurrent ? Color.FromArgb(21, 128, 61) : Color.FromArgb(30, 41, 59);
+                    FontStyle fs = isCurrent ? FontStyle.Bold : FontStyle.Regular;
+                    TextRenderer.DrawText(e.Graphics, e.SubItem.Text, new Font("Microsoft YaHei UI", 9.5F, fs), textRect, tc, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                }
+                else if (e.ColumnIndex == 2)
+                {
+                    Color latColor = Color.FromArgb(140, 155, 170);
+                    if (node != null && node.Latency < 9000)
                     {
-                        bool isSel = (b == btnPill);
-                        b.BackColor = isSel ? Color.FromArgb(47, 127, 245) : Color.FromArgb(237, 244, 248);
-                        b.ForeColor = isSel ? Color.White : Color.FromArgb(97, 122, 145);
+                        if (node.Latency < 200) latColor = Color.FromArgb(22, 163, 74);
+                        else if (node.Latency < 500) latColor = Color.FromArgb(217, 119, 6);
+                        else latColor = Color.FromArgb(220, 38, 38);
                     }
-                    FilterListView();
-                };
-                filterPanel.Controls.Add(btnPill);
-            }
-
-            // 3. 底部操作栏（主次分明）
-            var bottomPanel = new Panel
-            {
-                Dock = DockStyle.Bottom,
-                Height = 70,
-                BackColor = Color.FromArgb(223, 234, 242),
-                Padding = new Padding(16, 12, 16, 14)
+                    TextRenderer.DrawText(e.Graphics, e.SubItem.Text, new Font("Microsoft YaHei UI", 9F, FontStyle.Bold), textRect, latColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                }
+                else if (e.ColumnIndex == 3)
+                {
+                    if (isCurrent)
+                    {
+                        var badgeRect = new Rectangle(textRect.Left, textRect.Top + (textRect.Height - 22) / 2, 84, 22);
+                        using (var p = GlassPanel.RoundedRectangle(badgeRect, 11))
+                        using (var bb = new SolidBrush(Color.FromArgb(209, 250, 229)))
+                        using (var border = new Pen(Color.FromArgb(110, 231, 183), 1F))
+                        {
+                            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                            e.Graphics.FillPath(bb, p);
+                            e.Graphics.DrawPath(border, p);
+                        }
+                        TextRenderer.DrawText(e.Graphics, "🟢 当前在用", new Font("Microsoft YaHei UI", 8F, FontStyle.Bold), badgeRect, Color.FromArgb(6, 95, 70), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    }
+                    else
+                    {
+                        Color tc = Color.FromArgb(100, 116, 139);
+                        if (node != null && node.Latency < 200) tc = Color.FromArgb(22, 163, 74);
+                        else if (node != null && node.Latency < 500) tc = Color.FromArgb(217, 119, 6);
+                        TextRenderer.DrawText(e.Graphics, e.SubItem.Text, new Font("Microsoft YaHei UI", 8.5F), textRect, tc, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                    }
+                }
             };
 
-            btnTestAll = new Button
-            {
-                Text = "⚡ 一键全量并发测速",
-                Size = new Size(170, 42),
-                Left = 20,
-                Top = 14,
-                BackColor = Color.FromArgb(216, 229, 238),
-                ForeColor = Color.FromArgb(16, 43, 69),
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
-                Cursor = Cursors.Hand
-            };
-            btnTestAll.FlatAppearance.BorderColor = Color.FromArgb(255, 255, 255);
-            btnTestAll.FlatAppearance.BorderSize = 1;
-            btnTestAll.Click += delegate { StartSpeedTest(); };
-
-            btnApplySelected = new Button
-            {
-                Text = "请单击选择下方专线",
-                Size = new Size(240, 42),
-                Left = 205,
-                Top = 14,
-                BackColor = Color.FromArgb(197, 213, 228),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold),
-                Cursor = Cursors.Default,
-                Enabled = false
-            };
-            btnApplySelected.FlatAppearance.BorderSize = 0;
-            btnApplySelected.Click += delegate { SwitchSelectedNode(); };
-
-            btnHideToTray = new Button
-            {
-                Text = "✖ 隐藏到托盘",
-                Size = new Size(120, 42),
-                Left = 460,
-                Top = 14,
-                BackColor = Color.FromArgb(216, 229, 238),
-                ForeColor = Color.FromArgb(97, 122, 145),
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                Cursor = Cursors.Hand
-            };
-            btnHideToTray.FlatAppearance.BorderColor = Color.FromArgb(255, 255, 255);
-            btnHideToTray.FlatAppearance.BorderSize = 1;
-            btnHideToTray.Click += delegate { Hide(); };
-
-            lblFeedback = new Label
-            {
-                Text = "单击选择；双击任意行即可安全热切换",
-                AutoSize = true,
-                ForeColor = Color.FromArgb(97, 122, 145),
-                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                Left = 595,
-                Top = 26
-            };
-
-            bottomPanel.Controls.AddRange(new Control[] { btnTestAll, btnApplySelected, btnHideToTray, lblFeedback });
-
-            var listGlassCard = new GlassPanel
+            var listGlassCard = new NeoCardPanel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(12, 12, 12, 12)
+                CornerRadius = 16,
+                Padding = new Padding(2, 2, 2, 2)
             };
             listGlassCard.Controls.Add(listNodes);
 
             var listContainer = new Panel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(16, 4, 16, 6),
+                Padding = new Padding(18, 2, 18, 6),
                 BackColor = Color.FromArgb(223, 234, 242)
             };
             listContainer.Controls.Add(listGlassCard);
@@ -1210,6 +1528,39 @@ namespace AntigravityLauncher
             Controls.Add(filterPanel);
             Controls.Add(bottomPanel);
             Controls.Add(topPanel);
+            Controls.Add(titleBar);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (Width > 0 && Height > 0)
+            {
+                this.Region = new Region(GlassPanel.RoundedRectangle(new Rectangle(0, 0, Width, Height), 20));
+                Invalidate();
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var path = GlassPanel.RoundedRectangle(new Rectangle(0, 0, Width - 1, Height - 1), 20))
+            using (var borderPen = new Pen(Color.FromArgb(165, 192, 216), 1.5F))
+            {
+                e.Graphics.DrawPath(borderPen, path);
+            }
+        }
+
+        internal static string CleanNodeName(string rawName)
+        {
+            if (string.IsNullOrWhiteSpace(rawName)) return "";
+            string s = rawName.Trim();
+            s = Regex.Replace(s, @"[\uD800-\uDBFF][\uDC00-\uDFFF]", "");
+            s = Regex.Replace(s, @"^(?:US|JP|us|jp)\b[\s\-_|]*", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"^(?:US|JP|us|jp)\s*(?:美国|日本)", "$1", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"^(美国|日本)[\s\-_|]*(?:美国|日本)", "$1");
+            return s.Trim(' ', '-', '|', ':', '_');
         }
 
         public string GetActiveNodeDisplayName()
@@ -1223,13 +1574,14 @@ namespace AntigravityLauncher
 
         public void UpdateCurrentActiveView(string name, string egress, string server, int lat)
         {
-            string safeName = string.IsNullOrWhiteSpace(name) ? "当前链路待确认" : name;
+            string clean = CleanNodeName(name);
+            string safeName = string.IsNullOrWhiteSpace(clean) ? "当前链路待确认" : clean;
             string country = string.IsNullOrWhiteSpace(egress) ? "--" : egress;
-            lblActiveTitle.Text = "💡 [当前专线] " + safeName;
+            lblActiveTitle.Text = "当前专线：" + safeName;
             string latStr = lat < 9000 ? (lat + " ms") : "检测中";
-            lblActiveLatency.Text = "⚡ 实时延迟: " + latStr + (lat < 220 ? " (极速)" : (lat < 500 ? " (良好)" : ""));
-            lblActiveLatency.ForeColor = (lat < 220) ? Color.FromArgb(22, 163, 74) : ((lat < 500) ? Color.FromArgb(217, 119, 6) : Color.FromArgb(220, 38, 38));
-            lblActiveDetails.Text = "🌐 独立出口: [" + country + "] · 独占隧道 127.0.0.1:17897 (不影响外部 Clash)";
+            lblActiveLatency.Text = "⚡ 实时延迟: " + latStr + (lat < 200 ? " · 极速" : (lat < 500 ? " · 良好" : ""));
+            lblActiveLatency.ForeColor = (lat < 200) ? Color.FromArgb(22, 163, 74) : ((lat < 500) ? Color.FromArgb(217, 119, 6) : Color.FromArgb(220, 38, 38));
+            lblActiveDetails.Text = "出口地区：[" + country + "] ｜ 专属独立通道 17897（与系统 Clash 互不干扰）";
         }
 
         private void LoadNodesAndState()
@@ -1331,9 +1683,8 @@ namespace AntigravityLauncher
                                     int port = int.Parse(mPort.Groups[1].Value);
 
                                     string country = "其他";
-                                    string flag = "🌐 ";
-                                    if (Regex.IsMatch(name, @"日本|Japan|Tokyo|JP", RegexOptions.IgnoreCase)) { country = "日本"; flag = "🇯🇵 "; }
-                                    else if (Regex.IsMatch(name, @"美国|USA|United States|US", RegexOptions.IgnoreCase)) { country = "美国"; flag = "🇺🇸 "; }
+                                    if (Regex.IsMatch(name, @"日本|Japan|Tokyo|JP", RegexOptions.IgnoreCase)) { country = "日本"; }
+                                    else if (Regex.IsMatch(name, @"美国|USA|United States|US", RegexOptions.IgnoreCase)) { country = "美国"; }
                                     if (country == "其他") continue;
 
                                     bool isCurrent = false;
@@ -1346,10 +1697,13 @@ namespace AntigravityLauncher
                                         isCurrent = true;
                                     }
 
+                                    string clean = CleanNodeName(name);
+                                    string display = string.IsNullOrWhiteSpace(clean) ? name : clean;
+
                                     result.Add(new NodeItem
                                     {
                                         Name = name,
-                                        DisplayName = flag + name,
+                                        DisplayName = display,
                                         Server = srv,
                                         Port = port,
                                         Country = country,
@@ -1391,26 +1745,14 @@ namespace AntigravityLauncher
                 if (currentRegionFilter != "全部" && n.Country != currentRegionFilter)
                     continue;
 
-                string latStr = n.Latency < 9000 ? (n.Latency + "ms") : "--";
-                string status = n.IsCurrent ? "🟢 当前在用" : (n.Latency < 200 ? "⚡ 极速" : (n.Latency < 500 ? "★ 良好" : "超时 / 未测"));
-                string titleText = n.IsCurrent ? (n.DisplayName + "   [当前连接]") : n.DisplayName;
+                string latStr = n.Latency < 9000 ? (n.Latency + " ms") : "--";
+                string status = n.IsCurrent ? "当前在用" : (n.Latency < 200 ? "⚡ 极速" : (n.Latency < 500 ? "★ 良好" : (n.Latency < 9000 ? "延迟偏高" : "超时 / 未测")));
 
                 var item = new ListViewItem(n.Country);
-                item.SubItems.Add(titleText);
+                item.SubItems.Add(n.DisplayName);
                 item.SubItems.Add(latStr);
                 item.SubItems.Add(status);
                 item.Tag = n;
-
-                if (n.IsCurrent)
-                {
-                    item.BackColor = Color.FromArgb(236, 253, 245);
-                    item.ForeColor = Color.FromArgb(21, 128, 61);
-                    item.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
-                }
-                else if (n.Latency < 200) item.ForeColor = Color.FromArgb(21, 128, 61);
-                else if (n.Latency < 500) item.ForeColor = Color.FromArgb(180, 83, 9);
-                else if (n.Latency < 9000) item.ForeColor = Color.FromArgb(75, 85, 99);
-                else item.ForeColor = Color.FromArgb(156, 163, 175);
 
                 listNodes.Items.Add(item);
                 if ((n.Name + "|" + n.Server + "|" + n.Port) == selectedKey) item.Selected = true;
@@ -1423,21 +1765,14 @@ namespace AntigravityLauncher
             if (btnApplySelected == null) return;
             bool hasSelection = listNodes != null && listNodes.SelectedItems.Count == 1 && !switchInProgress;
             btnApplySelected.Enabled = hasSelection;
-            btnApplySelected.Cursor = hasSelection ? Cursors.Hand : Cursors.Default;
-            btnApplySelected.BackColor = hasSelection ? Color.FromArgb(22, 163, 74) : Color.FromArgb(166, 181, 199);
+            btnApplySelected.IsPrimary = hasSelection;
+            btnApplySelected.Invalidate();
             if (!hasSelection)
             {
-                btnApplySelected.Text = switchInProgress ? "正在验证并切换…" : "请单击选择下方专线";
+                btnApplySelected.Text = switchInProgress ? "正在切换…" : "立即切换专线";
                 return;
             }
-            var node = listNodes.SelectedItems[0].Tag as NodeItem;
-            btnApplySelected.Text = node == null ? "请单击选择下方专线" : ("👉 切换至 " + TrimButtonText(node.Name, 18));
-        }
-
-        private static string TrimButtonText(string value, int maxLength)
-        {
-            if (string.IsNullOrWhiteSpace(value) || value.Length <= maxLength) return value;
-            return value.Substring(0, maxLength - 1) + "…";
+            btnApplySelected.Text = "👉 立即切换专线";
         }
 
         private void UpdateGateStatus()
@@ -1448,14 +1783,18 @@ namespace AntigravityLauncher
             bool modelPassed = Regex.IsMatch(state, @"""real_model_probe""\s*:\s*""passed""", RegexOptions.IgnoreCase);
             if (ready && modelPassed)
             {
-                lblTunnelBadge.Text = "🟢 独立隧道 127.0.0.1:17897 正常";
-                lblActiveSecurity.Text = "✅ Google / OAuth / 真实模型 OK 已验证";
+                lblTunnelBadge.Text = "🟢 专属通道 127.0.0.1:17897 · 正常运行";
+                lblTunnelBadge.ForeColor = Color.FromArgb(6, 95, 70);
+                lblTunnelBadge.BackColor = Color.FromArgb(209, 250, 229);
+                lblActiveSecurity.Text = "✔ Google 账号与 AI 编程模型已全部通畅";
                 lblActiveSecurity.ForeColor = Color.FromArgb(21, 128, 61);
             }
             else
             {
-                lblTunnelBadge.Text = "🟠 当前链路尚未完成真实模型验证";
-                lblActiveSecurity.Text = "需要运行异常自愈并通过真实模型门禁后才能确认可用";
+                lblTunnelBadge.Text = "🟠 专属通道正在检测链路…";
+                lblTunnelBadge.ForeColor = Color.FromArgb(146, 64, 14);
+                lblTunnelBadge.BackColor = Color.FromArgb(254, 243, 199);
+                lblActiveSecurity.Text = "正在验证真实模型门禁与链路完整性…";
                 lblActiveSecurity.ForeColor = Color.FromArgb(180, 83, 9);
             }
         }
@@ -1463,8 +1802,8 @@ namespace AntigravityLauncher
         private void StartSpeedTest()
         {
             btnTestAll.Enabled = false;
-            btnTestAll.Text = "⚡ 正在并发测速中…";
-            lblFeedback.Text = "正在向所有候选专线并发发起高精度延迟探测…";
+            btnTestAll.Text = "⚡ 测速中…";
+            lblFeedback.Text = "⚡ 正在向所有候选专线并发发起高精度延迟探测…";
 
             Task.Run(delegate
             {
@@ -1516,8 +1855,8 @@ namespace AntigravityLauncher
                         UpdateCurrentActiveView(activeNode.DisplayName, currentEgressCountry, "", activeNode.Latency);
                     }
                     btnTestAll.Enabled = true;
-                    btnTestAll.Text = "⚡ 一键全量并发测速";
-                    lblFeedback.Text = "测速完成，已严格按延迟从低到高排列。";
+                    btnTestAll.Text = "⚡ 重新测速";
+                    lblFeedback.Text = "✔ 已按延迟最优完成排序 · 共 " + allNodes.Count + " 条可用专线";
                 }));
             });
         }
@@ -1531,8 +1870,8 @@ namespace AntigravityLauncher
 
             switchInProgress = true;
             UpdateSelectedAction();
-            lblFeedback.Text = "正在验证 " + selectedNode.Name + "：固定出口、Google、OAuth 与真实模型…";
-            lblFeedback.ForeColor = Color.FromArgb(37, 99, 235);
+            lblFeedback.Text = "正在验证并切换至 " + selectedNode.DisplayName + "…";
+            lblFeedback.ForeColor = Color.FromArgb(47, 127, 245);
             bool ok = await Task.Run(delegate { return RunVerifiedSwitch(selectedNode); });
             switchInProgress = false;
             if (ok)
@@ -1543,7 +1882,7 @@ namespace AntigravityLauncher
                 currentNodeName = selectedNode.Name;
 
                 ReadCurrentProxyConfig();
-                lblFeedback.Text = "✅ 真实模型验证通过，已安全切换至 " + selectedNode.Name;
+                lblFeedback.Text = "✅ 真实模型验证通过，已安全切换至 " + selectedNode.DisplayName;
                 lblFeedback.ForeColor = Color.FromArgb(21, 128, 61);
 
                 UpdateCurrentActiveView(selectedNode.DisplayName, currentEgressCountry, "", selectedNode.Latency);
@@ -1553,7 +1892,7 @@ namespace AntigravityLauncher
             }
             else
             {
-                lblFeedback.Text = "未切换：该线路没有通过完整门禁，原链路保持不变。";
+                lblFeedback.Text = "未切换：该线路未通过完整真实模型门禁，原链路保持不变。";
                 lblFeedback.ForeColor = Color.FromArgb(220, 38, 38);
                 UpdateGateStatus();
                 UpdateSelectedAction();
