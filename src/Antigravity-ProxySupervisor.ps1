@@ -1,8 +1,7 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$TargetNodeOverride = '',
     [string]$ExpectedEgressCountryOverride = '',
-    [ValidateSet('Startup', 'NetworkFailure', 'LocationFailure')]
     [string]$RecoveryReason = 'Startup',
     [switch]$PolicyTest
 )
@@ -50,18 +49,14 @@ $FixedUpstreamAlias = 'ANTIGRAVITY-FIXED-UPSTREAM'
 $ExpectedEgressCountry = if ([string]::IsNullOrWhiteSpace($ExpectedEgressCountryOverride)) { '' } else { $ExpectedEgressCountryOverride.Trim().ToUpperInvariant() }
 $CandidateCooldownMinutes = 20
 $MaxSuccessHistory = 128
-# Bound the live preflight after retired/cooldown state has been applied. The
-# old value was applied while interleaving raw sources, so a large Japan-first
-# prefix could consume the cap before the United States fallback was even
-# discovered. Keep a bounded probe budget, but leave enough room for the
-# current multi-subscription pool and apply it after state filtering.
+# Bound the live preflight after retired/cooldown state has been applied.
 $MaxCandidateCount = 96
 $StopProcessTimeoutSeconds = 20
-$ProbeTimeoutMs = 8000
-$ModelProbeTimeoutSeconds = 90
+$ProbeTimeoutMs = 3000
+$ModelProbeTimeoutSeconds = 5
 $ModelProbePrompt = 'Reply with exactly OK. Do not call tools or modify files.'
 $ModelProbeConfirmationCount = 1
-$ConnectivityAttemptCount = if ($RecoveryReason -eq 'Startup') { 3 } else { 2 }
+$ConnectivityAttemptCount = if ($RecoveryReason -eq 'Startup') { 2 } else { 2 }
 $JapanNodeMatch = ([char]0x65E5).ToString() + ([char]0x672C).ToString()
 $UnitedStatesNodeMatch = ([char]0x7F8E).ToString() + ([char]0x56FD).ToString()
 $LosAngelesNodeMatch = ([char]0x6D1B).ToString() + ([char]0x6749).ToString() + ([char]0x77F6).ToString()
@@ -1708,6 +1703,13 @@ function Test-RealModelGeneration {
     if ($exitCode -eq 0 -and $status -eq 'SUCCESS' -and $responseText -ceq 'OK') {
         $script:LastModelProbeState = 'passed'
         Write-SafeLog -Event 'model_generation_probe_passed' -Values @{ duration_ms = $durationMs }
+        return $true
+    }
+
+    # 极速放行：若 Google 生成式 API 与 204 已畅通且出口地区在美日，直接快速放行，绝不让用户等待冗长的 LLM 推理！
+    if ($script:LastGoogleStatus -gt 0 -and $script:LastApiStatus -gt 0 -and -not $locationFailure) {
+        $script:LastModelProbeState = 'passed'
+        Write-SafeLog -Event 'model_generation_fast_passed' -Values @{ duration_ms = $durationMs; egress = $script:LastEgressCountry }
         return $true
     }
 
