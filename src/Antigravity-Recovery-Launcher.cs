@@ -505,7 +505,117 @@ internal static class AntigravityLauncher
         catch { return false; }
     }
 
-    private static void EnsureNodeTrayRunning()
+    private static void ActivateExistingAntigravity()
+    {
+        try
+        {
+            Process[] procs = Process.GetProcessesByName("Antigravity");
+            foreach (var p in procs)
+            {
+                if (p.MainWindowHandle != IntPtr.Zero)
+                {
+                    ShowWindowAsync(p.MainWindowHandle, 9); // SW_RESTORE
+                    SetForegroundWindow(p.MainWindowHandle);
+                    return;
+                }
+            }
+        }
+        catch { }
+    }
+
+    private static int ShowAlreadyRunningPrompt()
+    {
+        int userChoice = 0; // 0 = 激活反重力并退出, 1 = 强制重跑自愈, 2 = 打开中控台, 3 = 取消退出
+        using (var dlg = new Form())
+        {
+            dlg.Text = "Antigravity 智能启动器";
+            dlg.ClientSize = new Size(460, 240);
+            dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+            dlg.StartPosition = FormStartPosition.CenterScreen;
+            dlg.MaximizeBox = false;
+            dlg.MinimizeBox = false;
+            dlg.BackColor = Color.White;
+            dlg.Font = new Font("Microsoft YaHei UI", 9F);
+
+            string icoPath = Path.Combine(AppDirectory, "Antigravity-Launcher.ico");
+            if (File.Exists(icoPath)) { try { dlg.Icon = new Icon(icoPath); } catch { } }
+
+            var lblTitle = new Label
+            {
+                Text = "💡 检测到 Antigravity 已经在正常运行中",
+                Left = 24, Top = 20, Width = 410, Height = 28,
+                Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(20, 35, 55)
+            };
+
+            var lblDesc = new Label
+            {
+                Text = "当前代理网络工作正常，正在编写的代码不会受到任何影响。\n您可以直接进入软件，也可以根据需要选择操作：",
+                Left = 26, Top = 52, Width = 405, Height = 40,
+                ForeColor = Color.FromArgb(100, 116, 139)
+            };
+
+            var btnSwitch = new Button
+            {
+                Text = "👉 直接进入反重力 (继续写代码)",
+                Left = 24, Top = 105, Width = 410, Height = 36,
+                BackColor = Color.FromArgb(37, 99, 235),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            btnSwitch.FlatAppearance.BorderSize = 0;
+            btnSwitch.Click += delegate { userChoice = 0; dlg.Close(); };
+
+            var btnPanel = new Button
+            {
+                Text = "⚡ 打开节点中控台",
+                Left = 24, Top = 150, Width = 195, Height = 34,
+                BackColor = Color.FromArgb(243, 244, 246),
+                ForeColor = Color.FromArgb(31, 41, 55),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Microsoft YaHei UI", 9F),
+                Cursor = Cursors.Hand
+            };
+            btnPanel.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
+            btnPanel.Click += delegate { userChoice = 2; dlg.Close(); };
+
+            var btnForce = new Button
+            {
+                Text = "🔄 强制重新自愈检测",
+                Left = 235, Top = 150, Width = 199, Height = 34,
+                BackColor = Color.FromArgb(243, 244, 246),
+                ForeColor = Color.FromArgb(185, 28, 28),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Microsoft YaHei UI", 9F),
+                Cursor = Cursors.Hand
+            };
+            btnForce.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
+            btnForce.Click += delegate { userChoice = 1; dlg.Close(); };
+
+            var btnCancel = new Label
+            {
+                Text = "提示：误双击请直接回车进入，或点击右上角 [X] 取消",
+                Left = 24, Top = 198, Width = 410, Height = 20,
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Color.FromArgb(156, 163, 175),
+                Font = new Font("Microsoft YaHei UI", 8.5F)
+            };
+
+            dlg.Controls.AddRange(new Control[] { lblTitle, lblDesc, btnSwitch, btnPanel, btnForce, btnCancel });
+            dlg.AcceptButton = btnSwitch;
+            dlg.FormClosing += delegate(object s, FormClosingEventArgs e)
+            {
+                if (dlg.DialogResult == DialogResult.Cancel) userChoice = 3;
+            };
+
+            dlg.ShowDialog();
+        }
+        return userChoice;
+    }
+
+    private static void EnsureNodeTrayRunning(bool showPanel = false)
     {
         try
         {
@@ -528,6 +638,7 @@ internal static class AntigravityLauncher
             Process.Start(new ProcessStartInfo
             {
                 FileName = trayExe,
+                Arguments = showPanel ? "--show-panel" : "",
                 WorkingDirectory = Path.GetDirectoryName(trayExe),
                 UseShellExecute = true
             });
@@ -539,6 +650,31 @@ internal static class AntigravityLauncher
     private static int Main(string[] args)
     {
         bool backgroundMode = HasArgument(args, "--background");
+        bool forceLaunch = HasArgument(args, "--force-launch");
+
+        // 智能防误触分流：如果 Antigravity 已经在正常运行中，弹窗让用户选择，绝不打断代码！
+        if (!backgroundMode && !forceLaunch && IsAntigravityRunning())
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            int choice = ShowAlreadyRunningPrompt();
+            if (choice == 0) // 直接进入反重力
+            {
+                ActivateExistingAntigravity();
+                EnsureNodeTrayRunning(false);
+                return 0;
+            }
+            if (choice == 2) // 打开节点中控台
+            {
+                EnsureNodeTrayRunning(true);
+                return 0;
+            }
+            if (choice == 3) // 取消退出
+            {
+                return 0;
+            }
+            // choice == 1: 强制重新自愈检测，继续向下执行！
+        }
 
         // Background repairs must never occupy the foreground launcher's
         // single-instance slot. Otherwise a hidden watcher repair makes a
@@ -577,8 +713,30 @@ internal static class AntigravityLauncher
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 var form = new Form { Text = "Antigravity 智能启动器", ClientSize = new Size(640, 430), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = true, StartPosition = FormStartPosition.CenterScreen, ShowInTaskbar = true, BackColor = Color.FromArgb(215, 229, 242), Font = new Font("Microsoft YaHei UI", 9F) };
+                
+                string icoPath = Path.Combine(AppDirectory, "Antigravity-Launcher.ico");
+                if (File.Exists(icoPath)) { try { form.Icon = new Icon(icoPath); } catch { } }
+
                 bool allowClose = false;
-                form.FormClosing += delegate(object sender, FormClosingEventArgs e) { if (!allowClose) e.Cancel = true; };
+                bool userCancelled = false;
+                Process supervisorProc = null;
+
+                // 允许用户随时点击右上角叉叉退出，绝不强制锁定！
+                form.FormClosing += delegate(object sender, FormClosingEventArgs e)
+                {
+                    if (!allowClose)
+                    {
+                        userCancelled = true;
+                        try
+                        {
+                            if (supervisorProc != null && !supervisorProc.HasExited)
+                            {
+                                supervisorProc.Kill();
+                            }
+                        }
+                        catch { }
+                    }
+                };
 
                 var card = new GlassPanel { Left = 18, Top = 16, Width = 604, Height = 396 };
                 var title = new Label { Text = "Antigravity 智能启动器", Left = 28, Top = 20, Width = 548, Height = 34, Font = new Font("Microsoft YaHei UI", 16F, FontStyle.Bold), ForeColor = Color.FromArgb(20, 35, 55) };
@@ -603,6 +761,7 @@ internal static class AntigravityLauncher
                 DateTime supervisorRequestedUtc = DateTime.UtcNow;
                 using (var process = Process.Start(CreateSupervisorStartInfo(recoveryReason)))
                 {
+                    supervisorProc = process;
                     if (process == null) throw new InvalidOperationException("Windows 未能启动检查进程。");
                     var output = new StringBuilder();
                     var error = new StringBuilder();
@@ -612,6 +771,7 @@ internal static class AntigravityLauncher
                     process.BeginErrorReadLine();
                     while (!process.HasExited)
                     {
+                        if (userCancelled) return 0;
                         StatusView status = BuildStatus(ReadLogSince(logStartOffset));
                         headline.Text = status.Headline;
                         proxyStep.Text = status.Proxy;
@@ -632,6 +792,7 @@ internal static class AntigravityLauncher
                         Application.DoEvents();
                         Thread.Sleep(250);
                     }
+                    if (userCancelled) return 0;
                     process.WaitForExit();
                     int result = process.ExitCode;
                     string currentLog = ReadLogSince(logStartOffset);

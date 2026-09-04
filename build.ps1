@@ -28,7 +28,14 @@ foreach ($processInfo in $runningWatchers) {
 if ($runningWatchers.Count -gt 0) {
     Start-Sleep -Milliseconds 500
 }
-& $csc /nologo /target:winexe /optimize+ /reference:System.Drawing.dll /reference:System.Windows.Forms.dll ("/out:" + $launcherOutput) $launcherSource
+$iconSource = Join-Path $source 'Antigravity-Launcher.ico'
+$iconRelease = Join-Path $release 'Antigravity-Launcher.ico'
+if (Test-Path -LiteralPath $iconSource) {
+    Copy-Item -LiteralPath $iconSource -Destination $iconRelease -Force
+}
+$iconArg = if (Test-Path -LiteralPath $iconSource) { "/win32icon:`"$iconSource`"" } else { "" }
+
+& $csc /nologo /target:winexe /optimize+ $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll ("/out:" + $launcherOutput) $launcherSource
 if ($LASTEXITCODE -ne 0) { throw 'launcher_build_failed' }
 & $csc /nologo /target:winexe /optimize+ /reference:System.Management.dll ("/out:" + $watcherOutput) $watcherSource
 if ($LASTEXITCODE -ne 0) { throw 'watcher_build_failed' }
@@ -36,7 +43,7 @@ if ($LASTEXITCODE -ne 0) { throw 'watcher_build_failed' }
 if ($LASTEXITCODE -ne 0) { throw 'localization_loader_build_failed' }
 $trayOutput = Join-Path $release 'Antigravity-NodeTray.exe'
 $traySource = Join-Path $source 'Antigravity-NodeTray.cs'
-& $csc /nologo /target:winexe /optimize+ /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $trayOutput) $traySource
+& $csc /nologo /target:winexe /optimize+ $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $trayOutput) $traySource
 if ($LASTEXITCODE -ne 0) { throw 'nodetray_build_failed' }
 Copy-Item -LiteralPath (Join-Path $source 'Antigravity-ProxySupervisor.ps1') -Destination (Join-Path $release 'Antigravity-ProxySupervisor.ps1') -Force
 foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd')) {

@@ -26,6 +26,7 @@ OutputBaseFilename=Antigravity-Windows-Recovery-Setup-{#MyAppVersion}-windows-x6
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\src\Antigravity-Launcher.ico
 SetupLogging=yes
 CloseApplications=no
 RestartApplications=no
