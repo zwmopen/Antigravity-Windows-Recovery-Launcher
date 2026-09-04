@@ -69,7 +69,7 @@
 ## 🚀 极简上手与分发指南
 
 ### 选项 A：绿色免安装版（推荐，解压即用）
-1. 下载 `Antigravity-Windows-Recovery-Launcher-1.0.0-windows-x64.zip`；
+1. 从 [最新发布页 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest) 下载 [`Antigravity-Windows-Recovery-Launcher-1.0.0-windows-x64.zip`](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.0.0/Antigravity-Windows-Recovery-Launcher-1.0.0-windows-x64.zip)；
 2. 解压到目标电脑的任意目录（如 `D:\Tools\Antigravity`）；
 3. 双击 `Antigravity-Recovery-Launcher.exe`（或 `Install.cmd`）：
    - 首次启动会自动在桌面创建 **`Antigravity 启动器.lnk`** 快捷方式；
@@ -77,7 +77,7 @@
 4. **之后每天只需双击桌面的 `Antigravity 启动器` 图标即可！**
 
 ### 选项 B：标准 Windows 安装向导版（适合小白用户）
-1. 下载 `Antigravity-Windows-Recovery-Setup-1.0.0-windows-x64.exe`；
+1. 从 [最新发布页 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest) 下载 [`Antigravity-Windows-Recovery-Setup-1.0.0-windows-x64.exe`](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.0.0/Antigravity-Windows-Recovery-Setup-1.0.0-windows-x64.exe)；
 2. 双击后按照极简中文向导一路点击“下一步”，自动安装到 `%LOCALAPPDATA%\Antigravity\launcher` 并创建桌面快捷方式。
 
 > 💡 **跨电脑迁移提示**：
