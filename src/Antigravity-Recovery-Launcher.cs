@@ -921,7 +921,7 @@ namespace AntigravityLauncher
             MinimumSize = new Size(860, 600);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Microsoft YaHei UI", 9F);
-            BackColor = Color.FromArgb(215, 229, 242);
+            BackColor = Color.FromArgb(223, 234, 242);
 
             // 关闭按钮行为：安静缩回托盘，不打断用户工作
             FormClosing += delegate(object s, FormClosingEventArgs e)
@@ -938,7 +938,7 @@ namespace AntigravityLauncher
             {
                 Dock = DockStyle.Top,
                 Height = 175,
-                BackColor = Color.FromArgb(215, 229, 242),
+                BackColor = Color.FromArgb(223, 234, 242),
                 Padding = new Padding(16, 12, 16, 6)
             };
 
@@ -956,8 +956,8 @@ namespace AntigravityLauncher
                 Width = 360,
                 Height = 24,
                 TextAlign = ContentAlignment.MiddleLeft,
-                BackColor = Color.FromArgb(220, 231, 245),
-                ForeColor = Color.FromArgb(30, 82, 160),
+                BackColor = Color.FromArgb(214, 231, 248),
+                ForeColor = Color.FromArgb(47, 127, 245),
                 Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold)
             };
 
@@ -970,7 +970,7 @@ namespace AntigravityLauncher
                 Width = 540,
                 Height = 28,
                 Font = new Font("Microsoft YaHei UI", 13.5F, FontStyle.Bold),
-                ForeColor = Color.FromArgb(20, 35, 55)
+                ForeColor = Color.FromArgb(16, 43, 69)
             };
 
             lblActiveLatency = new Label
@@ -978,7 +978,7 @@ namespace AntigravityLauncher
                 Text = "⚡ 实时延迟: -- ms",
                 AutoSize = true,
                 Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold),
-                ForeColor = Color.FromArgb(22, 163, 74),
+                ForeColor = Color.FromArgb(21, 128, 61),
                 Left = 22,
                 Top = 72
             };
@@ -988,7 +988,7 @@ namespace AntigravityLauncher
                 Text = "最终出口正在读取 · 独立隧道 17897 · Clash 7897 保持不变",
                 AutoSize = true,
                 Font = new Font("Microsoft YaHei UI", 9F),
-                ForeColor = Color.FromArgb(75, 85, 99),
+                ForeColor = Color.FromArgb(97, 122, 145),
                 Left = 22,
                 Top = 100
             };
@@ -998,7 +998,7 @@ namespace AntigravityLauncher
                 Text = "等待读取 Google、OAuth 与真实模型门禁结果",
                 AutoSize = true,
                 Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                ForeColor = Color.FromArgb(37, 99, 235),
+                ForeColor = Color.FromArgb(47, 127, 245),
                 Left = 22,
                 Top = 124
             };
@@ -1006,12 +1006,12 @@ namespace AntigravityLauncher
             // 核心功能按钮 1：切换至代码窗口
             btnSwitchCode = new Button
             {
-                Text = "唤醒 Antigravity",
+                Text = "🚀 唤醒 Antigravity",
                 Left = 580,
                 Top = 38,
                 Width = 200,
                 Height = 42,
-                BackColor = Color.FromArgb(37, 99, 235),
+                BackColor = Color.FromArgb(47, 127, 245),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold),
@@ -1036,18 +1036,19 @@ namespace AntigravityLauncher
             // 核心功能按钮 2：强制重新自愈检测
             btnReheal = new Button
             {
-                Text = "异常自愈",
+                Text = "🔄 异常自愈",
                 Left = 580,
                 Top = 90,
                 Width = 140,
                 Height = 32,
-                BackColor = Color.FromArgb(238, 244, 251),
-                ForeColor = Color.FromArgb(55, 78, 105),
+                BackColor = Color.FromArgb(216, 229, 238),
+                ForeColor = Color.FromArgb(97, 122, 145),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
-            btnReheal.FlatAppearance.BorderColor = Color.FromArgb(185, 204, 226);
+            btnReheal.FlatAppearance.BorderColor = Color.FromArgb(255, 255, 255);
+            btnReheal.FlatAppearance.BorderSize = 1;
             btnReheal.Click += delegate
             {
                 appContext.TriggerRehealWorkflow();
@@ -1056,7 +1057,7 @@ namespace AntigravityLauncher
             glassCard.Controls.AddRange(new Control[] { lblTunnelBadge, lblActiveTitle, lblActiveLatency, lblActiveDetails, lblActiveSecurity, btnSwitchCode, btnReheal });
             topPanel.Controls.Add(glassCard);
 
-            // 0. 预先初始化节点列表 ListView，防止单选按钮事件触发空引用
+            // 0. 预先初始化节点列表 ListView
             listNodes = new ListView
             {
                 Dock = DockStyle.Fill,
@@ -1066,8 +1067,9 @@ namespace AntigravityLauncher
                 HideSelection = false,
                 MultiSelect = false,
                 HeaderStyle = ColumnHeaderStyle.Nonclickable,
-                Font = new Font("Microsoft YaHei UI", 9F),
-                BorderStyle = BorderStyle.FixedSingle
+                Font = new Font("Microsoft YaHei UI", 9.5F),
+                BorderStyle = BorderStyle.None,
+                BackColor = Color.FromArgb(248, 251, 254)
             };
             listNodes.Columns.Add("地区", 110);
             listNodes.Columns.Add("专线名称", 470);
@@ -1076,74 +1078,85 @@ namespace AntigravityLauncher
             listNodes.SelectedIndexChanged += delegate { UpdateSelectedAction(); };
             listNodes.DoubleClick += delegate { SwitchSelectedNode(); };
 
-            // 2. 地区筛选栏
+            // 2. 地区筛选栏（胶囊药丸分段控件）
             filterPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 42,
-                BackColor = Color.FromArgb(215, 229, 242),
-                Padding = new Padding(20, 6, 20, 4)
+                Height = 46,
+                BackColor = Color.FromArgb(223, 234, 242),
+                Padding = new Padding(20, 8, 20, 6)
             };
 
             string[] regions = new string[] { "全部", "🇺🇸 美国", "🇯🇵 日本" };
+            var pillButtons = new List<Button>();
             foreach (var r in regions)
             {
-                var rb = new RadioButton
+                var btnPill = new Button
                 {
                     Text = r,
                     AutoSize = true,
-                    Checked = (r == "全部"),
-                    Margin = new Padding(0, 0, 16, 0),
-                    Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
-                    ForeColor = Color.FromArgb(30, 50, 75),
-                    Cursor = Cursors.Hand
+                    Height = 30,
+                    Padding = new Padding(14, 2, 14, 2),
+                    Margin = new Padding(0, 0, 10, 0),
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
+                    Cursor = Cursors.Hand,
+                    Tag = r,
+                    BackColor = (r == "全部") ? Color.FromArgb(47, 127, 245) : Color.FromArgb(237, 244, 248),
+                    ForeColor = (r == "全部") ? Color.White : Color.FromArgb(97, 122, 145)
                 };
+                btnPill.FlatAppearance.BorderSize = 0;
+                pillButtons.Add(btnPill);
                 string captured = r.Replace("🇺🇸 ", "").Replace("🇯🇵 ", "");
-                rb.CheckedChanged += delegate
+                btnPill.Click += delegate
                 {
-                    if (rb.Checked && listNodes != null)
+                    currentRegionFilter = captured;
+                    foreach (var b in pillButtons)
                     {
-                        currentRegionFilter = captured;
-                        FilterListView();
+                        bool isSel = (b == btnPill);
+                        b.BackColor = isSel ? Color.FromArgb(47, 127, 245) : Color.FromArgb(237, 244, 248);
+                        b.ForeColor = isSel ? Color.White : Color.FromArgb(97, 122, 145);
                     }
+                    FilterListView();
                 };
-                filterPanel.Controls.Add(rb);
+                filterPanel.Controls.Add(btnPill);
             }
 
-            // 3. 底部操作栏
+            // 3. 底部操作栏（主次分明）
             var bottomPanel = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 65,
-                BackColor = Color.FromArgb(215, 229, 242),
-                Padding = new Padding(16, 10, 16, 12)
+                Height = 70,
+                BackColor = Color.FromArgb(223, 234, 242),
+                Padding = new Padding(16, 12, 16, 14)
             };
 
             btnTestAll = new Button
             {
                 Text = "⚡ 一键全量并发测速",
-                Size = new Size(170, 38),
+                Size = new Size(170, 42),
                 Left = 20,
-                Top = 12,
-                BackColor = Color.FromArgb(37, 99, 235),
-                ForeColor = Color.White,
+                Top = 14,
+                BackColor = Color.FromArgb(216, 229, 238),
+                ForeColor = Color.FromArgb(16, 43, 69),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
-            btnTestAll.FlatAppearance.BorderSize = 0;
+            btnTestAll.FlatAppearance.BorderColor = Color.FromArgb(255, 255, 255);
+            btnTestAll.FlatAppearance.BorderSize = 1;
             btnTestAll.Click += delegate { StartSpeedTest(); };
 
             btnApplySelected = new Button
             {
-                Text = "请先选择一条专线",
-                Size = new Size(230, 38),
+                Text = "请单击选择下方专线",
+                Size = new Size(240, 42),
                 Left = 205,
-                Top = 12,
-                BackColor = Color.FromArgb(166, 181, 199),
+                Top = 14,
+                BackColor = Color.FromArgb(197, 213, 228),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
+                Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold),
                 Cursor = Cursors.Default,
                 Enabled = false
             };
@@ -1152,38 +1165,46 @@ namespace AntigravityLauncher
 
             btnHideToTray = new Button
             {
-                Text = "❌ 隐藏到托盘",
-                Size = new Size(120, 38),
-                Left = 450,
-                Top = 12,
-                BackColor = Color.FromArgb(243, 247, 252),
-                ForeColor = Color.FromArgb(70, 90, 115),
+                Text = "✖ 隐藏到托盘",
+                Size = new Size(120, 42),
+                Left = 460,
+                Top = 14,
+                BackColor = Color.FromArgb(216, 229, 238),
+                ForeColor = Color.FromArgb(97, 122, 145),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
-            btnHideToTray.FlatAppearance.BorderColor = Color.FromArgb(191, 219, 254);
+            btnHideToTray.FlatAppearance.BorderColor = Color.FromArgb(255, 255, 255);
+            btnHideToTray.FlatAppearance.BorderSize = 1;
             btnHideToTray.Click += delegate { Hide(); };
 
             lblFeedback = new Label
             {
-                Text = "单击选择；双击会先跑真实门禁，通过后安全切换",
+                Text = "单击选择；双击任意行即可安全热切换",
                 AutoSize = true,
-                ForeColor = Color.FromArgb(70, 90, 115),
+                ForeColor = Color.FromArgb(97, 122, 145),
                 Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                Left = 585,
-                Top = 22
+                Left = 595,
+                Top = 26
             };
 
             bottomPanel.Controls.AddRange(new Control[] { btnTestAll, btnApplySelected, btnHideToTray, lblFeedback });
+
+            var listGlassCard = new GlassPanel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(12, 12, 12, 12)
+            };
+            listGlassCard.Controls.Add(listNodes);
 
             var listContainer = new Panel
             {
                 Dock = DockStyle.Fill,
                 Padding = new Padding(16, 4, 16, 6),
-                BackColor = Color.FromArgb(215, 229, 242)
+                BackColor = Color.FromArgb(223, 234, 242)
             };
-            listContainer.Controls.Add(listNodes);
+            listContainer.Controls.Add(listGlassCard);
 
             Controls.Add(listContainer);
             Controls.Add(filterPanel);
