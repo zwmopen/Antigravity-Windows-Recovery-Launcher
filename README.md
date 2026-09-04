@@ -1,20 +1,20 @@
-# Antigravity 智能启动器与无感自愈引擎 (Antigravity Recovery Launcher)
+# Antigravity 智能启动器与无感自愈引擎
 
 <p align="center">
   <img src="showcase/hot_launch_choice.png" alt="Antigravity 启动器界面" width="480" />
 </p>
 
 <p align="center">
-  <strong>专为 Google Antigravity AI 编程 IDE 打造的工业级自愈底座与启动入口</strong><br>
+  <strong>专为 Google Antigravity 打造的工业级自愈底座与启动入口</strong><br>
   微秒级无感热切换 · 首帧微任务零闪烁汉化 · 17897 独立沙盒隔离 · 多客户端订阅免配自发现
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-1.0.0-blue.svg" alt="Version 1.0.0" />
-  <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(x64)-brightgreen.svg" alt="Platform" />
-  <img src="https://img.shields.io/badge/Failover-Seamless%20Hot%20Drift-orange.svg" alt="Failover" />
-  <img src="https://img.shields.io/badge/Localization-Microtask%20Zero--Flicker-blueviolet.svg" alt="i18n" />
-  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License" />
+  <img src="https://img.shields.io/badge/版本-1.0.0-blue.svg" alt="版本 1.0.0" />
+  <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
+  <img src="https://img.shields.io/badge/专线调度-内存级无感热漂移-orange.svg" alt="专线调度" />
+  <img src="https://img.shields.io/badge/界面汉化-首帧微任务零闪直译-blueviolet.svg" alt="界面汉化" />
+  <img src="https://img.shields.io/badge/开源协议-MIT-green.svg" alt="开源协议" />
 </p>
 
 ---
@@ -33,29 +33,29 @@
 
 ## 🌟 四大核心技术支柱
 
-### 1. ⚡ 彻底终结杀编辑器：无感热切换与后台自愈 (Seamless In-Memory Failover)
-* **进程生命周期神圣不可侵犯**：彻底废弃“杀进程重启”的陈旧逻辑。当专线断流、节点失效或用户主动点击切换时，系统仅在 `127.0.0.1:17897` 沙盒内部完成上游线路的**热漂移重路由 (Hot Drift)**；
+### 1. ⚡ 彻底终结杀编辑器：无感热切换与后台自愈
+* **进程生命周期神圣不可侵犯**：彻底废弃“杀进程重启”的陈旧逻辑。当专线断流、节点失效或用户主动点击切换时，系统仅在 `127.0.0.1:17897` 沙盒内部完成上游线路的热漂移重路由；
 * **编辑器零闪烁、不中断**：正在编写的代码、打开的文件、对话历史与终端任务**100% 保持常驻**；
 * **极简双态感知胶囊**：编辑器已运行时，双击桌面图标呼出精致卡片：
   - **`进入代码窗口 (3s)`**：3 秒无操作自动聚焦编辑器窗口，不干扰专注；
-  - **`⚡ 一键重启修复`**：动词先行，平时一键无感切换最优通道，遇顽疾时彻底重置连接池与坏节点冷却隔离。
+  - **`⚡ 一键重启修复`**：平时一键无感切换最优通道，遇顽疾时彻底重置连接池与坏节点冷却隔离。
 
-### 2. 🛡️ 17897 独立沙盒：零污染、零干扰 (Zero-Pollution Isolated Sandbox)
+### 2. 🛡️ 17897 独立沙盒：零污染、零干扰
 * **完全隔离日常上网**：启动器为 Antigravity 单独开辟 `127.0.0.1:17897` 独立端口，绝不占用、不修改用户日常使用的 Clash 端口（通常为 7897）；
 * **不修改系统代理**：不开启 TUN 虚拟网卡，不篡改 Windows 系统的全局代理设置，日常网页浏览、游戏与下载完全不受任何影响。
 
-### 3. 📡 多客户端订阅解耦雷达：全自动开箱即用 (Zero-Config Subscription Radar)
+### 3. 📡 多客户端订阅解耦雷达：全自动开箱即用
 * **核心在于“订阅数据”，而非“安装路径”**：无论 Clash Verge Rev、Mihomo Party 安装在 C 盘、D 盘还是移动硬盘，启动器均直接穿透 Windows 规范的漫游目录 `%APPDATA%`，直接提取当前最新的订阅索引与节点缓存；
 * **三级内核搜寻雷达**：依次穿透标准路径、系统环境变量 PATH 与 Windows 注册表 `Uninstall` 卸载记录，自动定位 Mihomo 内核，做到**零配置、跨电脑开箱即用**；
-* **真实模型生成门禁 (Real Gemini Gate)**：不依赖虚假的 TCP Ping 或单纯的 HTTP 204。系统调用 Google 官方 `agy` 命令行发送探针，必须由 Gemini 模型真实返回 `OK` 才能放行。
+* **真实模型生成门禁**：不依赖虚假的 TCP Ping 或单纯的 HTTP 204。系统调用 Google 官方 `agy` 命令行发送探针，必须由 Gemini 模型真实返回 `OK` 才能放行。
 
-### 4. 🚀 首帧微任务同步直译：彻底告别 1 秒翻页闪现 (Microtask Zero-Flicker)
-* **微任务前置直译**：为设置面板（Settings Surface）和通用模态框专门设计极速通道（Fast-Path Pipeline）；
-* **首帧即中文**：在 DOM MutationObserver 被触发的同一微任务时钟周期内立即完成中英文本替换，消除了防抖等待带来的闪现跳变，带来原生级别的平滑质感。
+### 4. 🚀 首帧微任务同步直译：彻底告别 1 秒翻页闪现
+* **微任务前置直译**：为设置面板和通用模态框专门设计极速通道；
+* **首帧即中文**：在 DOM 变动的同一微任务时钟周期内立即完成中英文本替换，消除了防抖等待带来的闪现跳变，带来原生级别的平滑质感。
 
 ---
 
-## 📸 界面展示 (Showcase)
+## 📸 界面展示
 
 > 💡 **告别臃肿控制台**：最新版彻底废弃了需要手动测速、看一堆技术参数的复杂测试面板，全面精简为**“平时完全静默、唤醒仅见精致胶囊”**的极简心流设计：
 
@@ -66,7 +66,7 @@
 
 ---
 
-## 🚀 极简上手与分发指南 (Quick Start & Distribution)
+## 🚀 极简上手与分发指南
 
 ### 选项 A：绿色免安装版（推荐，解压即用）
 1. 下载 `Antigravity-Windows-Recovery-Launcher-1.0.0-windows-x64.zip`；
@@ -85,7 +85,7 @@
 
 ---
 
-## 🏗️ 架构拓扑 (System Architecture)
+## 🏗️ 架构拓扑
 
 ```text
 桌面快捷方式 / 用户双击
@@ -100,7 +100,7 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                 ProxySupervisor 核心调度引擎                 │
 │  ├─ 多源订阅雷达：穿透 %APPDATA% 提取有效订阅节点 (完全解耦)  │
-│  ├─ Smart Pool 智能评分：地区权重 + 延迟 RTT + 历史记忆     │
+│  ├─ 智能评分算法：地区权重 + 延迟 RTT + 历史记忆             │
 │  ├─ Gemini 官方真实探针：通过 Google agy CLI 验证真实生成    │
 │  └─ 127.0.0.1:17897 独立沙盒：无感热接管 (不杀编辑器)       │
 └──────────────┬───────────────────────────────┬──────────────┘
@@ -116,7 +116,7 @@
 
 ---
 
-## ❓ 常见问题解答 (FAQ)
+## ❓ 常见问题解答
 
 ### Q1: 我的 Clash 安装在 D 盘或者自定义路径，启动器能识别吗？
 **能，100% 自动识别。**  
@@ -149,4 +149,4 @@
 
 ## 📄 开源许可证
 
-本项目基于 [MIT License](LICENSE) 开源发布。
+本项目遵循 [MIT 开源许可证](LICENSE)。
