@@ -65,9 +65,11 @@ $SettingsBackupRoot = Join-Path $RuntimeRoot 'settings-backups'
 $LauncherPath = Join-Path $ScriptRoot 'Antigravity-Recovery-Launcher.exe'
 $ShortcutBackupRoot = Join-Path $RuntimeRoot 'shortcut-backups'
 $desktopFolder = [Environment]::GetFolderPath('Desktop')
-$previewShortcut = Join-Path $desktopFolder 'Antigravity 启动器 (v1.0 体验版).lnk'
-$DesktopShortcutPath = if (Test-Path -LiteralPath $previewShortcut) { $previewShortcut } else { Join-Path $desktopFolder 'Antigravity 启动器.lnk' }
-$StartMenuShortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 启动器.lnk'
+$launcherShortcutName = 'Antigravity ' + ([char]0x542F).ToString() + ([char]0x52A8).ToString() + ([char]0x5668).ToString() + '.lnk'
+$previewShortcutName = 'Antigravity ' + ([char]0x542F).ToString() + ([char]0x52A8).ToString() + ([char]0x5668).ToString() + ' (v1.0 ' + ([char]0x4F53).ToString() + ([char]0x9A8C).ToString() + ([char]0x7248).ToString() + ').lnk'
+$previewShortcut = Join-Path $desktopFolder $previewShortcutName
+$DesktopShortcutPath = if (Test-Path -LiteralPath $previewShortcut) { $previewShortcut } else { Join-Path $desktopFolder $launcherShortcutName }
+$StartMenuShortcutPath = Join-Path $env:APPDATA ('Microsoft\Windows\Start Menu\Programs\' + $launcherShortcutName)
 $CanonicalLauncherPath = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\Antigravity-Recovery-Launcher.exe'
 $SupervisorMutex = $null
 $script:RunStartedAt = Get-Date
@@ -1706,7 +1708,7 @@ function Test-RealModelGeneration {
         return $true
     }
 
-    # 极速放行：若 Google 生成式 API 与 204 已畅通且出口地区在美日，直接快速放行，绝不让用户等待冗长的 LLM 推理！
+    # Fast-pass: If Google API and 204 pass and egress is US or JP, fast pass.
     if ($script:LastGoogleStatus -gt 0 -and $script:LastApiStatus -gt 0 -and -not $locationFailure) {
         $script:LastModelProbeState = 'passed'
         Write-SafeLog -Event 'model_generation_fast_passed' -Values @{ duration_ms = $durationMs; egress = $script:LastEgressCountry }

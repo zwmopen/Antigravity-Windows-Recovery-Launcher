@@ -17,6 +17,7 @@
 *.cache
 *.tmp
 *.log
+scratch/
 
 # 密钥与本地配置
 .env

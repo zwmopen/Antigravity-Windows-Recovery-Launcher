@@ -50,6 +50,7 @@ namespace AntigravityLauncher
         [STAThread]
         private static int Main(string[] args)
         {
+            EnsureInteractiveDesktop();
             TraceLog("Main invoked: " + (args != null ? string.Join(" ", args) : "null"));
             bool backgroundMode = HasArgument(args, "--background");
             bool forceLaunch = HasArgument(args, "--force-launch");
@@ -69,20 +70,7 @@ namespace AntigravityLauncher
                 }
             }
 
-            // 2. 检查 Antigravity 是否已经在运行中 (90%+ 日常高频场景)
-            bool antigravityRunning = IsAntigravityRunning();
-            TraceLog("antigravityRunning=" + antigravityRunning + ", forceLaunch=" + forceLaunch);
-
-            if (antigravityRunning && !forceLaunch)
-            {
-                // 已经在运行：直接 Win32 毫秒级置顶激活代码窗口，0 弹窗、0 等待、0 报错！
-                TraceLog("Antigravity is already running, activating main window directly...");
-                bool activated = ActivateExistingAntigravity();
-                TraceLog("Activate result: " + activated);
-                return 0;
-            }
-
-            // 3. 检查是否已有启动器实例在运行
+            // 2. 检查是否已有启动器实例在运行 (互斥锁防重入)
             bool createdNew;
             try
             {
@@ -103,9 +91,38 @@ namespace AntigravityLauncher
             Application.SetCompatibleTextRenderingDefault(false);
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 
-            // 4. 冷启动：展示具备清晰通路与链路核验反馈的极简状态卡片
+            // 3. 检查 Antigravity 是否已经在运行中 (热启动场景：带 3 秒自动进入的双选卡片)
+            bool antigravityRunning = IsAntigravityRunning();
+            TraceLog("antigravityRunning=" + antigravityRunning + ", forceLaunch=" + forceLaunch);
+
+            if (antigravityRunning && !forceLaunch)
+            {
+                TraceLog("Displaying AntigravityHotLaunchChoiceForm...");
+                var choiceForm = new AntigravityHotLaunchChoiceForm();
+                Application.Run(choiceForm);
+
+                if (choiceForm.Action == HotLaunchAction.Activate)
+                {
+                    TraceLog("Hot launch: activating existing main window...");
+                    bool activated = ActivateExistingAntigravity();
+                    TraceLog("Activate result: " + activated);
+                    return 0;
+                }
+                else if (choiceForm.Action == HotLaunchAction.Repair)
+                {
+                    TraceLog("Hot launch: user selected Repair. Launching recovery capsule...");
+                    forceLaunch = true;
+                }
+                else
+                {
+                    TraceLog("Hot launch: user dismissed choice form.");
+                    return 0;
+                }
+            }
+
+            // 4. 冷启动 / 重启修复：展示具备清晰通路与链路核验反馈的极简状态卡片
             TraceLog("Displaying AntigravityLaunchCapsuleForm...");
-            var capsule = new AntigravityLaunchCapsuleForm(GetRecoveryReason(args));
+            var capsule = new AntigravityLaunchCapsuleForm(forceLaunch ? "UserRequestedRepair" : GetRecoveryReason(args));
             Application.Run(capsule);
 
             if (capsule.ExitCode == 0)
@@ -207,6 +224,12 @@ namespace AntigravityLauncher
         private static extern int GetClassName(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
 
         [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetThreadDesktop(IntPtr hDesktop);
+
+        [DllImport("user32.dll")]
         private static extern bool IsWindowVisible(IntPtr hWnd);
 
         [DllImport("user32.dll")]
@@ -254,6 +277,19 @@ namespace AntigravityLauncher
         [StructLayout(LayoutKind.Sequential)]
         private struct RECT { public int Left, Top, Right, Bottom; }
 
+        internal static void EnsureInteractiveDesktop()
+        {
+            try
+            {
+                IntPtr hDesk = OpenDesktop("default", 0, false, 0x01FF);
+                if (hDesk != IntPtr.Zero)
+                {
+                    SetThreadDesktop(hDesk);
+                }
+            }
+            catch { }
+        }
+
         internal static IntPtr FindAntigravityMainWindow()
         {
             var pids = new HashSet<uint>();
@@ -269,7 +305,11 @@ namespace AntigravityLauncher
 
             if (pids.Count == 0) return IntPtr.Zero;
 
+            EnsureInteractiveDesktop();
+
             IntPtr foundHwnd = IntPtr.Zero;
+            IntPtr fallbackHwnd = IntPtr.Zero;
+
             EnumWindowsProc checkWindow = delegate(IntPtr hWnd, IntPtr lParam)
             {
                 uint pid;
@@ -277,20 +317,33 @@ namespace AntigravityLauncher
                 if (!pids.Contains(pid)) return true;
                 if (!IsWindowVisible(hWnd)) return true;
 
-                RECT r;
-                if (!GetWindowRect(hWnd, out r)) return true;
-                int width = r.Right - r.Left;
-                int height = r.Bottom - r.Top;
-                if (width < 300 || height < 200) return true;
-
                 var sbClass = new StringBuilder(256);
                 GetClassName(hWnd, sbClass, 256);
                 string className = sbClass.ToString();
-                if (className.Contains("Host") || className.Contains("Dde") || className.Contains("IME"))
+                if (className.Contains("Host") || className.Contains("Dde") || className.Contains("IME") || className.Contains("PowerMessage"))
                     return true;
 
-                foundHwnd = hWnd;
-                return false;
+                RECT r;
+                GetWindowRect(hWnd, out r);
+                bool isMin = IsIconic(hWnd) || r.Left < -5000;
+                if (!isMin)
+                {
+                    int width = r.Right - r.Left;
+                    int height = r.Bottom - r.Top;
+                    if (width < 300 || height < 200) return true;
+                }
+
+                if (className == "Chrome_WidgetWin_1")
+                {
+                    foundHwnd = hWnd;
+                    return false;
+                }
+
+                if (fallbackHwnd == IntPtr.Zero)
+                {
+                    fallbackHwnd = hWnd;
+                }
+                return true;
             };
 
             EnumWindows(checkWindow, IntPtr.Zero);
@@ -300,22 +353,40 @@ namespace AntigravityLauncher
                 if (hDesk != IntPtr.Zero)
                 {
                     try { EnumDesktopWindows(hDesk, checkWindow, IntPtr.Zero); }
-                    finally { CloseDesktop(hDesk); }
+                    catch { }
                 }
             }
 
-            return foundHwnd;
+            IntPtr result = foundHwnd != IntPtr.Zero ? foundHwnd : fallbackHwnd;
+            TraceLog("FindAntigravityMainWindow found HWND=" + result);
+            return result;
         }
 
         internal static bool ActivateExistingAntigravity()
         {
+            EnsureInteractiveDesktop();
             IntPtr hWnd = FindAntigravityMainWindow();
-            if (hWnd == IntPtr.Zero) return false;
+            if (hWnd == IntPtr.Zero)
+            {
+                TraceLog("ActivateExistingAntigravity: no window handle found.");
+                return false;
+            }
 
             try
             {
-                ShowWindowAsync(hWnd, 9); // SW_RESTORE
-                ShowWindow(hWnd, 5);      // SW_SHOW
+                RECT r;
+                GetWindowRect(hWnd, out r);
+                bool isMin = IsIconic(hWnd) || r.Left < -5000;
+                TraceLog("ActivateExistingAntigravity: target HWND=" + hWnd + ", isMin=" + isMin + ", Rect=(" + r.Left + "," + r.Top + "," + r.Right + "," + r.Bottom + ")");
+
+                if (isMin)
+                {
+                    ShowWindow(hWnd, 9); // SW_RESTORE (synchronous restoration)
+                }
+                else
+                {
+                    ShowWindow(hWnd, 5); // SW_SHOW
+                }
 
                 IntPtr fgWnd = GetForegroundWindow();
                 uint fgPid;
@@ -339,10 +410,12 @@ namespace AntigravityLauncher
                     AttachThreadInput(curThread, fgThread, false);
                 }
 
+                TraceLog("ActivateExistingAntigravity: successfully brought to foreground.");
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                TraceLog("ActivateExistingAntigravity error: " + ex.Message);
                 return false;
             }
         }
@@ -502,6 +575,341 @@ namespace AntigravityLauncher
             }
             Color tc = isHovered ? Color.FromArgb(220, 38, 38) : Color.FromArgb(148, 163, 184);
             TextRenderer.DrawText(e.Graphics, "✕", new Font("Segoe UI", 8.5F, FontStyle.Bold), rect, tc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+    }
+
+    // ==========================================
+    // 热启动选择动作枚举
+    // ==========================================
+    internal enum HotLaunchAction { Activate, Repair, Cancel }
+
+    // ==========================================
+    // 视觉核心：热启动拟态胶囊按钮 (HotLaunchButton)
+    // ==========================================
+    internal sealed class HotLaunchButton : Control
+    {
+        private bool isPrimary;
+        private bool isHovered = false;
+        private bool isPressed = false;
+        private string buttonText;
+
+        internal HotLaunchButton(string text, bool primary)
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+            isPrimary = primary;
+            buttonText = text;
+            Cursor = Cursors.Hand;
+        }
+
+        internal string ButtonText
+        {
+            get { return buttonText; }
+            set { buttonText = value; Invalidate(); }
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { isHovered = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { isHovered = false; isPressed = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { isPressed = true; Invalidate(); } base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { isPressed = false; Invalidate(); base.OnMouseUp(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            var r = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var path = RoundedRectangle(r, 10))
+            {
+                if (isPrimary)
+                {
+                    Color c1 = isHovered ? Color.FromArgb(59, 130, 246) : Color.FromArgb(37, 99, 235);
+                    Color c2 = isHovered ? Color.FromArgb(37, 99, 235) : Color.FromArgb(29, 78, 216);
+                    if (isPressed) { c1 = Color.FromArgb(29, 78, 216); c2 = Color.FromArgb(30, 64, 175); }
+                    using (var fill = new LinearGradientBrush(r, c1, c2, 90F))
+                    using (var pen = new Pen(Color.FromArgb(96, 165, 250), 1F))
+                    {
+                        e.Graphics.FillPath(fill, path);
+                        e.Graphics.DrawPath(pen, path);
+                    }
+                    using (var font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold))
+                    {
+                        TextRenderer.DrawText(e.Graphics, buttonText, font, r, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    }
+                }
+                else
+                {
+                    Color bg = isHovered ? Color.FromArgb(254, 242, 242) : Color.FromArgb(241, 245, 249);
+                    Color border = isHovered ? Color.FromArgb(248, 113, 113) : Color.FromArgb(203, 213, 225);
+                    Color tc = isHovered ? Color.FromArgb(220, 38, 38) : Color.FromArgb(71, 85, 105);
+                    if (isPressed) { bg = Color.FromArgb(254, 226, 226); }
+                    using (var fill = new SolidBrush(bg))
+                    using (var pen = new Pen(border, 1F))
+                    {
+                        e.Graphics.FillPath(fill, path);
+                        e.Graphics.DrawPath(pen, path);
+                    }
+                    using (var font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold))
+                    {
+                        TextRenderer.DrawText(e.Graphics, buttonText, font, r, tc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    }
+                }
+            }
+        }
+
+        private static GraphicsPath RoundedRectangle(Rectangle r, int radius)
+        {
+            var path = new GraphicsPath();
+            int d = radius * 2;
+            path.AddArc(r.Left, r.Top, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+    }
+
+    // ==========================================
+    // 热启动拟态选项卡片：带 3 秒自动进入倒计时 (AntigravityHotLaunchChoiceForm)
+    // ==========================================
+    internal class AntigravityHotLaunchChoiceForm : Form
+    {
+        internal HotLaunchAction Action { get; private set; }
+        private int remainingSeconds = 3;
+        private System.Windows.Forms.Timer countdownTimer;
+        private HotLaunchButton btnActivate;
+        private HotLaunchButton btnRepair;
+        private CapsuleCloseButton closeButton;
+        private Image appIcon = null;
+        private string subtitleText = "当前网络通道正常 · 可直接切回或重新优选自愈";
+
+        internal AntigravityHotLaunchChoiceForm()
+        {
+            Action = HotLaunchAction.Cancel;
+            Text = "Antigravity 启动助手";
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new Size(480, 146);
+            BackColor = Color.FromArgb(248, 250, 252);
+            ShowInTaskbar = false;
+            TopMost = true;
+            KeyPreview = true;
+
+            appIcon = Program.LoadIconOrPng(Program.IconPath);
+
+            try
+            {
+                if (File.Exists(Program.SupervisorStatePath))
+                {
+                    string json = File.ReadAllText(Program.SupervisorStatePath);
+                    var mEgress = System.Text.RegularExpressions.Regex.Match(json, "\"egress_country\"\\s*:\\s*\"([^\"]+)\"");
+                    string egress = mEgress.Success ? mEgress.Groups[1].Value.Trim().ToUpperInvariant() : "";
+                    if (egress == "US")
+                        subtitleText = "当前专线：🇺🇸 美国出口 · Google & AI 通路正常";
+                    else if (egress == "JP")
+                        subtitleText = "当前专线：🇯🇵 日本出口 · Google & AI 通路正常";
+                    else if (!string.IsNullOrEmpty(egress))
+                        subtitleText = "当前专线：" + egress + " 出口 · 独立私有通道正常";
+                }
+            }
+            catch { }
+
+            closeButton = new CapsuleCloseButton
+            {
+                Location = new Point(ClientSize.Width - 32, 12),
+                Size = new Size(22, 22)
+            };
+            closeButton.Click += delegate
+            {
+                StopTimer();
+                Action = HotLaunchAction.Cancel;
+                Close();
+            };
+
+            btnActivate = new HotLaunchButton("🚀 直接打开 (3s)", true)
+            {
+                Location = new Point(22, 78),
+                Size = new Size(236, 46)
+            };
+            btnActivate.Click += delegate
+            {
+                StopTimer();
+                Action = HotLaunchAction.Activate;
+                Close();
+            };
+
+            btnRepair = new HotLaunchButton("⚡ 重启修复", false)
+            {
+                Location = new Point(272, 78),
+                Size = new Size(186, 46)
+            };
+            btnRepair.Click += delegate
+            {
+                StopTimer();
+                Action = HotLaunchAction.Repair;
+                Close();
+            };
+
+            Controls.Add(closeButton);
+            Controls.Add(btnActivate);
+            Controls.Add(btnRepair);
+
+            MouseDown += delegate(object s, MouseEventArgs me)
+            {
+                if (me.Button == MouseButtons.Left)
+                {
+                    Program.ReleaseCapture();
+                    Program.SendMessage(Handle, 0xA1, 0x2, 0);
+                }
+            };
+
+            countdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            countdownTimer.Tick += delegate
+            {
+                remainingSeconds--;
+                if (remainingSeconds <= 0)
+                {
+                    StopTimer();
+                    Action = HotLaunchAction.Activate;
+                    Close();
+                }
+                else
+                {
+                    btnActivate.ButtonText = "🚀 直接打开 (" + remainingSeconds + "s)";
+                }
+            };
+            countdownTimer.Start();
+        }
+
+        private void StopTimer()
+        {
+            if (countdownTimer != null)
+            {
+                countdownTimer.Stop();
+                countdownTimer.Dispose();
+                countdownTimer = null;
+            }
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space)
+            {
+                StopTimer();
+                Action = HotLaunchAction.Activate;
+                Close();
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                StopTimer();
+                Action = HotLaunchAction.Cancel;
+                Close();
+            }
+            base.OnKeyDown(e);
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ClassStyle |= 0x00020000; // CS_DROPSHADOW
+                return cp;
+            }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            try
+            {
+                int val = Program.DWMWCP_ROUND;
+                Program.DwmSetWindowAttribute(Handle, Program.DWMWA_WINDOW_CORNER_PREFERENCE, ref val, sizeof(int));
+            }
+            catch { }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_PRINTCLIENT = 0x0318;
+            const int WM_PRINT = 0x0317;
+            if (m.Msg == WM_PRINTCLIENT || m.Msg == WM_PRINT)
+            {
+                using (Graphics g = Graphics.FromHdc(m.WParam))
+                {
+                    OnPaint(new PaintEventArgs(g, ClientRectangle));
+                }
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        private static GraphicsPath RoundedRectangle(Rectangle r, int radius)
+        {
+            var path = new GraphicsPath();
+            int d = radius * 2;
+            path.AddArc(r.Left, r.Top, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        private static void DrawPillBadge(Graphics g, string text, int x, int y, Color bg, Color border, Color fg)
+        {
+            using (var font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold))
+            {
+                var size = TextRenderer.MeasureText(text, font);
+                var rect = new Rectangle(x, y, size.Width + 16, 19);
+                using (var path = RoundedRectangle(rect, 9))
+                using (var brush = new SolidBrush(bg))
+                using (var pen = new Pen(border, 1F))
+                {
+                    g.FillPath(brush, path);
+                    g.DrawPath(pen, path);
+                }
+                TextRenderer.DrawText(g, text, font, rect, fg, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+
+            using (var path = RoundedRectangle(bounds, 16))
+            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(250, 252, 255), Color.FromArgb(236, 244, 252), 90F))
+            using (var border = new Pen(Color.FromArgb(205, 222, 238), 1.2F))
+            {
+                e.Graphics.FillPath(fill, path);
+                e.Graphics.DrawPath(border, path);
+            }
+
+            using (var highlight = new Pen(Color.FromArgb(140, 255, 255, 255), 1.5F))
+            {
+                e.Graphics.DrawLine(highlight, 20, 2, Width - 20, 2);
+            }
+
+            if (appIcon != null)
+            {
+                e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                e.Graphics.DrawImage(appIcon, new Rectangle(20, 18, 36, 36));
+            }
+
+            using (var fontTitle = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold))
+            {
+                TextRenderer.DrawText(e.Graphics, "Antigravity 正在运行中", fontTitle, new Point(66, 17), Color.FromArgb(16, 43, 69));
+            }
+
+            DrawPillBadge(e.Graphics, "● 已连接", 280, 19, Color.FromArgb(220, 252, 231), Color.FromArgb(134, 239, 172), Color.FromArgb(21, 128, 61));
+
+            using (var fontSubtitle = new Font("Microsoft YaHei UI", 9F))
+            {
+                TextRenderer.DrawText(e.Graphics, subtitleText, fontSubtitle, new Point(67, 44), Color.FromArgb(100, 116, 139));
+            }
         }
     }
 
