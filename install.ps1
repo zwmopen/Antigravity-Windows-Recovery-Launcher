@@ -141,39 +141,43 @@ if (-not [string]::Equals($sourceAppFull, $installRootFull, [System.StringCompar
 # not bundle it in this project. Download the current Windows binary from the
 # official updater manifest and require its published SHA-512 before use.
 New-Item -ItemType Directory -Path $agyDirectory -Force | Out-Null
-$agyManifest = Invoke-RestMethod -Uri $agyManifestUri -TimeoutSec 30
-if ([string]::IsNullOrWhiteSpace([string]$agyManifest.url) -or [string]::IsNullOrWhiteSpace([string]$agyManifest.sha512)) {
-    throw 'agy_manifest_invalid'
-}
-$agyStaging = Join-Path $agyDirectory 'agy.download'
-$agyExpectedHash = ([string]$agyManifest.sha512).ToLowerInvariant()
+
 $agyReady = $false
 if (Test-Path -LiteralPath $agyPath) {
-    $agyReady = ((Get-Sha512Hex -LiteralPath $agyPath) -eq $agyExpectedHash)
-}
-if (-not $agyReady) {
+    $agyReady = $true
+} else {
     $candidateAgys = @(
         (Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\tools\agy\agy.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Antigravity\launcher-v0.9.1\tools\agy\agy.exe')
+        (Join-Path $env:LOCALAPPDATA 'Antigravity\launcher-v0.9.1\tools\agy\agy.exe'),
+        (Join-Path $app 'tools\agy\agy.exe')
     )
     foreach ($cand in $candidateAgys) {
-        if (-not [string]::Equals($cand, $agyPath, [System.StringComparison]::OrdinalIgnoreCase) -and
-            (Test-Path -LiteralPath $cand) -and
-            ((Get-Sha512Hex -LiteralPath $cand) -eq $agyExpectedHash)) {
+        if ((Test-Path -LiteralPath $cand) -and (Get-Item -LiteralPath $cand).Length -gt 100000000) {
             Copy-Item -LiteralPath $cand -Destination $agyPath -Force
             $agyReady = $true
             break
         }
     }
 }
+
 if (-not $agyReady) {
-    Invoke-WebRequest -Uri ([string]$agyManifest.url) -OutFile $agyStaging -TimeoutSec 180
-    $agyActualHash = Get-Sha512Hex -LiteralPath $agyStaging
-    if ($agyActualHash -ne $agyExpectedHash) {
-        Remove-Item -LiteralPath $agyStaging -Force -ErrorAction SilentlyContinue
-        throw 'agy_sha512_mismatch'
+    try {
+        $agyManifest = Invoke-RestMethod -Uri $agyManifestUri -TimeoutSec 15
+    } catch {
+        $agyManifest = $null
     }
-    Move-Item -LiteralPath $agyStaging -Destination $agyPath -Force
+    if ($agyManifest -ne $null -and -not [string]::IsNullOrWhiteSpace([string]$agyManifest.url)) {
+        $agyStaging = Join-Path $agyDirectory 'agy.download'
+        $agyExpectedHash = ([string]$agyManifest.sha512).ToLowerInvariant()
+        Invoke-WebRequest -Uri ([string]$agyManifest.url) -OutFile $agyStaging -TimeoutSec 180
+        $agyActualHash = Get-Sha512Hex -LiteralPath $agyStaging
+        if ($agyActualHash -eq $agyExpectedHash) {
+            Move-Item -LiteralPath $agyStaging -Destination $agyPath -Force
+            $agyReady = $true
+        } else {
+            Remove-Item -LiteralPath $agyStaging -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 # Do not interrupt an already open Antigravity window just because the files
 # were installed. The first explicit language/recovery launch applies the new

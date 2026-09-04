@@ -505,18 +505,93 @@ internal static class AntigravityLauncher
         catch { return false; }
     }
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
     private static void ActivateExistingAntigravity()
     {
         try
         {
+            IntPtr targetHwnd = IntPtr.Zero;
             Process[] procs = Process.GetProcessesByName("Antigravity");
-            foreach (var p in procs)
+            var pids = new System.Collections.Generic.List<uint>();
+            foreach (var p in procs) pids.Add((uint)p.Id);
+
+            EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
             {
-                if (p.MainWindowHandle != IntPtr.Zero)
+                uint pid;
+                GetWindowThreadProcessId(hWnd, out pid);
+                if (pids.Contains(pid) && IsWindowVisible(hWnd))
                 {
-                    ShowWindowAsync(p.MainWindowHandle, 9); // SW_RESTORE
-                    SetForegroundWindow(p.MainWindowHandle);
-                    return;
+                    var sb = new StringBuilder(256);
+                    GetWindowText(hWnd, sb, 256);
+                    string title = sb.ToString();
+                    if (!string.IsNullOrEmpty(title) && !title.Contains("Notification") && !title.Contains("Hidden"))
+                    {
+                        targetHwnd = hWnd;
+                        return false;
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            if (targetHwnd == IntPtr.Zero)
+            {
+                foreach (var p in procs)
+                {
+                    if (p.MainWindowHandle != IntPtr.Zero)
+                    {
+                        targetHwnd = p.MainWindowHandle;
+                        break;
+                    }
+                }
+            }
+
+            if (targetHwnd != IntPtr.Zero)
+            {
+                IntPtr fgWnd = GetForegroundWindow();
+                uint dummyPid;
+                uint fgThread = GetWindowThreadProcessId(fgWnd, out dummyPid);
+                uint currentThread = GetCurrentThreadId();
+
+                if (fgThread != currentThread && fgThread != 0)
+                {
+                    AttachThreadInput(currentThread, fgThread, true);
+                }
+
+                if (IsIconic(targetHwnd))
+                {
+                    ShowWindowAsync(targetHwnd, 9); // SW_RESTORE
+                }
+                else
+                {
+                    ShowWindowAsync(targetHwnd, 5); // SW_SHOW
+                }
+
+                BringWindowToTop(targetHwnd);
+                SetForegroundWindow(targetHwnd);
+
+                if (fgThread != currentThread && fgThread != 0)
+                {
+                    AttachThreadInput(currentThread, fgThread, false);
                 }
             }
         }
@@ -529,40 +604,52 @@ internal static class AntigravityLauncher
         using (var dlg = new Form())
         {
             dlg.Text = "Antigravity 智能启动器";
-            dlg.ClientSize = new Size(460, 240);
+            dlg.ClientSize = new Size(540, 340);
             dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
             dlg.StartPosition = FormStartPosition.CenterScreen;
             dlg.MaximizeBox = false;
             dlg.MinimizeBox = false;
-            dlg.BackColor = Color.White;
+            dlg.BackColor = Color.FromArgb(215, 229, 242);
             dlg.Font = new Font("Microsoft YaHei UI", 9F);
 
             string icoPath = Path.Combine(AppDirectory, "Antigravity-Launcher.ico");
             if (File.Exists(icoPath)) { try { dlg.Icon = new Icon(icoPath); } catch { } }
 
+            var card = new GlassPanel { Left = 16, Top = 14, Width = 508, Height = 312 };
+
+            var badge = new Label
+            {
+                Text = "独立代理 127.0.0.1:17897 正常工作 · 守护中",
+                Left = 24, Top = 16, Width = 460, Height = 28,
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Color.FromArgb(220, 231, 245),
+                ForeColor = Color.FromArgb(30, 82, 160),
+                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold)
+            };
+
             var lblTitle = new Label
             {
-                Text = "💡 检测到 Antigravity 已经在正常运行中",
-                Left = 24, Top = 20, Width = 410, Height = 28,
-                Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold),
+                Text = "💡 Antigravity 已经在正常运行中",
+                Left = 24, Top = 54, Width = 460, Height = 30,
+                Font = new Font("Microsoft YaHei UI", 14F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(20, 35, 55)
             };
 
             var lblDesc = new Label
             {
-                Text = "当前代理网络工作正常，正在编写的代码不会受到任何影响。\n您可以直接进入软件，也可以根据需要选择操作：",
-                Left = 26, Top = 52, Width = 405, Height = 40,
-                ForeColor = Color.FromArgb(100, 116, 139)
+                Text = "当前代理网络工作正常，正在编写的代码不会受到任何影响。\n您可以直接进入软件，也可以根据需要进行操作：",
+                Left = 26, Top = 90, Width = 456, Height = 40,
+                ForeColor = Color.FromArgb(92, 110, 132)
             };
 
             var btnSwitch = new Button
             {
                 Text = "👉 直接进入反重力 (继续写代码)",
-                Left = 24, Top = 105, Width = 410, Height = 36,
+                Left = 24, Top = 140, Width = 460, Height = 44,
                 BackColor = Color.FromArgb(37, 99, 235),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
+                Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
             btnSwitch.FlatAppearance.BorderSize = 0;
@@ -571,39 +658,40 @@ internal static class AntigravityLauncher
             var btnPanel = new Button
             {
                 Text = "⚡ 打开节点中控台",
-                Left = 24, Top = 150, Width = 195, Height = 34,
-                BackColor = Color.FromArgb(243, 244, 246),
-                ForeColor = Color.FromArgb(31, 41, 55),
+                Left = 24, Top = 196, Width = 222, Height = 38,
+                BackColor = Color.FromArgb(243, 247, 252),
+                ForeColor = Color.FromArgb(30, 64, 175),
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft YaHei UI", 9F),
+                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
-            btnPanel.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
+            btnPanel.FlatAppearance.BorderColor = Color.FromArgb(191, 219, 254);
             btnPanel.Click += delegate { userChoice = 2; dlg.Close(); };
 
             var btnForce = new Button
             {
                 Text = "🔄 强制重新自愈检测",
-                Left = 235, Top = 150, Width = 199, Height = 34,
-                BackColor = Color.FromArgb(243, 244, 246),
+                Left = 262, Top = 196, Width = 222, Height = 38,
+                BackColor = Color.FromArgb(254, 242, 242),
                 ForeColor = Color.FromArgb(185, 28, 28),
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft YaHei UI", 9F),
+                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
-            btnForce.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
+            btnForce.FlatAppearance.BorderColor = Color.FromArgb(254, 202, 202);
             btnForce.Click += delegate { userChoice = 1; dlg.Close(); };
 
             var btnCancel = new Label
             {
-                Text = "提示：误双击请直接回车进入，或点击右上角 [X] 取消",
-                Left = 24, Top = 198, Width = 410, Height = 20,
+                Text = "误触请直接回车进入，或点击右上角 [X] / 按 Esc 取消",
+                Left = 24, Top = 248, Width = 460, Height = 22,
                 TextAlign = ContentAlignment.MiddleCenter,
-                ForeColor = Color.FromArgb(156, 163, 175),
+                ForeColor = Color.FromArgb(120, 135, 155),
                 Font = new Font("Microsoft YaHei UI", 8.5F)
             };
 
-            dlg.Controls.AddRange(new Control[] { lblTitle, lblDesc, btnSwitch, btnPanel, btnForce, btnCancel });
+            card.Controls.AddRange(new Control[] { badge, lblTitle, lblDesc, btnSwitch, btnPanel, btnForce, btnCancel });
+            dlg.Controls.Add(card);
             dlg.AcceptButton = btnSwitch;
             dlg.FormClosing += delegate(object s, FormClosingEventArgs e)
             {
@@ -619,6 +707,20 @@ internal static class AntigravityLauncher
     {
         try
         {
+            if (showPanel)
+            {
+                try
+                {
+                    EventWaitHandle evt;
+                    if (EventWaitHandle.TryOpenExisting(@"Local\AntigravityNodeTrayShowPanel", out evt))
+                    {
+                        evt.Set();
+                        evt.Dispose();
+                    }
+                }
+                catch { }
+            }
+
             string trayExe = Path.Combine(AppDirectory, "Antigravity-NodeTray.exe");
             if (!File.Exists(trayExe))
             {

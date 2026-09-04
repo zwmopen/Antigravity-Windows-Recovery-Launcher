@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -28,6 +29,7 @@ namespace AntigravityNodeTray
             singleInstanceMutex = new Mutex(true, @"Local\AntigravityNodeTraySingleInstance", out createdNew);
             if (!createdNew)
             {
+                // 已有后台实例在跑，发送跨进程事件呼出面板
                 TrayAppContext.SignalShowPanel();
                 return;
             }
@@ -45,6 +47,7 @@ namespace AntigravityNodeTray
         private System.Windows.Forms.Timer pollTimer;
         private NodeControlForm controlForm;
         private static EventWaitHandle showPanelEvent;
+        private static SynchronizationContext uiContext;
         private Icon appIcon;
 
         private int currentLat = 9999;
@@ -55,6 +58,7 @@ namespace AntigravityNodeTray
 
         public TrayAppContext(bool showPanelOnStartup = false)
         {
+            uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             LoadAppIcon();
             InitializeTray();
             InitializeNamedEventWatcher();
@@ -106,11 +110,12 @@ namespace AntigravityNodeTray
                 showPanelEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\AntigravityNodeTrayShowPanel", out createdNew);
                 ThreadPool.RegisterWaitForSingleObject(showPanelEvent, delegate
                 {
-                    if (notifyIcon != null)
+                    if (uiContext != null)
                     {
-                        var dummy = new Form();
-                        dummy.CreateControl();
-                        dummy.BeginInvoke(new Action(ShowControlPanel));
+                        uiContext.Post(delegate
+                        {
+                            ShowControlPanel();
+                        }, null);
                     }
                 }, null, -1, false);
             }
@@ -160,7 +165,7 @@ namespace AntigravityNodeTray
             if (procs == null || procs.Length == 0)
             {
                 notRunningCount++;
-                if (notRunningCount >= 4) // 60秒无 Antigravity 则自动跟随退出
+                if (notRunningCount >= 4) // 60秒无 Antigravity 则自动退出
                 {
                     ExitTray();
                     return;
@@ -287,11 +292,7 @@ namespace AntigravityNodeTray
                 controlForm.WindowState = FormWindowState.Normal;
             }
 
-            controlForm.TopMost = true;
-            controlForm.BringToFront();
-            controlForm.Activate();
-            controlForm.Focus();
-            controlForm.TopMost = false;
+            NodeControlForm.ForceForeground(controlForm.Handle);
         }
 
         private void ExitTray()
@@ -306,8 +307,82 @@ namespace AntigravityNodeTray
         }
     }
 
+    internal class GlassPanel : Panel
+    {
+        internal GlassPanel()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+        }
+
+        private static GraphicsPath RoundedRectangle(Rectangle rectangle, int radius)
+        {
+            var path = new GraphicsPath();
+            int diameter = radius * 2;
+            path.AddArc(rectangle.Left, rectangle.Top, diameter, diameter, 180, 90);
+            path.AddArc(rectangle.Right - diameter, rectangle.Top, diameter, diameter, 270, 90);
+            path.AddArc(rectangle.Right - diameter, rectangle.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(rectangle.Left, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        protected override void OnResize(EventArgs eventArgs)
+        {
+            base.OnResize(eventArgs);
+            Invalidate();
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.Clear(Color.FromArgb(215, 229, 242));
+            var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var path = RoundedRectangle(bounds, 16))
+            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(250, 252, 255), Color.FromArgb(235, 244, 252), 90F))
+            using (var border = new Pen(Color.FromArgb(235, 255, 255, 255), 1.2F))
+            {
+                e.Graphics.FillPath(fill, path);
+                e.Graphics.DrawPath(border, path);
+            }
+        }
+    }
+
     internal class NodeControlForm : Form
     {
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+        [DllImport("user32.dll")]
+        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+        [DllImport("user32.dll")]
+        private static extern bool BringWindowToTop(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+
+        public static void ForceForeground(IntPtr hWnd)
+        {
+            try
+            {
+                IntPtr fg = GetForegroundWindow();
+                uint dummy;
+                uint fgThread = GetWindowThreadProcessId(fg, out dummy);
+                uint curThread = GetCurrentThreadId();
+                if (fgThread != curThread && fgThread != 0) AttachThreadInput(curThread, fgThread, true);
+                ShowWindowAsync(hWnd, 9); // SW_RESTORE
+                ShowWindowAsync(hWnd, 5); // SW_SHOW
+                BringWindowToTop(hWnd);
+                SetForegroundWindow(hWnd);
+                if (fgThread != curThread && fgThread != 0) AttachThreadInput(curThread, fgThread, false);
+            }
+            catch { }
+        }
+
         private TrayAppContext appContext;
         private Label lblActiveTitle;
         private Label lblActiveLatency;
@@ -347,12 +422,12 @@ namespace AntigravityNodeTray
 
         private void InitializeComponent()
         {
-            Text = "Antigravity 节点中控台 (专属原生版)";
-            ClientSize = new Size(920, 640);
-            MinimumSize = new Size(820, 560);
+            Text = "Antigravity 节点中控台";
+            ClientSize = new Size(940, 650);
+            MinimumSize = new Size(840, 580);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Microsoft YaHei UI", 9F);
-            BackColor = Color.FromArgb(243, 244, 246);
+            BackColor = Color.FromArgb(215, 229, 242);
 
             FormClosing += delegate(object s, FormClosingEventArgs e)
             {
@@ -363,12 +438,19 @@ namespace AntigravityNodeTray
                 }
             };
 
+            // 顶部毛玻璃大卡片（醒目展示当前使用节点）
             var topPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 135,
-                BackColor = Color.White,
-                Padding = new Padding(22, 14, 22, 14)
+                Height = 150,
+                BackColor = Color.FromArgb(215, 229, 242),
+                Padding = new Padding(16, 12, 16, 6)
+            };
+
+            var glassCard = new GlassPanel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(20, 12, 20, 12)
             };
 
             lblActiveTitle = new Label
@@ -393,7 +475,7 @@ namespace AntigravityNodeTray
 
             lblActiveDetails = new Label
             {
-                Text = "🌐 独立出口: 正在读取…   ·   独占隧道 127.0.0.1:17897 (不修改外部 Clash 模式)",
+                Text = "🌐 独立出口: 正在读取…   ·   独占隧道 127.0.0.1:17897 (不影响外部 Clash 模式)",
                 AutoSize = true,
                 Font = new Font("Microsoft YaHei UI", 9F),
                 ForeColor = Color.FromArgb(75, 85, 99),
@@ -403,22 +485,24 @@ namespace AntigravityNodeTray
 
             lblActiveSecurity = new Label
             {
-                Text = "🛡️ 状态认证: Google 204 通畅 · 真实模型三次握手通过 · 自动保持偏好记忆",
+                Text = "🛡️ 状态认证: Google 204 通畅 · 真实模型握手正常 · 自动记忆首选节点",
                 AutoSize = true,
-                Font = new Font("Microsoft YaHei UI", 9F),
+                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(37, 99, 235),
                 Left = 22,
                 Top = 100
             };
 
-            topPanel.Controls.AddRange(new Control[] { lblActiveTitle, lblActiveLatency, lblActiveDetails, lblActiveSecurity });
+            glassCard.Controls.AddRange(new Control[] { lblActiveTitle, lblActiveLatency, lblActiveDetails, lblActiveSecurity });
+            topPanel.Controls.Add(glassCard);
 
+            // 地区筛选栏
             filterPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 40,
-                BackColor = Color.FromArgb(243, 244, 246),
-                Padding = new Padding(22, 8, 22, 4)
+                Height = 42,
+                BackColor = Color.FromArgb(215, 229, 242),
+                Padding = new Padding(20, 6, 20, 4)
             };
 
             string[] regions = new string[] { "全部", "🇺🇸 美国", "🇯🇵 日本", "🇸🇬 新加坡", "🇭🇰 香港", "🇰🇷 韩国" };
@@ -431,6 +515,7 @@ namespace AntigravityNodeTray
                     Checked = (r == "全部"),
                     Margin = new Padding(0, 0, 16, 0),
                     Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
+                    ForeColor = Color.FromArgb(30, 50, 75),
                     Cursor = Cursors.Hand
                 };
                 string captured = r.Replace("🇺🇸 ", "").Replace("🇯🇵 ", "").Replace("🇸🇬 ", "").Replace("🇭🇰 ", "").Replace("🇰🇷 ", "");
@@ -445,20 +530,21 @@ namespace AntigravityNodeTray
                 filterPanel.Controls.Add(rb);
             }
 
+            // 底部操作栏
             var bottomPanel = new Panel
             {
                 Dock = DockStyle.Bottom,
                 Height = 65,
-                BackColor = Color.White,
-                Padding = new Padding(22, 12, 22, 12)
+                BackColor = Color.FromArgb(215, 229, 242),
+                Padding = new Padding(16, 10, 16, 12)
             };
 
             btnTestAll = new Button
             {
                 Text = "⚡ 一键全量并发测速",
                 Size = new Size(170, 38),
-                Left = 22,
-                Top = 14,
+                Left = 20,
+                Top = 12,
                 BackColor = Color.FromArgb(37, 99, 235),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -473,7 +559,7 @@ namespace AntigravityNodeTray
                 Text = "👉 一键应用并切换",
                 Size = new Size(170, 38),
                 Left = 205,
-                Top = 14,
+                Top = 12,
                 BackColor = Color.FromArgb(22, 163, 74),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -487,13 +573,15 @@ namespace AntigravityNodeTray
             {
                 Text = "💡 双击下方任意节点直接无感热切换，反重力写代码无需重启！",
                 AutoSize = true,
-                ForeColor = Color.FromArgb(100, 116, 139),
+                ForeColor = Color.FromArgb(70, 90, 115),
+                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
                 Left = 390,
-                Top = 24
+                Top = 22
             };
 
             bottomPanel.Controls.AddRange(new Control[] { btnTestAll, btnApplySelected, lblFeedback });
 
+            // 节点列表 ListView
             listNodes = new ListView
             {
                 Dock = DockStyle.Fill,
@@ -501,11 +589,12 @@ namespace AntigravityNodeTray
                 FullRowSelect = true,
                 GridLines = true,
                 HeaderStyle = ColumnHeaderStyle.Nonclickable,
-                Font = new Font("Microsoft YaHei UI", 9F)
+                Font = new Font("Microsoft YaHei UI", 9F),
+                BorderStyle = BorderStyle.FixedSingle
             };
             listNodes.Columns.Add("序号", 55);
             listNodes.Columns.Add("地区", 80);
-            listNodes.Columns.Add("节点名称 (当前正在使用的专线已高亮置顶)", 340);
+            listNodes.Columns.Add("节点名称 (当前正在使用的专线已高亮置顶)", 350);
             listNodes.Columns.Add("TCP 延迟", 95);
             listNodes.Columns.Add("状态", 100);
             listNodes.Columns.Add("订阅来源", 110);
@@ -513,7 +602,16 @@ namespace AntigravityNodeTray
 
             listNodes.DoubleClick += delegate { SwitchSelectedNode(); };
 
-            Controls.Add(listNodes);
+            // 用一个带有外边距的 Panel 包裹 ListView，增强视觉呼吸感
+            var listContainer = new Panel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(16, 4, 16, 6),
+                BackColor = Color.FromArgb(215, 229, 242)
+            };
+            listContainer.Controls.Add(listNodes);
+
+            Controls.Add(listContainer);
             Controls.Add(filterPanel);
             Controls.Add(bottomPanel);
             Controls.Add(topPanel);
@@ -665,7 +763,7 @@ namespace AntigravityNodeTray
 
                 if (n.IsCurrent)
                 {
-                    item.BackColor = Color.FromArgb(240, 253, 244);
+                    item.BackColor = Color.FromArgb(236, 253, 245); // 优雅浅绿
                     item.ForeColor = Color.FromArgb(21, 128, 61);
                     item.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
                 }
