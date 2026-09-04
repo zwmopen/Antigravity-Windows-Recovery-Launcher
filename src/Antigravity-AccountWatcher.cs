@@ -255,7 +255,8 @@ internal static class AntigravityAccountWatcher
             }
             using (var stream = new FileStream(LanguageServerLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             {
-                if (position < 0 || position > stream.Length) position = 0;
+                if (position < 0) position = 0;
+                if (position > stream.Length) position = stream.Length;
                 stream.Seek(position, SeekOrigin.Begin);
                 using (var reader = new StreamReader(stream))
                 {

@@ -127,6 +127,7 @@ namespace AntigravityLauncher
 
             if (capsule.ExitCode == 0)
             {
+                ActivateExistingAntigravity();
                 EnsureWatcherRunning();
             }
 
@@ -199,6 +200,21 @@ namespace AntigravityLauncher
                 return procs != null && procs.Length > 0;
             }
             catch { return false; }
+        }
+
+        internal static bool IsSupervisorRunning()
+        {
+            try
+            {
+                using (var m = Mutex.OpenExisting(SupervisorMutexName))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         // ==========================================
@@ -574,7 +590,27 @@ namespace AntigravityLauncher
                 }
             }
             Color tc = isHovered ? Color.FromArgb(220, 38, 38) : Color.FromArgb(148, 163, 184);
-            TextRenderer.DrawText(e.Graphics, "✕", new Font("Segoe UI", 8.5F, FontStyle.Bold), rect, tc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            using (var fontX = new Font("Segoe UI", 9F, FontStyle.Bold))
+            using (var brushX = new SolidBrush(tc))
+            using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            {
+                e.Graphics.DrawString("✕", fontX, brushX, rect, sf);
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_PRINTCLIENT = 0x0318;
+            const int WM_PRINT = 0x0317;
+            if (m.Msg == WM_PRINTCLIENT || m.Msg == WM_PRINT)
+            {
+                using (Graphics g = Graphics.FromHdc(m.WParam))
+                {
+                    OnPaint(new PaintEventArgs(g, ClientRectangle));
+                }
+                return;
+            }
+            base.WndProc(ref m);
         }
     }
 
@@ -588,16 +624,14 @@ namespace AntigravityLauncher
     // ==========================================
     internal sealed class HotLaunchButton : Control
     {
-        private bool isPrimary;
         private bool isHovered = false;
         private bool isPressed = false;
         private string buttonText;
 
-        internal HotLaunchButton(string text, bool primary)
+        internal HotLaunchButton(string text)
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
             BackColor = Color.Transparent;
-            isPrimary = primary;
             buttonText = text;
             Cursor = Cursors.Hand;
         }
@@ -618,42 +652,50 @@ namespace AntigravityLauncher
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             var r = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (var path = RoundedRectangle(r, 10))
+            using (var path = RoundedRectangle(r, 12))
             {
-                if (isPrimary)
+                Color c1 = isHovered ? Color.FromArgb(255, 255, 255) : Color.FromArgb(246, 250, 255);
+                Color c2 = isHovered ? Color.FromArgb(240, 248, 255) : Color.FromArgb(232, 242, 254);
+                Color border = isHovered ? Color.FromArgb(96, 165, 250) : Color.FromArgb(186, 215, 248);
+                Color textColor = isHovered ? Color.FromArgb(30, 64, 175) : Color.FromArgb(29, 78, 216);
+
+                if (isPressed)
                 {
-                    Color c1 = isHovered ? Color.FromArgb(59, 130, 246) : Color.FromArgb(37, 99, 235);
-                    Color c2 = isHovered ? Color.FromArgb(37, 99, 235) : Color.FromArgb(29, 78, 216);
-                    if (isPressed) { c1 = Color.FromArgb(29, 78, 216); c2 = Color.FromArgb(30, 64, 175); }
-                    using (var fill = new LinearGradientBrush(r, c1, c2, 90F))
-                    using (var pen = new Pen(Color.FromArgb(96, 165, 250), 1F))
-                    {
-                        e.Graphics.FillPath(fill, path);
-                        e.Graphics.DrawPath(pen, path);
-                    }
-                    using (var font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold))
-                    {
-                        TextRenderer.DrawText(e.Graphics, buttonText, font, r, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                    }
+                    c1 = Color.FromArgb(219, 234, 254);
+                    c2 = Color.FromArgb(191, 219, 254);
+                    border = Color.FromArgb(59, 130, 246);
+                    textColor = Color.FromArgb(30, 58, 138);
                 }
-                else
+
+                using (var fill = new LinearGradientBrush(r, c1, c2, 90F))
+                using (var pen = new Pen(border, 1.2F))
                 {
-                    Color bg = isHovered ? Color.FromArgb(254, 242, 242) : Color.FromArgb(241, 245, 249);
-                    Color border = isHovered ? Color.FromArgb(248, 113, 113) : Color.FromArgb(203, 213, 225);
-                    Color tc = isHovered ? Color.FromArgb(220, 38, 38) : Color.FromArgb(71, 85, 105);
-                    if (isPressed) { bg = Color.FromArgb(254, 226, 226); }
-                    using (var fill = new SolidBrush(bg))
-                    using (var pen = new Pen(border, 1F))
-                    {
-                        e.Graphics.FillPath(fill, path);
-                        e.Graphics.DrawPath(pen, path);
-                    }
-                    using (var font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold))
-                    {
-                        TextRenderer.DrawText(e.Graphics, buttonText, font, r, tc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                    }
+                    e.Graphics.FillPath(fill, path);
+                    e.Graphics.DrawPath(pen, path);
+                }
+
+                using (var font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold))
+                using (var brush = new SolidBrush(textColor))
+                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                {
+                    e.Graphics.DrawString(buttonText, font, brush, r, sf);
                 }
             }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_PRINTCLIENT = 0x0318;
+            const int WM_PRINT = 0x0317;
+            if (m.Msg == WM_PRINTCLIENT || m.Msg == WM_PRINT)
+            {
+                using (Graphics g = Graphics.FromHdc(m.WParam))
+                {
+                    OnPaint(new PaintEventArgs(g, ClientRectangle));
+                }
+                return;
+            }
+            base.WndProc(ref m);
         }
 
         private static GraphicsPath RoundedRectangle(Rectangle r, int radius)
@@ -681,7 +723,9 @@ namespace AntigravityLauncher
         private HotLaunchButton btnRepair;
         private CapsuleCloseButton closeButton;
         private Image appIcon = null;
-        private string subtitleText = "当前网络通道正常 · 可直接切回或重新优选自愈";
+        private string egressBadgeText = "美国专线就绪";
+        private string statusBadgeText = "● 运行中";
+        private string subtitleText = "当前专线连接畅通 · 可秒切代码窗口，或一键重启自愈";
 
         internal AntigravityHotLaunchChoiceForm()
         {
@@ -705,11 +749,11 @@ namespace AntigravityLauncher
                     var mEgress = System.Text.RegularExpressions.Regex.Match(json, "\"egress_country\"\\s*:\\s*\"([^\"]+)\"");
                     string egress = mEgress.Success ? mEgress.Groups[1].Value.Trim().ToUpperInvariant() : "";
                     if (egress == "US")
-                        subtitleText = "当前专线：🇺🇸 美国出口 · Google & AI 通路正常";
+                        egressBadgeText = "美国专线就绪";
                     else if (egress == "JP")
-                        subtitleText = "当前专线：🇯🇵 日本出口 · Google & AI 通路正常";
+                        egressBadgeText = "日本专线就绪";
                     else if (!string.IsNullOrEmpty(egress))
-                        subtitleText = "当前专线：" + egress + " 出口 · 独立私有通道正常";
+                        egressBadgeText = egress + " 专线就绪";
                 }
             }
             catch { }
@@ -726,10 +770,10 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnActivate = new HotLaunchButton("🚀 直接打开 (3s)", true)
+            btnActivate = new HotLaunchButton("进入代码窗口 (3s)")
             {
-                Location = new Point(22, 78),
-                Size = new Size(236, 46)
+                Location = new Point(20, 78),
+                Size = new Size(212, 46)
             };
             btnActivate.Click += delegate
             {
@@ -738,10 +782,10 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnRepair = new HotLaunchButton("⚡ 重启修复", false)
+            btnRepair = new HotLaunchButton("重启专线修复")
             {
-                Location = new Point(272, 78),
-                Size = new Size(186, 46)
+                Location = new Point(248, 78),
+                Size = new Size(212, 46)
             };
             btnRepair.Click += delegate
             {
@@ -775,7 +819,7 @@ namespace AntigravityLauncher
                 }
                 else
                 {
-                    btnActivate.ButtonText = "🚀 直接打开 (" + remainingSeconds + "s)";
+                    btnActivate.ButtonText = "进入代码窗口 (" + remainingSeconds + "s)";
                 }
             };
             countdownTimer.Start();
@@ -858,18 +902,20 @@ namespace AntigravityLauncher
 
         private static void DrawPillBadge(Graphics g, string text, int x, int y, Color bg, Color border, Color fg)
         {
-            using (var font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold))
+            using (var font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold))
             {
-                var size = TextRenderer.MeasureText(text, font);
-                var rect = new Rectangle(x, y, size.Width + 16, 19);
-                using (var path = RoundedRectangle(rect, 9))
+                var size = g.MeasureString(text, font);
+                var rect = new Rectangle(x, y, (int)size.Width + 14, 20);
+                using (var path = RoundedRectangle(rect, 10))
                 using (var brush = new SolidBrush(bg))
                 using (var pen = new Pen(border, 1F))
+                using (var fgBrush = new SolidBrush(fg))
+                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                 {
                     g.FillPath(brush, path);
                     g.DrawPath(pen, path);
+                    g.DrawString(text, font, fgBrush, rect, sf);
                 }
-                TextRenderer.DrawText(g, text, font, rect, fg, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
 
@@ -881,14 +927,14 @@ namespace AntigravityLauncher
             var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
 
             using (var path = RoundedRectangle(bounds, 16))
-            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(250, 252, 255), Color.FromArgb(236, 244, 252), 90F))
-            using (var border = new Pen(Color.FromArgb(205, 222, 238), 1.2F))
+            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(252, 254, 255), Color.FromArgb(238, 246, 254), 90F))
+            using (var border = new Pen(Color.FromArgb(200, 220, 240), 1.2F))
             {
                 e.Graphics.FillPath(fill, path);
                 e.Graphics.DrawPath(border, path);
             }
 
-            using (var highlight = new Pen(Color.FromArgb(140, 255, 255, 255), 1.5F))
+            using (var highlight = new Pen(Color.FromArgb(180, 255, 255, 255), 1.5F))
             {
                 e.Graphics.DrawLine(highlight, 20, 2, Width - 20, 2);
             }
@@ -896,19 +942,28 @@ namespace AntigravityLauncher
             if (appIcon != null)
             {
                 e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                e.Graphics.DrawImage(appIcon, new Rectangle(20, 18, 36, 36));
+                e.Graphics.DrawImage(appIcon, new Rectangle(20, 16, 36, 36));
             }
 
             using (var fontTitle = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold))
+            using (var titleBrush = new SolidBrush(Color.FromArgb(15, 35, 60)))
             {
-                TextRenderer.DrawText(e.Graphics, "Antigravity 正在运行中", fontTitle, new Point(66, 17), Color.FromArgb(16, 43, 69));
+                e.Graphics.DrawString("Antigravity", fontTitle, titleBrush, new PointF(64, 15));
             }
 
-            DrawPillBadge(e.Graphics, "● 已连接", 280, 19, Color.FromArgb(220, 252, 231), Color.FromArgb(134, 239, 172), Color.FromArgb(21, 128, 61));
+            int currentBadgeX = 168;
+            using (var fontBadge = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold))
+            {
+                var size1 = e.Graphics.MeasureString(egressBadgeText, fontBadge);
+                DrawPillBadge(e.Graphics, egressBadgeText, currentBadgeX, 16, Color.FromArgb(224, 238, 255), Color.FromArgb(147, 197, 253), Color.FromArgb(29, 78, 216));
+                currentBadgeX += (int)size1.Width + 14 + 8;
+                DrawPillBadge(e.Graphics, statusBadgeText, currentBadgeX, 16, Color.FromArgb(220, 252, 231), Color.FromArgb(134, 239, 172), Color.FromArgb(21, 128, 61));
+            }
 
             using (var fontSubtitle = new Font("Microsoft YaHei UI", 9F))
+            using (var subBrush = new SolidBrush(Color.FromArgb(71, 85, 105)))
             {
-                TextRenderer.DrawText(e.Graphics, subtitleText, fontSubtitle, new Point(67, 44), Color.FromArgb(100, 116, 139));
+                e.Graphics.DrawString(subtitleText, fontSubtitle, subBrush, new PointF(66, 44));
             }
         }
     }
@@ -1084,6 +1139,7 @@ namespace AntigravityLauncher
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             ShowInTaskbar = true;
+            TopMost = true;
             BackColor = Color.FromArgb(236, 244, 252);
             DoubleBuffered = true;
 
@@ -1124,6 +1180,12 @@ namespace AntigravityLauncher
 
             Shown += delegate
             {
+                try
+                {
+                    BringToFront();
+                    Activate();
+                }
+                catch { }
                 Task.Run(delegate { RunLaunchTask(); });
             };
         }
@@ -1135,6 +1197,142 @@ namespace AntigravityLauncher
                 Program.ReleaseCapture();
                 Program.SendMessage(Handle, 0xA1, 0x2, 0);
             }
+        }
+
+        private void OnLaunchSuccess()
+        {
+            BeginInvoke(new Action(delegate
+            {
+                lineStatusText = "已锁定高速专线 [美日低延迟]";
+                linePassed = true;
+                googleStatusText = "连通正常 · 授权畅通";
+                googlePassed = true;
+                modelStatusText = "Gemini 编程模型验证通过";
+                modelPassed = true;
+                footerStatusText = "🚀 通路已全部就绪，正在打开 Antigravity…";
+                progressBar.ProgressValue = 100;
+                Invalidate();
+            }));
+            Thread.Sleep(380);
+            Invoke(new Action(delegate
+            {
+                ExitCode = 0;
+                Close();
+            }));
+        }
+
+        private bool WaitForExistingSupervisor(long logStartOffset, ref int displayedProgress)
+        {
+            DateTime waitStart = DateTime.Now;
+            DateTime waitStartUtc = DateTime.UtcNow;
+            int animationTick = 0;
+
+            BeginInvoke(new Action(delegate
+            {
+                lineStatusText = "专线自愈中 · 已接管检测进度…";
+                footerStatusText = "⚡ 检测到专线自愈正在进行，正在无缝接管…";
+                Invalidate();
+            }));
+
+            while ((DateTime.Now - waitStart).TotalSeconds < 55)
+            {
+                if (userCancelled) { ExitCode = 0; return true; }
+
+                string logChunk = ReadLogSince(logStartOffset);
+                CapsuleState state = ParseLogState(logChunk);
+
+                animationTick++;
+                if (displayedProgress < state.TargetProgress)
+                {
+                    displayedProgress += Math.Max(1, (state.TargetProgress - displayedProgress + 2) / 3);
+                }
+                else if (displayedProgress < Math.Max(state.Ceiling, 92) && animationTick % 2 == 0)
+                {
+                    displayedProgress++;
+                }
+
+                int prog = displayedProgress;
+                BeginInvoke(new Action(delegate
+                {
+                    if (!string.IsNullOrEmpty(state.LineText))
+                    {
+                        lineStatusText = state.LineText;
+                        linePassed = state.LinePassed;
+                    }
+                    if (!string.IsNullOrEmpty(state.GoogleText))
+                    {
+                        googleStatusText = state.GoogleText;
+                        googlePassed = state.GooglePassed;
+                    }
+                    if (!string.IsNullOrEmpty(state.ModelText))
+                    {
+                        modelStatusText = state.ModelText;
+                        modelPassed = state.ModelPassed;
+                    }
+                    if (!string.IsNullOrEmpty(state.FooterText)) footerStatusText = state.FooterText;
+                    progressBar.ProgressValue = prog;
+                    Invalidate();
+                }));
+
+                // 检查是否有新鲜就绪标记
+                if (logChunk.Contains("antigravity_live_seamless_attached") || logChunk.Contains("antigravity_ready"))
+                {
+                    OnLaunchSuccess();
+                    return true;
+                }
+
+                if (File.Exists(Program.SupervisorStatePath))
+                {
+                    try
+                    {
+                        var fi = new FileInfo(Program.SupervisorStatePath);
+                        if (fi.LastWriteTimeUtc >= waitStartUtc.AddSeconds(-2))
+                        {
+                            string json = File.ReadAllText(Program.SupervisorStatePath);
+                            if (json.Contains("\"status\":  \"ready\"") || json.Contains("\"status\":\"ready\""))
+                            {
+                                OnLaunchSuccess();
+                                return true;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                // 检查前序 Supervisor 互斥锁是否已释放
+                if (!Program.IsSupervisorRunning())
+                {
+                    Thread.Sleep(500);
+                    string finalChunk = ReadLogSince(logStartOffset);
+                    if (finalChunk.Contains("antigravity_live_seamless_attached") || finalChunk.Contains("antigravity_ready"))
+                    {
+                        OnLaunchSuccess();
+                        return true;
+                    }
+                    if (File.Exists(Program.SupervisorStatePath))
+                    {
+                        try
+                        {
+                            var fi = new FileInfo(Program.SupervisorStatePath);
+                            if (fi.LastWriteTimeUtc >= waitStartUtc.AddSeconds(-2))
+                            {
+                                string json = File.ReadAllText(Program.SupervisorStatePath);
+                                if (json.Contains("\"status\":  \"ready\"") || json.Contains("\"status\":\"ready\""))
+                                {
+                                    OnLaunchSuccess();
+                                    return true;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                    return false;
+                }
+
+                Thread.Sleep(200);
+            }
+
+            return false;
         }
 
         private void RunLaunchTask()
@@ -1153,6 +1351,17 @@ namespace AntigravityLauncher
             long logStartOffset = GetLogLength();
             int displayedProgress = 3;
             int animationTick = 0;
+
+            // 1. 若检测到后台或已有 Supervisor 正在运行，直接进入平滑接管监控模式
+            if (Program.IsSupervisorRunning())
+            {
+                Program.TraceLog("Supervisor mutex is currently held. Entering takeover monitor.");
+                if (WaitForExistingSupervisor(logStartOffset, ref displayedProgress))
+                {
+                    return;
+                }
+                logStartOffset = GetLogLength();
+            }
 
             var psi = new ProcessStartInfo
             {
@@ -1231,36 +1440,32 @@ namespace AntigravityLauncher
 
                 if (result == 0)
                 {
-                    BeginInvoke(new Action(delegate
-                    {
-                        lineStatusText = "已锁定高速专线 [美日低延迟]";
-                        linePassed = true;
-                        googleStatusText = "连通正常 · 授权畅通";
-                        googlePassed = true;
-                        modelStatusText = "Gemini 编程模型验证通过";
-                        modelPassed = true;
-                        footerStatusText = "🚀 通路已全部就绪，正在打开 Antigravity…";
-                        progressBar.ProgressValue = 100;
-                        Invalidate();
-                    }));
-                    Thread.Sleep(380);
-                    Invoke(new Action(delegate
-                    {
-                        ExitCode = 0;
-                        Close();
-                    }));
+                    OnLaunchSuccess();
+                    return;
                 }
-                else
+                else if (result == 4)
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(Program.LauncherLogPath));
-                    File.AppendAllText(Program.LauncherLogPath, DateTime.Now.ToString("o") + " exit=" + result + Environment.NewLine + output + Environment.NewLine + error + Environment.NewLine);
-                    Invoke(new Action(delegate
+                    Program.TraceLog("Supervisor reported exit=4 (busy). Entering takeover monitor.");
+                    if (WaitForExistingSupervisor(logStartOffset, ref displayedProgress))
                     {
-                        ExitCode = result;
-                        Close();
-                        MessageBox.Show(TranslateFailure(finalLog, error.ToString()), "Antigravity 启动提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    }));
+                        return;
+                    }
+                    if (!Program.IsSupervisorRunning())
+                    {
+                        Program.TraceLog("Retrying supervisor start after exit=4 wait...");
+                        RunLaunchTask();
+                        return;
+                    }
                 }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(Program.LauncherLogPath));
+                File.AppendAllText(Program.LauncherLogPath, DateTime.Now.ToString("o") + " exit=" + result + Environment.NewLine + output + Environment.NewLine + error + Environment.NewLine);
+                Invoke(new Action(delegate
+                {
+                    ExitCode = result;
+                    Close();
+                    MessageBox.Show(TranslateFailure(finalLog, error.ToString()), "Antigravity 启动提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }));
             }
         }
 

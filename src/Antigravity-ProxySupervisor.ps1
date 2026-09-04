@@ -53,7 +53,7 @@ $MaxSuccessHistory = 128
 $MaxCandidateCount = 96
 $StopProcessTimeoutSeconds = 20
 $ProbeTimeoutMs = 3000
-$ModelProbeTimeoutSeconds = 5
+$ModelProbeTimeoutSeconds = 30
 $ModelProbePrompt = 'Reply with exactly OK. Do not call tools or modify files.'
 $ModelProbeConfirmationCount = 1
 $ConnectivityAttemptCount = if ($RecoveryReason -eq 'Startup') { 2 } else { 2 }
@@ -2257,63 +2257,84 @@ $script:LastRunStatus = 'ready'
 $script:RunFinishedAt = Get-Date
 Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
 Sync-AntigravityProxySetting
-Stop-ExistingAntigravity
 
-$previousEnvironment = @{}
-foreach ($name in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')) {
-    $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-}
+$normalizedAntigravityPath = [System.IO.Path]::GetFullPath($AntigravityPath)
+$existingAntigravity = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -ieq 'Antigravity.exe' -and
+    -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
+    [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedAntigravityPath
+})
+$hasExistingAntigravity = $existingAntigravity.Count -gt 0
+$forceRestartRequested = ($RecoveryReason -eq 'UserRequestedRepair' -or $RecoveryReason -eq 'Force')
 
-try {
-    $env:HTTP_PROXY = $ProxyUrl
-    $env:HTTPS_PROXY = $ProxyUrl
-    $env:ALL_PROXY = $ProxyUrl
-    $env:NO_PROXY = 'localhost,127.0.0.1,::1'
+$antigravityPid = 0
+$readiness = @{ LanguageServerPid = 0; ProxyConnections = 0 }
+$localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
+$localizationMode = 'disabled'
 
-    $arguments = @(
-        '--proxy-server=' + $ProxyUrl,
-        '--proxy-bypass-list=localhost;127.0.0.1;[::1]'
-    )
-    $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
-    $localizationMode = 'disabled'
-    if ($localizationEnabled) {
-        if (Test-Path -LiteralPath $LocalizationLoaderPath) {
-            # Electron currently exposes DevToolsActivePort but ignores the
-            # Chromium --load-extension switch. The loader is the primary
-            # path for this client; the switch remains a future/fallback hook.
-            $arguments += '--antigravity-localization-loader'
-            $localizationMode = 'cdp-loader'
-        } elseif (Test-Path -LiteralPath $LocalizationManifestPath) {
-            $arguments += '--load-extension="' + $LocalizationExtensionPath + '"'
-            $localizationMode = 'chromium-extension'
+if ($hasExistingAntigravity -and -not $forceRestartRequested) {
+    # Live seamless takeover: Mihomo listener on 17897 is already refreshed with the best node.
+    # Existing Antigravity editor remains completely uninterrupted.
+    $antigravityPid = [int]$existingAntigravity[0].ProcessId
+    Write-SafeLog -Event 'antigravity_live_seamless_attached' -Values @{ pid = $antigravityPid; port = $Port; recovery = $RecoveryReason }
+} else {
+    Stop-ExistingAntigravity
+
+    $previousEnvironment = @{}
+    foreach ($name in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')) {
+        $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
+
+    try {
+        $env:HTTP_PROXY = $ProxyUrl
+        $env:HTTPS_PROXY = $ProxyUrl
+        $env:ALL_PROXY = $ProxyUrl
+        $env:NO_PROXY = 'localhost,127.0.0.1,::1'
+
+        $arguments = @(
+            '--proxy-server=' + $ProxyUrl,
+            '--proxy-bypass-list=localhost;127.0.0.1;[::1]'
+        )
+        if ($localizationEnabled) {
+            if (Test-Path -LiteralPath $LocalizationLoaderPath) {
+                # Electron currently exposes DevToolsActivePort but ignores the
+                # Chromium --load-extension switch. The loader is the primary
+                # path for this client; the switch remains a future/fallback hook.
+                $arguments += '--antigravity-localization-loader'
+                $localizationMode = 'cdp-loader'
+            } elseif (Test-Path -LiteralPath $LocalizationManifestPath) {
+                $arguments += '--load-extension="' + $LocalizationExtensionPath + '"'
+                $localizationMode = 'chromium-extension'
+            } else {
+                Stop-WithMessage -Event 'localization_extension_missing'
+            }
+            Write-SafeLog -Event ('localization_' + $localizationMode + '_selected')
         } else {
-            Stop-WithMessage -Event 'localization_extension_missing'
+            Write-SafeLog -Event 'localization_extension_disabled'
         }
-        Write-SafeLog -Event ('localization_' + $localizationMode + '_selected')
-    } else {
-        Write-SafeLog -Event 'localization_extension_disabled'
+        # Installation deliberately leaves the currently open app alone. Once a
+        # launcher invocation has applied the selected language, the watcher may
+        # enforce that choice on later runtime drift checks.
+        Remove-Item -LiteralPath $LocalizationPendingMarkerPath -Force -ErrorAction SilentlyContinue
+        $launchTime = Get-Date
+        $antigravity = Start-Process -FilePath $AntigravityPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $AntigravityPath) -PassThru
+        $antigravityPid = [int]$antigravity.Id
+        Write-SafeLog -Event 'antigravity_started' -Values @{ pid = $antigravityPid; port = $Port }
+    } finally {
+        Restore-ProcessEnvironment -Previous $previousEnvironment
     }
-    # Installation deliberately leaves the currently open app alone. Once a
-    # launcher invocation has applied the selected language, the watcher may
-    # enforce that choice on later runtime drift checks.
-    Remove-Item -LiteralPath $LocalizationPendingMarkerPath -Force -ErrorAction SilentlyContinue
-    $launchTime = Get-Date
-    $antigravity = Start-Process -FilePath $AntigravityPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $AntigravityPath) -PassThru
-    Write-SafeLog -Event 'antigravity_started' -Values @{ pid = $antigravity.Id; port = $Port }
-} finally {
-    Restore-ProcessEnvironment -Previous $previousEnvironment
-}
 
-$readiness = Wait-AntigravityReady -MainPid $antigravity.Id -LaunchTime $launchTime
+    $readiness = Wait-AntigravityReady -MainPid $antigravityPid -LaunchTime $launchTime
 
-if ($localizationEnabled -and $localizationMode -eq 'cdp-loader') {
-    $loader = Start-Process -FilePath $LocalizationLoaderPath -WorkingDirectory $ScriptRoot -WindowStyle Hidden -Wait -PassThru
-    if ($loader.ExitCode -ne 0) {
-        Write-SafeLog -Event 'localization_loader_failed'
-        Stop-ExistingAntigravity
-        Stop-WithMessage -Event 'localization_loader_failed'
+    if ($localizationEnabled -and $localizationMode -eq 'cdp-loader') {
+        $loader = Start-Process -FilePath $LocalizationLoaderPath -WorkingDirectory $ScriptRoot -WindowStyle Hidden -Wait -PassThru
+        if ($loader.ExitCode -ne 0) {
+            Write-SafeLog -Event 'localization_loader_failed'
+            Stop-ExistingAntigravity
+            Stop-WithMessage -Event 'localization_loader_failed'
+        }
+        Write-SafeLog -Event 'localization_loader_succeeded'
     }
-    Write-SafeLog -Event 'localization_loader_succeeded'
 }
 
 $state = [ordered]@{
@@ -2342,7 +2363,7 @@ $state = [ordered]@{
     real_model_probe = 'passed'
     localization_enabled = $localizationEnabled
     localization_mode = $localizationMode
-    antigravity_pid = [int]$antigravity.Id
+    antigravity_pid = $antigravityPid
     language_server_pid = $readiness.LanguageServerPid
     language_proxy_connections = $readiness.ProxyConnections
     subscription_report = $SubscriptionReportPath
@@ -2354,7 +2375,7 @@ $script:LastOAuthStatus = [int]$connectivity.OAuthStatus
 $script:LastEgressCountry = [string]$egressCountry
 $script:LastModelProbeState = 'passed'
 $script:LocalizationMode = [string]$localizationMode
-$script:LaunchedAntigravityPid = [int]$antigravity.Id
+$script:LaunchedAntigravityPid = [int]$antigravityPid
 $script:LaunchedLanguageServerPid = [int]$readiness.LanguageServerPid
 $script:LaunchedProxyConnections = [int]$readiness.ProxyConnections
 $state | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
