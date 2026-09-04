@@ -17,7 +17,7 @@ Antigravity 恢复启动器正式迎来 **1.0.0 正式版**！
 
 ### 3. 热启动极简双态胶囊卡片 (Hot Launch Capsule Card)
 * **情境自感知**：当 Antigravity 已在后台运行时，双击桌面图标不再盲目拉起新进程或强制重启，而是弹出一张精致、轻量的微型卡片；
-* **3 秒无感回归**：左侧提供 **`进入代码窗口 (3s)`** 倒计时按钮，倒计时结束或点击后秒级置顶编辑器窗口；右侧提供 **`⚡ 切换最优专线`**，无需重启软件即可一键重排最优网络节点。
+* **3 秒无感回归与极速救急**：左侧提供 **`进入代码窗口 (3s)`** 倒计时按钮，倒计时结束或点击后秒级置顶编辑器窗口；右侧提供 **`⚡ 一键重启修复`**，不仅支持平时一键重排最优网络专线，更在遇顽疾时支持一键彻底重置 Socket 连接池与坏节点冷却隔离。
 
 ### 4. 多客户端订阅自发现与绝对解耦 (Zero-Config Multi-Client Radar)
 * **订阅与安装路径彻底解耦**：无论 Clash Verge Rev、Mihomo Party 安装在 C 盘、D 盘还是任何非标目录，启动器均穿透标准 `%APPDATA%` 自动读取订阅索引与节点缓存，真正实现“用户只需导入订阅，其它一概无需操心”；
@@ -43,10 +43,11 @@ Antigravity 恢复启动器正式迎来 **1.0.0 正式版**！
 
 ## 🧪 自动化测试与质量验收
 
-本次版本经过 6 套核心测试体系严格检验，测试覆盖率 100% 全绿：
+本次版本经过 7 套核心测试体系严格检验，测试覆盖率 100% 全绿：
 * ✅ `tests/candidate-cap-fairness.test.ps1`: 候选池公平截断与来源多样性测试通过
 * ✅ `tests/supervisor-state-contract.test.ps1`: 17897 沙盒状态机与契约测试通过
 * ✅ `tests/run-failover-policy-tests.ps1`: 无感热切换与故障转移策略测试通过
 * ✅ `tests/run-account-watcher-tests.ps1` (14 项): 账户守卫防误杀与防回绕全量安全测试通过
 * ✅ `tests/launcher-ui.test.ps1`: GDI+ 现代胶囊卡片渲染与高 DPI 适配测试通过
+* ✅ `tests/installer-contract.test.ps1`: 安装向导契约与快捷方式安装验证通过
 * ✅ `tests/localization-extension.test.js`: 首帧微任务同步直译与 React 保护测试通过
