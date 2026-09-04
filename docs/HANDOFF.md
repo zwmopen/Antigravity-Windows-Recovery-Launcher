@@ -53,6 +53,7 @@
 
 ## 测试和当前验收
 
+- 2026-09-05 01:46–01:51：在不切换账号、不重启客户端、不改变 7897 的前提下，通过稳定目录安装链的 `agy.exe` 经 17897 执行了一次官方最小真实生成。请求超过 90 秒未形成结构化结果，随后仅结束了该次 `agy.exe` 探针进程（PID 33520）；探针日志保留 1 个 `streamGenerateContent`/`ResponseID` 传输标记和 HTTP 200 痕迹，但没有 `status=SUCCESS`、精确 `response=OK` 或 `finishReason`，也没有新的地区限制 400。该次验收判定为未通过，当前新错误类型归为 `model_transport`/流完成卡住，不能把 ResponseID 传输标记冒充模型成功。结束探针后 Antigravity、language server、Watcher、17897 与 7897 均保持原运行链；实时 `fixed-upstream.json` 为独立 JP 上游，不能沿用旧描述推断其正在转发 7897。
 - 2026-09-04 22:15–22:20：v1.0.0 完整实机运行与健康自检全部通过。
   - 自动化测试：全部 7 套测试（故障转移 31 候选策略、AccountWatcher 14 项策略、候选容量公平性、监督器状态契约、启动器 UI、安装器契约、中文扩展）100% PASS。
   - 实时专线链路：17897 探针真实验证 Google generate_204 返回 204 OK，generativelanguage 与 oauth2 端点均通畅可达（404），出口 IP 实测为美国洛杉矶纯正专线（`172.96.161.31`，ReliableSite.Net LLC）。
@@ -127,6 +128,7 @@
 
 ## 当前状态和下一步
 
+- 2026-09-05 现场复核：源码仓库 HEAD 为 `ee088fe2324f5e332ebe3f0cf1e37b3ef026de7f`、源码 `VERSION` 为 1.0.0，而稳定安装目录启动器文件版本仍为 0.9.1；源码尚未据此视为已部署。当前真实模型门禁未通过，后续应围绕 `model_transport` 的流式完成卡住继续取证，不得用旧 `supervisor-state.json` 的 `ready`/`real_model_probe=passed` 或单个 ResponseID 代替新成功验收。
 - 状态：源码 0.9.1 已完成候选索引过滤、跨来源统计、失败状态和候选容量修复；本地安装运行版仍待 `build.ps1` + `install.ps1` 更新后验收。Setup.exe/ZIP 继续由远端 CI 构建；在本地真实门禁和隔离证据完成前，不把 0.9.1 标记为可用。
 - 私有仓库：`https://github.com/zwmopen/antigravity-windows-recovery-launcher-private`。
 - 公开仓库：`https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher`；当前稳定 Release：`v0.9.0`，本轮目标为 `v0.9.1`。
