@@ -1,4 +1,4 @@
-﻿# Antigravity 智能启动器 · 成品界面展示
+# Antigravity 智能启动器 · 成品界面展示
 
 本目录收录 Antigravity 智能启动器在真实 Windows 运行环境下的高保真界面与关键交互形态。
 
@@ -12,13 +12,7 @@
 ---
 
 ## 2. 冷启动极速核验胶囊 (Cold Launch Verification Capsule)
-当 Antigravity 未启动时，双击桌面图标呼出，微秒级多维评分匹配最优专线，执行 Google 204 网络握手与真实 Gemini 探针。
+当 Antigravity 未启动时，双击桌面图标呼出，微秒级多维评分匹配最优专线，执行 Google 204 网络握手与真实 Gemini 探针，成功后自动隐入后台。
 
 ![冷启动微型核验卡片](cold_launch_capsule.png)
 
----
-
-## 3. 节点中控台全景可视化管理 (Node Control Dashboard)
-全量专线并发测速、毫秒级延迟排序与一键可视化手动切换，支持日本/美国专线智能分类。
-
-![节点中控台面板](node_tray_dashboard.png)
