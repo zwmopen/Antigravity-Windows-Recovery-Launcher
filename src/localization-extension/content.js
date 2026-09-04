@@ -80,6 +80,16 @@
     return typeof location !== 'undefined' && /(?:^|[?&])settingsOpen=true(?:&|$)/i.test(location.search || '');
   }
 
+  function isInstantUiNode(node) {
+    if (!node) return false;
+    var el = node.nodeType === 1 ? node : node.parentElement;
+    if (!el || isProtectedTextElement(el)) return false;
+    if (closest(el, '[role="dialog"], [role="menu"], [aria-modal="true"], [data-testid*="settings" i], [class*="modal" i], [class*="settings" i], [data-testid^="settings-nav-item-"]')) {
+      return true;
+    }
+    return isSettingsSurface(el) || isUiTextElement(el);
+  }
+
   function shouldTranslateTextNode(node) {
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.parentElement) return false;
     if (!isProtectedTextElement(node.parentElement)) return true;
@@ -212,11 +222,24 @@
       if (applying) return;
       records.forEach(function (record) {
         if (record.type === 'attributes' || record.type === 'characterData') {
-          requestFlush(record.target);
+          if (isInstantUiNode(record.target)) {
+            applying = true;
+            try { translateSubtree(record.target); }
+            finally { applying = false; }
+          } else {
+            requestFlush(record.target);
+          }
           return;
         }
         for (var i = 0; i < record.addedNodes.length; i += 1) {
-          requestFlush(record.addedNodes[i]);
+          var added = record.addedNodes[i];
+          if (isInstantUiNode(added)) {
+            applying = true;
+            try { translateSubtree(added); }
+            finally { applying = false; }
+          } else {
+            requestFlush(added);
+          }
         }
       });
     });
@@ -229,7 +252,12 @@
       attributeFilter: core.ATTRIBUTES
     });
 
-    requestFlush(document.body || document.documentElement);
+    applying = true;
+    try {
+      translateSubtree(document.body || document.documentElement);
+    } finally {
+      applying = false;
+    }
     document.documentElement.setAttribute('data-antigravity-zhcn', core.VERSION);
   }
 
