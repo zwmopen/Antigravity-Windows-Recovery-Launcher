@@ -30,10 +30,14 @@ if ($runningWatchers.Count -gt 0) {
 }
 $iconSource = Join-Path $source 'Antigravity-Launcher.ico'
 $iconRelease = Join-Path $release 'Antigravity-Launcher.ico'
+$compilerIcon = Join-Path $env:TEMP 'Antigravity-Launcher-build.ico'
 if (Test-Path -LiteralPath $iconSource) {
     Copy-Item -LiteralPath $iconSource -Destination $iconRelease -Force
+    # The legacy .NET Framework compiler mis-parses /win32icon when the source
+    # path contains non-ASCII characters. Compile from an ASCII temp path.
+    Copy-Item -LiteralPath $iconSource -Destination $compilerIcon -Force
 }
-$iconArg = if (Test-Path -LiteralPath $iconSource) { "/win32icon:`"$iconSource`"" } else { "" }
+$iconArg = if (Test-Path -LiteralPath $compilerIcon) { "/win32icon:$compilerIcon" } else { "" }
 
 & $csc /nologo /target:winexe /optimize+ $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $launcherOutput) $launcherSource
 if ($LASTEXITCODE -ne 0) { throw 'launcher_build_failed' }
@@ -43,8 +47,10 @@ if ($LASTEXITCODE -ne 0) { throw 'watcher_build_failed' }
 if ($LASTEXITCODE -ne 0) { throw 'localization_loader_build_failed' }
 $trayOutput = Join-Path $release 'Antigravity-NodeTray.exe'
 $traySource = Join-Path $source 'Antigravity-NodeTray.cs'
-& $csc /nologo /target:winexe /optimize+ $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $trayOutput) $traySource
-if ($LASTEXITCODE -ne 0) { throw 'nodetray_build_failed' }
+if (Test-Path -LiteralPath $traySource) {
+    & $csc /nologo /target:winexe /optimize+ $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $trayOutput) $traySource
+    if ($LASTEXITCODE -ne 0) { throw 'nodetray_build_failed' }
+}
 Copy-Item -LiteralPath (Join-Path $source 'Antigravity-ProxySupervisor.ps1') -Destination (Join-Path $release 'Antigravity-ProxySupervisor.ps1') -Force
 foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd')) {
     Copy-Item -LiteralPath (Join-Path $source $helper) -Destination (Join-Path $release $helper) -Force

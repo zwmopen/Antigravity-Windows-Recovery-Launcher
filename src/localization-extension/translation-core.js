@@ -1495,6 +1495,263 @@
     "Open Editor Settings",
     "打开编辑器设置"
   ]
+  ,
+  [
+    "Enable inline actions for background tasks",
+    "为后台任务启用浮动卡片"
+  ]  ,
+  [
+    "Show a floating notification card when background tasks require review or input.",
+    "当后台任务需要审核或输入时显示浮动通知卡片。"
+  ]  ,
+  [
+    "Inline Actions feedback",
+    "浮动通知卡片反馈"
+  ]  ,
+  [
+    "Background task requires your approval",
+    "后台任务需要您的审批"
+  ]  ,
+  [
+    "Background task requires your input",
+    "后台任务需要您的输入"
+  ]  ,
+  [
+    "Allow execution in background",
+    "允许在后台执行"
+  ]  ,
+  [
+    "Approve command and continue",
+    "批准命令并继续"
+  ]  ,
+  [
+    "Deny command and pause",
+    "拒绝命令并暂停"
+  ]  ,
+  [
+    "Grant permissions for this task",
+    "为此任务授予权限"
+  ]  ,
+  [
+    "Run in background mode",
+    "在后台模式运行"
+  ]  ,
+  [
+    "Bring task to foreground",
+    "将任务置于前台"
+  ]  ,
+  [
+    "Task completed in background",
+    "后台任务已完成"
+  ]  ,
+  [
+    "Task failed in background",
+    "后台任务失败"
+  ]  ,
+  [
+    "Use AI credits when model quota is exhausted",
+    "当模型配额耗尽时使用 AI 积分"
+  ]  ,
+  [
+    "Remaining AI Credits",
+    "剩余 AI 积分"
+  ]  ,
+  [
+    "Monthly Quota Reset",
+    "每月配额重置"
+  ]  ,
+  [
+    "Quota usage breakdown",
+    "配额用量明细"
+  ]  ,
+  [
+    "Auto-refill credits",
+    "自动充值积分"
+  ]  ,
+  [
+    "Credit balance low",
+    "积分余额不足"
+  ]  ,
+  [
+    "Manage billing and subscription",
+    "管理账单与订阅"
+  ]  ,
+  [
+    "Billing details",
+    "账单详情"
+  ]  ,
+  [
+    "Current billing cycle",
+    "当前账单周期"
+  ]  ,
+  [
+    "Model usage limit reached",
+    "已达到模型使用上限"
+  ]  ,
+  [
+    "Rate limit exceeded. Please try again later.",
+    "超出速率限制，请稍后重试。"
+  ]  ,
+  [
+    "Credits remaining",
+    "剩余积分"
+  ]  ,
+  [
+    "Out of model quota",
+    "模型配额已耗尽"
+  ]  ,
+  [
+    "Model quota refreshed",
+    "模型配额已刷新"
+  ]  ,
+  [
+    "Reconnecting to server...",
+    "正在重新连接到服务器…"
+  ]  ,
+  [
+    "Disconnected from server. Attempting to reconnect...",
+    "已与服务器断开连接。正在尝试重连…"
+  ]  ,
+  [
+    "Connection restored.",
+    "连接已恢复。"
+  ]  ,
+  [
+    "Network connection lost. Please check your network settings.",
+    "网络连接丢失，请检查您的网络设置。"
+  ]  ,
+  [
+    "Failed to reach Google Generative AI endpoint.",
+    "无法访问 Google 生成式 AI 服务端点。"
+  ]  ,
+  [
+    "Deep thinking in progress...",
+    "正在深度思考中…"
+  ]  ,
+  [
+    "Searching codebase...",
+    "正在检索代码库…"
+  ]  ,
+  [
+    "Reading files...",
+    "正在读取文件…"
+  ]  ,
+  [
+    "Analyzing directory structure...",
+    "正在分析目录结构…"
+  ]  ,
+  [
+    "Executing terminal command...",
+    "正在执行终端命令…"
+  ]  ,
+  [
+    "Generating solution...",
+    "正在生成解决方案…"
+  ]  ,
+  [
+    "Verifying implementation...",
+    "正在验证实现…"
+  ]  ,
+  [
+    "Agent stopped by user",
+    "智能体已被用户终止"
+  ]  ,
+  [
+    "Agent paused by user",
+    "智能体已被用户暂停"
+  ]  ,
+  [
+    "Resume execution",
+    "继续执行"
+  ]  ,
+  [
+    "Cancel execution",
+    "取消执行"
+  ]  ,
+  [
+    "Workspace indexed successfully",
+    "工作区索引构建成功"
+  ]  ,
+  [
+    "Indexing workspace...",
+    "正在为工作区构建索引…"
+  ]  ,
+  [
+    "Re-index workspace",
+    "重新构建工作区索引"
+  ]  ,
+  [
+    "Artifact created",
+    "方案产物已生成"
+  ]  ,
+  [
+    "Artifact updated",
+    "方案产物已更新"
+  ]  ,
+  [
+    "View artifact",
+    "查看方案产物"
+  ]  ,
+  [
+    "Diff view",
+    "代码差异对比"
+  ]  ,
+  [
+    "Accept changes",
+    "接受变更"
+  ]  ,
+  [
+    "Reject changes",
+    "拒绝变更"
+  ]  ,
+  [
+    "Keep current changes",
+    "保留当前变更"
+  ]  ,
+  [
+    "Revert all changes",
+    "还原所有更改"
+  ]  ,
+  [
+    "Apply this change",
+    "应用此变更"
+  ]  ,
+  [
+    "Discard this change",
+    "放弃此变更"
+  ]  ,
+  [
+    "Show inline diff",
+    "显示行内差异"
+  ]  ,
+  [
+    "Show side-by-side diff",
+    "显示双栏差异"
+  ]  ,
+  [
+    "Review proposed modifications before applying",
+    "在应用前审查提议的修改"
+  ]  ,
+  [
+    "Allow once",
+    "仅允许一次"
+  ]  ,
+  [
+    "Always allow for this session",
+    "本次会话始终允许"
+  ]  ,
+  [
+    "Always deny",
+    "始终拒绝"
+  ]  ,
+  [
+    "View terminal output",
+    "查看终端输出"
+  ]  ,
+  [
+    "Clear terminal output",
+    "清空终端输出"
+  ]
 ]);
 
   var UI_PAIRS = Object.freeze([

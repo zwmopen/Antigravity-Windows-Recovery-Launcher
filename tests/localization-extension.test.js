@@ -64,7 +64,13 @@ const requiredTranslations = {
   'request-review': '执行前请求确认',
   'proceed-in-sandbox': '在沙箱中执行',
   'Planning Mode': '规划模式',
-  'Waiting for user input': '等待用户输入'
+  'Waiting for user input': '等待用户输入',
+  'Enable AI Credit Overages': '启用 AI 积分超额使用',
+  'Quota usage breakdown': '配额用量明细',
+  'Deep thinking in progress...': '正在深度思考中…',
+  'Artifact created': '方案产物已生成',
+  'Accept changes': '接受变更',
+  'Revert all changes': '还原所有更改'
 };
 
 for (const [source, target] of Object.entries(requiredTranslations)) {

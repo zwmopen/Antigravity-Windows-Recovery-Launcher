@@ -876,6 +876,7 @@ namespace AntigravityLauncher
         private Label lblActiveLatency;
         private Label lblActiveDetails;
         private Label lblActiveSecurity;
+        private Label lblTunnelBadge;
         private Label lblFeedback;
         private ListView listNodes;
         private Button btnTestAll;
@@ -889,6 +890,9 @@ namespace AntigravityLauncher
         private List<NodeItem> allNodes = new List<NodeItem>();
         private string currentConnectedServer = "";
         private int currentConnectedPort = 0;
+        private string currentNodeName = "";
+        private string currentEgressCountry = "";
+        private bool switchInProgress = false;
 
         public NodeControlForm(LauncherAppContext context)
         {
@@ -929,7 +933,7 @@ namespace AntigravityLauncher
                 }
             };
 
-            // 1. 顶部毛玻璃大卡片 (展示当前在用专线与快速置顶按钮)
+            // 1. 顶部状态只使用 supervisor-state.json 的当前真实链路。
             var topPanel = new Panel
             {
                 Dock = DockStyle.Top,
@@ -944,9 +948,9 @@ namespace AntigravityLauncher
                 Padding = new Padding(22, 12, 22, 12)
             };
 
-            var badge = new Label
+            lblTunnelBadge = new Label
             {
-                Text = "🟢 状态正常 · 独立隧道 127.0.0.1:17897 守护中",
+                Text = "正在读取独立隧道 127.0.0.1:17897…",
                 Left = 20,
                 Top = 14,
                 Width = 360,
@@ -959,7 +963,7 @@ namespace AntigravityLauncher
 
             lblActiveTitle = new Label
             {
-                Text = "💡 [当前专线] 正在检测当前连接节点…",
+                Text = "正在检测当前连接节点…",
                 AutoSize = false,
                 Left = 20,
                 Top = 42,
@@ -981,7 +985,7 @@ namespace AntigravityLauncher
 
             lblActiveDetails = new Label
             {
-                Text = "🌐 独立出口: 正在读取…   ·   独占隧道 127.0.0.1:17897 (不影响外部 Clash 模式)",
+                Text = "最终出口正在读取 · 独立隧道 17897 · Clash 7897 保持不变",
                 AutoSize = true,
                 Font = new Font("Microsoft YaHei UI", 9F),
                 ForeColor = Color.FromArgb(75, 85, 99),
@@ -991,7 +995,7 @@ namespace AntigravityLauncher
 
             lblActiveSecurity = new Label
             {
-                Text = "🛡️ 状态认证: Google 204 通畅 · 真实模型握手正常 · 自动记忆首选节点",
+                Text = "等待读取 Google、OAuth 与真实模型门禁结果",
                 AutoSize = true,
                 Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(37, 99, 235),
@@ -1002,7 +1006,7 @@ namespace AntigravityLauncher
             // 核心功能按钮 1：切换至代码窗口
             btnSwitchCode = new Button
             {
-                Text = "👉 切换至代码窗口",
+                Text = "唤醒 Antigravity",
                 Left = 580,
                 Top = 38,
                 Width = 200,
@@ -1032,24 +1036,24 @@ namespace AntigravityLauncher
             // 核心功能按钮 2：强制重新自愈检测
             btnReheal = new Button
             {
-                Text = "🔄 重新自愈检测",
+                Text = "异常自愈",
                 Left = 580,
                 Top = 90,
                 Width = 140,
                 Height = 32,
-                BackColor = Color.FromArgb(254, 242, 242),
-                ForeColor = Color.FromArgb(185, 28, 28),
+                BackColor = Color.FromArgb(238, 244, 251),
+                ForeColor = Color.FromArgb(55, 78, 105),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
-            btnReheal.FlatAppearance.BorderColor = Color.FromArgb(254, 202, 202);
+            btnReheal.FlatAppearance.BorderColor = Color.FromArgb(185, 204, 226);
             btnReheal.Click += delegate
             {
                 appContext.TriggerRehealWorkflow();
             };
 
-            glassCard.Controls.AddRange(new Control[] { badge, lblActiveTitle, lblActiveLatency, lblActiveDetails, lblActiveSecurity, btnSwitchCode, btnReheal });
+            glassCard.Controls.AddRange(new Control[] { lblTunnelBadge, lblActiveTitle, lblActiveLatency, lblActiveDetails, lblActiveSecurity, btnSwitchCode, btnReheal });
             topPanel.Controls.Add(glassCard);
 
             // 0. 预先初始化节点列表 ListView，防止单选按钮事件触发空引用
@@ -1058,18 +1062,18 @@ namespace AntigravityLauncher
                 Dock = DockStyle.Fill,
                 View = View.Details,
                 FullRowSelect = true,
-                GridLines = true,
+                GridLines = false,
+                HideSelection = false,
+                MultiSelect = false,
                 HeaderStyle = ColumnHeaderStyle.Nonclickable,
                 Font = new Font("Microsoft YaHei UI", 9F),
                 BorderStyle = BorderStyle.FixedSingle
             };
-            listNodes.Columns.Add("序号", 55);
-            listNodes.Columns.Add("地区", 80);
-            listNodes.Columns.Add("节点名称 (当前正在使用的专线已高亮置顶)", 350);
-            listNodes.Columns.Add("TCP 延迟", 95);
-            listNodes.Columns.Add("状态", 100);
-            listNodes.Columns.Add("订阅来源", 110);
-            listNodes.Columns.Add("服务器地址", 130);
+            listNodes.Columns.Add("地区", 110);
+            listNodes.Columns.Add("专线名称", 470);
+            listNodes.Columns.Add("实时延迟", 120);
+            listNodes.Columns.Add("状态", 150);
+            listNodes.SelectedIndexChanged += delegate { UpdateSelectedAction(); };
             listNodes.DoubleClick += delegate { SwitchSelectedNode(); };
 
             // 2. 地区筛选栏
@@ -1081,7 +1085,7 @@ namespace AntigravityLauncher
                 Padding = new Padding(20, 6, 20, 4)
             };
 
-            string[] regions = new string[] { "全部", "🇺🇸 美国", "🇯🇵 日本", "🇸🇬 新加坡", "🇭🇰 香港", "🇰🇷 韩国" };
+            string[] regions = new string[] { "全部", "🇺🇸 美国", "🇯🇵 日本" };
             foreach (var r in regions)
             {
                 var rb = new RadioButton
@@ -1094,7 +1098,7 @@ namespace AntigravityLauncher
                     ForeColor = Color.FromArgb(30, 50, 75),
                     Cursor = Cursors.Hand
                 };
-                string captured = r.Replace("🇺🇸 ", "").Replace("🇯🇵 ", "").Replace("🇸🇬 ", "").Replace("🇭🇰 ", "").Replace("🇰🇷 ", "");
+                string captured = r.Replace("🇺🇸 ", "").Replace("🇯🇵 ", "");
                 rb.CheckedChanged += delegate
                 {
                     if (rb.Checked && listNodes != null)
@@ -1132,15 +1136,16 @@ namespace AntigravityLauncher
 
             btnApplySelected = new Button
             {
-                Text = "👉 一键应用并切换",
-                Size = new Size(160, 38),
+                Text = "请先选择一条专线",
+                Size = new Size(230, 38),
                 Left = 205,
                 Top = 12,
-                BackColor = Color.FromArgb(22, 163, 74),
+                BackColor = Color.FromArgb(166, 181, 199),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
-                Cursor = Cursors.Hand
+                Cursor = Cursors.Default,
+                Enabled = false
             };
             btnApplySelected.FlatAppearance.BorderSize = 0;
             btnApplySelected.Click += delegate { SwitchSelectedNode(); };
@@ -1149,7 +1154,7 @@ namespace AntigravityLauncher
             {
                 Text = "❌ 隐藏到托盘",
                 Size = new Size(120, 38),
-                Left = 380,
+                Left = 450,
                 Top = 12,
                 BackColor = Color.FromArgb(243, 247, 252),
                 ForeColor = Color.FromArgb(70, 90, 115),
@@ -1162,11 +1167,11 @@ namespace AntigravityLauncher
 
             lblFeedback = new Label
             {
-                Text = "💡 双击下方任意节点直接无感热切换，反重力写代码无需重启！",
+                Text = "单击选择；双击会先跑真实门禁，通过后安全切换",
                 AutoSize = true,
                 ForeColor = Color.FromArgb(70, 90, 115),
                 Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                Left = 520,
+                Left = 585,
                 Top = 22
             };
 
@@ -1197,11 +1202,13 @@ namespace AntigravityLauncher
 
         public void UpdateCurrentActiveView(string name, string egress, string server, int lat)
         {
-            lblActiveTitle.Text = "💡 [当前专线] " + name;
-            string latStr = lat < 9000 ? (lat + " ms (极速)") : "已连通";
-            lblActiveLatency.Text = "⚡ 实时延迟: " + latStr;
+            string safeName = string.IsNullOrWhiteSpace(name) ? "当前链路待确认" : name;
+            string country = string.IsNullOrWhiteSpace(egress) ? "--" : egress;
+            lblActiveTitle.Text = "💡 [当前专线] " + safeName;
+            string latStr = lat < 9000 ? (lat + " ms") : "检测中";
+            lblActiveLatency.Text = "⚡ 实时延迟: " + latStr + (lat < 220 ? " (极速)" : (lat < 500 ? " (良好)" : ""));
             lblActiveLatency.ForeColor = (lat < 220) ? Color.FromArgb(22, 163, 74) : ((lat < 500) ? Color.FromArgb(217, 119, 6) : Color.FromArgb(220, 38, 38));
-            lblActiveDetails.Text = "🌐 独立出口: [" + egress + "] " + server + "   ·   独占隧道 127.0.0.1:17897 (不影响外部 Clash)";
+            lblActiveDetails.Text = "🌐 独立出口: [" + country + "] · 独占隧道 127.0.0.1:17897 (不影响外部 Clash)";
         }
 
         private void LoadNodesAndState()
@@ -1222,12 +1229,14 @@ namespace AntigravityLauncher
                 {
                     if (activeNode != null)
                     {
-                        UpdateCurrentActiveView(activeNode.DisplayName, activeNode.Country, activeNode.Server + ":" + activeNode.Port, activeNode.Latency);
+                        currentNodeName = activeNode.Name;
+                        UpdateCurrentActiveView(activeNode.DisplayName, currentEgressCountry, activeNode.Server, activeNode.Latency);
                     }
-                    else if (!string.IsNullOrEmpty(currentConnectedServer))
+                    else if (!string.IsNullOrEmpty(currentNodeName))
                     {
-                        UpdateCurrentActiveView("当前已连通专线 (" + currentConnectedServer + ")", "专线", currentConnectedServer + ":" + currentConnectedPort, 120);
+                        UpdateCurrentActiveView(currentNodeName, currentEgressCountry, "", 9999);
                     }
+                    UpdateGateStatus();
                     FilterListView();
                     StartSpeedTest();
                 }));
@@ -1238,6 +1247,15 @@ namespace AntigravityLauncher
         {
             try
             {
+                string stateFile = Program.SupervisorStatePath;
+                if (File.Exists(stateFile))
+                {
+                    string stateText = File.ReadAllText(stateFile, Encoding.UTF8);
+                    var nameMatch = Regex.Match(stateText, @"""target_node""\s*:\s*""([^""]+)""");
+                    var countryMatch = Regex.Match(stateText, @"""egress_country""\s*:\s*""([^""]+)""");
+                    if (nameMatch.Success) currentNodeName = Regex.Unescape(nameMatch.Groups[1].Value);
+                    if (countryMatch.Success) currentEgressCountry = countryMatch.Groups[1].Value;
+                }
                 string proxyRoot = Program.RuntimeDirectory;
                 string configFile = Path.Combine(proxyRoot, "mihomo-antigravity.yaml");
                 if (File.Exists(configFile))
@@ -1294,12 +1312,18 @@ namespace AntigravityLauncher
                                     string country = "其他";
                                     string flag = "🌐 ";
                                     if (Regex.IsMatch(name, @"日本|Japan|Tokyo|JP", RegexOptions.IgnoreCase)) { country = "日本"; flag = "🇯🇵 "; }
-                                    else if (Regex.IsMatch(name, @"新加坡|Singapore|SG", RegexOptions.IgnoreCase)) { country = "新加坡"; flag = "🇸🇬 "; }
                                     else if (Regex.IsMatch(name, @"美国|USA|United States|US", RegexOptions.IgnoreCase)) { country = "美国"; flag = "🇺🇸 "; }
-                                    else if (Regex.IsMatch(name, @"香港|Hong Kong|HK", RegexOptions.IgnoreCase)) { country = "香港"; flag = "🇭🇰 "; }
-                                    else if (Regex.IsMatch(name, @"韩国|Korea|KR", RegexOptions.IgnoreCase)) { country = "韩国"; flag = "🇰🇷 "; }
+                                    if (country == "其他") continue;
 
-                                    bool isCurrent = (!string.IsNullOrEmpty(currentConnectedServer) && srv == currentConnectedServer && port == currentConnectedPort);
+                                    bool isCurrent = false;
+                                    if (!string.IsNullOrEmpty(currentConnectedServer) && srv == currentConnectedServer && port == currentConnectedPort)
+                                    {
+                                        isCurrent = true;
+                                    }
+                                    else if (string.IsNullOrEmpty(currentConnectedServer) && !string.IsNullOrEmpty(currentNodeName) && string.Equals(name, currentNodeName, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        isCurrent = true;
+                                    }
 
                                     result.Add(new NodeItem
                                     {
@@ -1326,15 +1350,20 @@ namespace AntigravityLauncher
         private void FilterListView()
         {
             if (listNodes == null) return;
-            listNodes.Items.Clear();
-            int idx = 1;
-
-            var displayList = new List<NodeItem>();
-            foreach (var n in allNodes)
+            string selectedKey = "";
+            if (listNodes.SelectedItems.Count > 0)
             {
-                if (n.IsCurrent) displayList.Insert(0, n);
-                else displayList.Add(n);
+                var selected = listNodes.SelectedItems[0].Tag as NodeItem;
+                if (selected != null) selectedKey = selected.Name + "|" + selected.Server + "|" + selected.Port;
             }
+            listNodes.Items.Clear();
+            var displayList = new List<NodeItem>(allNodes);
+            displayList.Sort(delegate(NodeItem a, NodeItem b)
+            {
+                int latencyOrder = a.Latency.CompareTo(b.Latency);
+                if (latencyOrder != 0) return latencyOrder;
+                return string.Compare(a.DisplayName, b.DisplayName, StringComparison.CurrentCultureIgnoreCase);
+            });
 
             foreach (var n in displayList)
             {
@@ -1342,16 +1371,13 @@ namespace AntigravityLauncher
                     continue;
 
                 string latStr = n.Latency < 9000 ? (n.Latency + "ms") : "--";
-                string status = n.IsCurrent ? "🟢 当前在用" : (n.Latency < 200 ? "⚡ 极速" : (n.Latency < 500 ? "★ 良好" : "超时/未测"));
-                string titleText = n.IsCurrent ? ("🟢 [当前使用] " + n.DisplayName) : n.DisplayName;
+                string status = n.IsCurrent ? "🟢 当前在用" : (n.Latency < 200 ? "⚡ 极速" : (n.Latency < 500 ? "★ 良好" : "超时 / 未测"));
+                string titleText = n.IsCurrent ? (n.DisplayName + "   [当前连接]") : n.DisplayName;
 
-                var item = new ListViewItem(idx.ToString());
-                item.SubItems.Add(n.Country);
+                var item = new ListViewItem(n.Country);
                 item.SubItems.Add(titleText);
                 item.SubItems.Add(latStr);
                 item.SubItems.Add(status);
-                item.SubItems.Add(n.Subscription);
-                item.SubItems.Add(n.Server + ":" + n.Port);
                 item.Tag = n;
 
                 if (n.IsCurrent)
@@ -1366,7 +1392,50 @@ namespace AntigravityLauncher
                 else item.ForeColor = Color.FromArgb(156, 163, 175);
 
                 listNodes.Items.Add(item);
-                idx++;
+                if ((n.Name + "|" + n.Server + "|" + n.Port) == selectedKey) item.Selected = true;
+            }
+            UpdateSelectedAction();
+        }
+
+        private void UpdateSelectedAction()
+        {
+            if (btnApplySelected == null) return;
+            bool hasSelection = listNodes != null && listNodes.SelectedItems.Count == 1 && !switchInProgress;
+            btnApplySelected.Enabled = hasSelection;
+            btnApplySelected.Cursor = hasSelection ? Cursors.Hand : Cursors.Default;
+            btnApplySelected.BackColor = hasSelection ? Color.FromArgb(22, 163, 74) : Color.FromArgb(166, 181, 199);
+            if (!hasSelection)
+            {
+                btnApplySelected.Text = switchInProgress ? "正在验证并切换…" : "请单击选择下方专线";
+                return;
+            }
+            var node = listNodes.SelectedItems[0].Tag as NodeItem;
+            btnApplySelected.Text = node == null ? "请单击选择下方专线" : ("👉 切换至 " + TrimButtonText(node.Name, 18));
+        }
+
+        private static string TrimButtonText(string value, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length <= maxLength) return value;
+            return value.Substring(0, maxLength - 1) + "…";
+        }
+
+        private void UpdateGateStatus()
+        {
+            string state = "";
+            try { if (File.Exists(Program.SupervisorStatePath)) state = File.ReadAllText(Program.SupervisorStatePath, Encoding.UTF8); } catch { }
+            bool ready = Regex.IsMatch(state, @"""status""\s*:\s*""ready""", RegexOptions.IgnoreCase);
+            bool modelPassed = Regex.IsMatch(state, @"""real_model_probe""\s*:\s*""passed""", RegexOptions.IgnoreCase);
+            if (ready && modelPassed)
+            {
+                lblTunnelBadge.Text = "🟢 独立隧道 127.0.0.1:17897 正常";
+                lblActiveSecurity.Text = "✅ Google / OAuth / 真实模型 OK 已验证";
+                lblActiveSecurity.ForeColor = Color.FromArgb(21, 128, 61);
+            }
+            else
+            {
+                lblTunnelBadge.Text = "🟠 当前链路尚未完成真实模型验证";
+                lblActiveSecurity.Text = "需要运行异常自愈并通过真实模型门禁后才能确认可用";
+                lblActiveSecurity.ForeColor = Color.FromArgb(180, 83, 9);
             }
         }
 
@@ -1410,12 +1479,7 @@ namespace AntigravityLauncher
                 }
                 Task.WaitAll(tasks.ToArray());
 
-                allNodes.Sort((a, b) =>
-                {
-                    if (a.IsCurrent) return -1;
-                    if (b.IsCurrent) return 1;
-                    return a.Latency.CompareTo(b.Latency);
-                });
+                allNodes.Sort(delegate(NodeItem a, NodeItem b) { return a.Latency.CompareTo(b.Latency); });
 
                 NodeItem activeNode = null;
                 foreach (var n in allNodes)
@@ -1428,180 +1492,90 @@ namespace AntigravityLauncher
                     FilterListView();
                     if (activeNode != null)
                     {
-                        UpdateCurrentActiveView(activeNode.DisplayName, activeNode.Country, activeNode.Server + ":" + activeNode.Port, activeNode.Latency);
+                        UpdateCurrentActiveView(activeNode.DisplayName, currentEgressCountry, "", activeNode.Latency);
                     }
                     btnTestAll.Enabled = true;
                     btnTestAll.Text = "⚡ 一键全量并发测速";
-                    lblFeedback.Text = "测速完成！所有优质低延迟专线已置顶。双击即可一键热切换！";
+                    lblFeedback.Text = "测速完成，已严格按延迟从低到高排列。";
                 }));
             });
         }
 
-        private void SwitchSelectedNode()
+        private async void SwitchSelectedNode()
         {
-            if (listNodes.SelectedItems.Count == 0)
-            {
-                MessageBox.Show("请先在列表中点击选择一个节点！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
+            if (switchInProgress || listNodes.SelectedItems.Count == 0) return;
 
             var selectedNode = listNodes.SelectedItems[0].Tag as NodeItem;
             if (selectedNode == null) return;
 
-            lblFeedback.Text = "正在热切换私有代理内核…";
+            switchInProgress = true;
+            UpdateSelectedAction();
+            lblFeedback.Text = "正在验证 " + selectedNode.Name + "：固定出口、Google、OAuth 与真实模型…";
             lblFeedback.ForeColor = Color.FromArgb(37, 99, 235);
-            Application.DoEvents();
-
-            bool ok = HotSwitchNode(selectedNode);
+            bool ok = await Task.Run(delegate { return RunVerifiedSwitch(selectedNode); });
+            switchInProgress = false;
             if (ok)
             {
                 foreach (var n in allNodes) n.IsCurrent = (n == selectedNode);
                 currentConnectedServer = selectedNode.Server;
                 currentConnectedPort = selectedNode.Port;
+                currentNodeName = selectedNode.Name;
 
-                lblFeedback.Text = "切换成功！已热切换至: " + selectedNode.Name;
+                ReadCurrentProxyConfig();
+                lblFeedback.Text = "✅ 真实模型验证通过，已安全切换至 " + selectedNode.Name;
                 lblFeedback.ForeColor = Color.FromArgb(21, 128, 61);
 
-                UpdateCurrentActiveView(selectedNode.DisplayName, selectedNode.Country, selectedNode.Server + ":" + selectedNode.Port, selectedNode.Latency);
+                UpdateCurrentActiveView(selectedNode.DisplayName, currentEgressCountry, "", selectedNode.Latency);
+                UpdateGateStatus();
                 FilterListView();
                 appContext.UpdateStatus();
-
-                MessageBox.Show("已成功热切换到专线：\n" + selectedNode.Name + "\n\nAntigravity 反重力软件完全无需重启，已立即走新专线！", "切换成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             else
             {
-                lblFeedback.Text = "切换失败，请重试！";
+                lblFeedback.Text = "未切换：该线路没有通过完整门禁，原链路保持不变。";
                 lblFeedback.ForeColor = Color.FromArgb(220, 38, 38);
-                MessageBox.Show("切换失败，未能重新启动私有代理内核。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateGateStatus();
+                UpdateSelectedAction();
             }
         }
 
-        private bool HotSwitchNode(NodeItem node)
+        private bool RunVerifiedSwitch(NodeItem node)
         {
-            // 检查后台 Supervisor 是否正在执行自愈或探针
             try
             {
-                using (var probeSupervisor = Mutex.OpenExisting(Program.SupervisorMutexName))
-                {
-                    MessageBox.Show("后台自愈守护程序正在测速与配置，请稍候 3 秒后再切换！", "系统提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return false;
-                }
-            }
-            catch { }
-
-            Mutex crossProcessLock = null;
-            bool lockTaken = false;
-            try
-            {
-                crossProcessLock = new Mutex(false, @"Local\AntigravityMihomoLock");
-                try { lockTaken = crossProcessLock.WaitOne(3000); } catch { lockTaken = true; }
-                if (!lockTaken)
-                {
-                    MessageBox.Show("后台自愈程序正在测试节点，请稍候 3 秒后再切换！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return false;
-                }
-
-                string proxyRoot = Program.RuntimeDirectory;
-                string configFile = Path.Combine(proxyRoot, "mihomo-antigravity.yaml");
-                string pidFile = Path.Combine(proxyRoot, "mihomo.pid");
-
-                string configContent = "# Generated by Antigravity NodeTray hot switch\n" +
-                    "mixed-port: 17897\n" +
-                    "allow-lan: false\n" +
-                    "bind-address: 127.0.0.1\n" +
-                    "mode: rule\n" +
-                    "log-level: silent\n" +
-                    "ipv6: true\n" +
-                    "tun:\n  enable: false\n" +
-                    "proxies:\n" +
-                    "  - " + node.RawLine + "\n" +
-                    "proxy-groups:\n" +
-                    "  - name: ANTIGRAVITY-ROUTE\n" +
-                    "    type: select\n" +
-                    "    proxies:\n" +
-                    "      - " + node.Name + "\n" +
-                    "rules:\n" +
-                    "  - MATCH,ANTIGRAVITY-ROUTE\n";
-
-                File.WriteAllText(configFile, configContent, Encoding.UTF8);
-
-                if (File.Exists(pidFile))
-                {
-                    try
-                    {
-                        int oldPid;
-                        if (int.TryParse(File.ReadAllText(pidFile).Trim(), out oldPid))
-                        {
-                            var oldP = Process.GetProcessById(oldPid);
-                            oldP.Kill();
-                        }
-                    }
-                    catch { }
-                }
-
-                string mihomoPath = ResolveMihomoPath();
-                if (!File.Exists(mihomoPath)) return false;
-
+                if (!File.Exists(Program.ScriptPath)) return false;
+                string country = node.Country == "日本" ? "JP" : "US";
                 var psi = new ProcessStartInfo
                 {
-                    FileName = mihomoPath,
-                    Arguments = "-d \"" + proxyRoot + "\" -f \"" + configFile + "\"",
-                    WorkingDirectory = proxyRoot,
+                    FileName = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                    Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + Program.ScriptPath +
+                        "\" -TargetNodeOverride \"" + EscapeCommandArgument(node.Name) + "\" -ExpectedEgressCountryOverride " + country + " -RecoveryReason Startup",
+                    WorkingDirectory = Program.AppDirectory,
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
                 };
-                var proc = Process.Start(psi);
-                File.WriteAllText(pidFile, proc.Id.ToString());
-
-                string prefFile = Path.Combine(proxyRoot, "user-preferred-node.json");
-                string country = "US";
-                if (node.Country == "日本") country = "JP";
-                else if (node.Country == "新加坡") country = "SG";
-                else if (node.Country == "香港") country = "HK";
-                else if (node.Country == "韩国") country = "KR";
-
-                string prefJson = "{\n" +
-                    "  \"name\": \"" + node.Name.Replace("\"", "\\\"") + "\",\n" +
-                    "  \"server\": \"" + node.Server + "\",\n" +
-                    "  \"port\": " + node.Port + ",\n" +
-                    "  \"country\": \"" + country + "\",\n" +
-                    "  \"updated_at\": \"" + DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss+08:00") + "\"\n" +
-                    "}\n";
-                File.WriteAllText(prefFile, prefJson, Encoding.UTF8);
-
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-            finally
-            {
-                if (lockTaken && crossProcessLock != null)
+                using (var proc = Process.Start(psi))
                 {
-                    try { crossProcessLock.ReleaseMutex(); } catch { }
-                    crossProcessLock.Dispose();
+                    if (proc == null) return false;
+                    proc.BeginOutputReadLine();
+                    proc.BeginErrorReadLine();
+                    proc.WaitForExit();
+                    return proc.ExitCode == 0;
                 }
+            }
+            catch (Exception ex)
+            {
+                Program.TraceLog("verified switch failed type=" + ex.GetType().Name);
+                return false;
             }
         }
 
-        private string ResolveMihomoPath()
+        private static string EscapeCommandArgument(string value)
         {
-            string[] candidates = new string[]
-            {
-                @"D:\Program Files\Clash Verge\verge-mihomo.exe",
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Clash Verge\verge-mihomo.exe"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Clash Verge\verge-mihomo.exe"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Mihomo Party\resources\sidecar\mihomo-windows-amd64.exe"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Mihomo Party\resources\sidecar\mihomo-windows-amd64.exe"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Flclash\mihomo.exe")
-            };
-            foreach (var c in candidates)
-            {
-                if (File.Exists(c)) return c;
-            }
-            return @"D:\Program Files\Clash Verge\verge-mihomo.exe";
+            return (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
     }
 
