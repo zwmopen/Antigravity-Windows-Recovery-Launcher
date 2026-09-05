@@ -2,7 +2,7 @@
 """
 Antigravity Smart Account Switcher & Smooth Launcher
 =====================================================
-小老虎专属切号规则 (Tiger Rules):
+CCOCK专属切号规则 (CCOCK Rules):
 1. 触发条件：
    当前账号有效额度 <= 5.0% 立即触发切号。
 2. 优先级排序：
@@ -157,7 +157,7 @@ def get_all_accounts_and_quotas():
             sec_to_w_reset = 7.0 * 86400.0
             days_to_w_reset = 7.0
         
-        # 小老虎综合评分机制 (Tiger Score)：
+        # CCOCK综合评分机制 (CCOCK Score)：
         # 1. 5小时满血度（0~150分）：越高越好，>=95% 满血加 50 分
         score_5h = q_5h_val + (50.0 if q_5h_val >= 95.0 else 0.0)
         
@@ -178,7 +178,8 @@ def get_all_accounts_and_quotas():
         # 3. 周剩余额度安全分（0~50分）：周额度越充沛越能持续支撑对话
         score_weekly = min(50.0, q_w_val * 0.5)
         
-        tiger_score = round(score_5h + score_urgency + score_weekly, 1)
+        ccock_score = round(score_5h + score_urgency + score_weekly, 1)
+        tiger_score = ccock_score
         
         results.append({
             "id": acc_id,
@@ -195,6 +196,7 @@ def get_all_accounts_and_quotas():
             "score_5h": score_5h,
             "score_urgency": score_urgency,
             "score_weekly": score_weekly,
+            "ccock_score": ccock_score,
             "tiger_score": tiger_score
         })
     
@@ -222,11 +224,11 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
     ]
     
     if candidates:
-        # 按小老虎综合评分降序排列
-        candidates.sort(key=lambda x: x["tiger_score"], reverse=True)
+        # 按 CCOCK 选号引擎综合评分降序排列
+        candidates.sort(key=lambda x: x["ccock_score"], reverse=True)
         best = candidates[0]
         reason = (
-            f"小老虎综合优选 [得分: {best['tiger_score']}]：5小时满血({best['gemini_5h']}%)，"
+            f"CCOCK选号引擎优选 [得分: {best['ccock_score']}]：5小时满血({best['gemini_5h']}%)，"
             f"周恢复时间仅剩 {best['days_to_w_reset']}天 (优先消化即将到期额度)，周额度剩余 {best['gemini_weekly']}%"
         )
         return best, reason
@@ -237,7 +239,7 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         if not acc["disabled"] and not acc["is_current"] and acc["effective_quota"] > 0
     ]
     if fallback:
-        fallback.sort(key=lambda x: x["tiger_score"], reverse=True)
+        fallback.sort(key=lambda x: x["ccock_score"], reverse=True)
         best = fallback[0]
         return best, f"兜底选择非零剩余额度账号 ({best['effective_quota']}%)"
     
@@ -420,10 +422,10 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     logger.info("=" * 65)
     logger.info(f"当前反重力账号: {curr_email} (有效额度: {curr_effective}%)")
-    logger.info("账号池实时小老虎健康度看板:")
+    logger.info("账号池实时 CCOCK 选号引擎健康度看板:")
     for acc in accounts:
         marker = " <== [当前在用]" if acc["is_current"] else ""
-        print(f"  * {acc['email']:28} | 有效: {acc['effective_quota']:5.1f}% | 5h: {acc['gemini_5h']:5.1f}% | 周额: {acc['gemini_weekly']:5.1f}% (剩{acc['days_to_w_reset']:3.1f}天) | 虎分: {acc['tiger_score']:5.1f}{marker}")
+        print(f"  * {acc['email']:28} | 有效: {acc['effective_quota']:5.1f}% | 5h: {acc['gemini_5h']:5.1f}% | 周额: {acc['gemini_weekly']:5.1f}% (剩{acc['days_to_w_reset']:3.1f}天) | CCOCK分: {acc['ccock_score']:5.1f}{marker}")
     logger.info("=" * 65)
     
     if not force and not target and curr_effective > threshold:
@@ -458,9 +460,9 @@ def print_status_table():
     current_id, accounts = get_all_accounts_and_quotas()
     curr_acc = next((a for a in accounts if a["is_current"]), None)
     print("\n" + "=" * 80)
-    print(f"【小老虎 Antigravity 账号池配额与恢复排期看板】 当前在用: {curr_acc['email'] if curr_acc else '无'}")
+    print(f"【CCOCK选号引擎 Antigravity 账号池配额与恢复排期看板】 当前在用: {curr_acc['email'] if curr_acc else '无'}")
     print("=" * 80)
-    print(f"{'序号':<3} {'账号邮箱':<28} {'有效额度':<9} {'5小时限额':<10} {'周限额':<8} {'周恢复倒计时':<12} {'小老虎分':<8} {'状态'}")
+    print(f"{'序号':<3} {'账号邮箱':<28} {'有效额度':<9} {'5小时限额':<10} {'周限额':<8} {'周恢复倒计时':<12} {'CCOCK分':<8} {'状态'}")
     print("-" * 80)
     for i, acc in enumerate(accounts, 1):
         if acc["is_current"]:
@@ -471,7 +473,7 @@ def print_status_table():
             status = "✕ 5h额度耗尽"
         else:
             status = "✔ 健康待命"
-        print(f"{i:<3} {acc['email']:<28} {acc['effective_quota']:>5.1f}%   {acc['gemini_5h']:>6.1f}%    {acc['gemini_weekly']:>5.1f}%     剩 {acc['days_to_w_reset']:>4.1f} 天    {acc['tiger_score']:>6.1f}   {status}")
+        print(f"{i:<3} {acc['email']:<28} {acc['effective_quota']:>5.1f}%   {acc['gemini_5h']:>6.1f}%    {acc['gemini_weekly']:>5.1f}%     剩 {acc['days_to_w_reset']:>4.1f} 天    {acc['ccock_score']:>6.1f}   {status}")
     print("=" * 80 + "\n")
 
 
@@ -505,11 +507,11 @@ def run_watch_daemon(threshold=5.0, interval=30):
         mutex_name = "Local\\AntigravitySmartQuotaWatcher"
         kernel32.CreateMutexW(None, False, mutex_name)
         if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-            logger.info("已存在运行中的【小老虎自动续航守护神】实例，静默退出当前多余实例。")
+            logger.info("已存在运行中的【CCOCK自动续航守护神】实例，静默退出当前多余实例。")
             return
             
     logger.info("=" * 65)
-    logger.info("🚀 【小老虎无人值守自动续航守护神】已就绪！")
+    logger.info("🚀 【CCOCK无人值守自动续航守护神】已就绪！")
     logger.info(f"   * 自动切号阈值: <= {threshold}%")
     logger.info(f"   * 巡检轮询周期: {interval} 秒")
     logger.info(f"   * 守护日志路径: {DAEMON_LOG_FILE}")
@@ -561,7 +563,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Antigravity 智能切号与平滑重启工具 (小老虎规则版)")
+    parser = argparse.ArgumentParser(description="Antigravity 智能切号与平滑重启工具 (CCOCK选号引擎版)")
     parser.add_argument("--threshold", type=float, default=5.0, help="自动切号配额百分比阈值 (默认: 5.0)")
     parser.add_argument("--target", type=str, default=None, help="指定切换的目标账号 (邮箱或 ID)")
     parser.add_argument("--dry-run", action="store_true", help="演练模式，仅计算选号不实际执行")

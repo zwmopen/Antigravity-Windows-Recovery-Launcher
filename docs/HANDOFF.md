@@ -134,14 +134,14 @@
 
 - 2026-09-06：攻克 Cockpit Tools 原生自动切号在 Antigravity 2.12.x 环境下超时（APP_PATH_NOT_FOUND）与配额轮询盲区（10 分钟超长缓存）问题。
   - 核心架构创新：在启动器工具链内扩展 `antigravity_smart_switch.py`、`Invoke-AntigravitySmartSwitch.ps1` 与 `Antigravity-QuickSwitch.cmd`。
-  - 注入“小老虎”专属切号规则：
+  - 注入“CCOCK”专属选号引擎规则：
     1. 触发阈值：有效额度 <= 5% 立即触发切号；
     2. 门禁一票否决：周额度耗尽 (<=5%) 或 5小时额度耗尽 (<=5%) 直接淘汰（周额度耗尽则整号瘫痪）；
     3. 5小时满血优先：>=95% 满血账号处于 Tier 1 随时可战梯队；
     4. 周恢复时间紧迫度优先：按周重置倒计时升序（快要到期重置者优先消化存量，1~2天 >> 5~6天）；
     5. 综合加权评分：在满额前提下，优先选择“周重置即将到来”且“周额度充沛”的账号。
-  - 全流程闭环：向主窗口发送 Win32 `WM_CLOSE` 优雅退出（留出 3 秒保存并释放凭据锁）➔ 智能计算小老虎分选出最优健康号 ➔ 通过 WebSocket (`ws://127.0.0.1:19528`) 驱动 Cockpit 静默写入 `state.vscdb` 与系统凭据（Cockpit 配置 `"antigravity_launch_on_switch": false` 消除裸奔拉起冲突）➔ 唤醒桌面智能启动器（17897 专线代理 + 模型自愈 + 汉化 + 极速置顶）。
-  - 桌面建立快捷方式 `Antigravity 一键切号.lnk`，实机验证 7 账号额度感知与小老虎优选算法 100% PASS。
+  - 全流程闭环：向主窗口发送 Win32 `WM_CLOSE` 优雅退出（留出 3 秒保存并释放凭据锁）➔ 智能计算 CCOCK 选号评分选出最优健康号 ➔ 通过 WebSocket (`ws://127.0.0.1:19528`) 驱动 Cockpit 静默写入 `state.vscdb` 与系统凭据（Cockpit 配置 `"antigravity_launch_on_switch": false` 消除裸奔拉起冲突）➔ 唤醒桌面智能启动器（17897 专线代理 + 模型自愈 + 汉化 + 极速置顶）。
+  - 实机验证 7 账号额度感知与 CCOCK 选号引擎算法 100% PASS。
 - 2026-09-05 现场复核：三毛机场洛杉矶节点（IP 172.96.160.129）平稳运行中，17897 专线连接与 Gemini 握手正常；多订阅发现机制已成功将【泡泡Dog】45 节点纳管，全池候选扩展至 31 个。0.9.1/1.0.0 维护与交付状态持续受控。
 - 状态：反重力专属代理自愈与多订阅容灾实测通过；智能切号与平滑启动工具链实测通过；新订阅泡泡Dog 已就绪，三毛机场洛杉矶节点为当前主承载。
 - 私有仓库：`https://github.com/zwmopen/antigravity-windows-recovery-launcher-private`。

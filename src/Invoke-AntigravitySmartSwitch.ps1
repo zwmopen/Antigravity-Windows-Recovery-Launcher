@@ -58,7 +58,7 @@ if ($StartDaemon) {
     $pythonw = (Get-Command pythonw -ErrorAction SilentlyContinue).Source
     if (-not $pythonw) { $pythonw = 'python.exe' }
     Start-Process -FilePath $pythonw -ArgumentList @($PyScript, '--watch', '--threshold', [string]$Threshold) -WindowStyle Hidden
-    Write-Host "【小老虎自动续航守护神】已在后台静默启动！(阈值: <= $Threshold%)" -ForegroundColor Green
+    Write-Host "【CCOCK自动续航守护神】已在后台静默启动！(阈值: <= $Threshold%)" -ForegroundColor Green
     exit 0
 }
 
