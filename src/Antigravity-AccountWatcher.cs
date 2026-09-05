@@ -295,6 +295,58 @@ internal static class AntigravityAccountWatcher
         return needsRepair;
     }
 
+    private static string ResolvePythonw()
+    {
+        string localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string[] candidates = new[]
+        {
+            Path.Combine(localApp, @"Programs\Python\Python311\pythonw.exe"),
+            Path.Combine(localApp, @"Programs\Python\Python312\pythonw.exe"),
+            Path.Combine(localApp, @"Programs\Python\Python310\pythonw.exe"),
+            Path.Combine(localApp, @"Programs\Python\Python313\pythonw.exe")
+        };
+        foreach (var c in candidates)
+        {
+            if (File.Exists(c)) return c;
+        }
+        return "pythonw.exe";
+    }
+
+    private static void EnsureQuotaWatcherRunning()
+    {
+        try
+        {
+            string pyScript = Path.Combine(AppDirectory, "antigravity_smart_switch.py");
+            if (!File.Exists(pyScript)) return;
+
+            bool mutexExists = false;
+            try
+            {
+                using (var m = Mutex.OpenExisting(@"Local\AntigravitySmartQuotaWatcher"))
+                {
+                    mutexExists = true;
+                }
+            }
+            catch
+            {
+                mutexExists = false;
+            }
+
+            if (mutexExists) return;
+
+            string pyw = ResolvePythonw();
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = pyw,
+                Arguments = "\"" + pyScript + "\" --watch",
+                WorkingDirectory = AppDirectory,
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+        }
+        catch { }
+    }
+
     private static int Main()
     {
         bool createdNew;
@@ -318,6 +370,7 @@ internal static class AntigravityAccountWatcher
             DateTime nextHealthCheckUtc = DateTime.UtcNow.AddSeconds(5);
             DateTime nextHealthRepairUtc = DateTime.MinValue;
             DateTime repairCooldownUntilUtc = DateTime.MinValue;
+            DateTime nextQuotaWatcherUtc = DateTime.UtcNow.AddSeconds(3);
             bool repairInProgress = false;
             bool locationFailurePending = false;
             long languageLogPosition = CurrentLanguageLogLength();
@@ -331,6 +384,11 @@ internal static class AntigravityAccountWatcher
             while (true)
             {
                 Thread.Sleep(2000);
+                if (DateTime.UtcNow >= nextQuotaWatcherUtc)
+                {
+                    nextQuotaWatcherUtc = DateTime.UtcNow.AddSeconds(30);
+                    EnsureQuotaWatcherRunning();
+                }
                 if (File.Exists(AccountsPath))
                 {
                     DateTime current = File.GetLastWriteTimeUtc(AccountsPath);

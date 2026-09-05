@@ -180,10 +180,66 @@ namespace AntigravityLauncher
         {
             try
             {
-                if (!File.Exists(WatcherPath) || IsOwnWatcherRunning()) return;
+                if (File.Exists(WatcherPath) && !IsOwnWatcherRunning())
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = WatcherPath,
+                        WorkingDirectory = AppDirectory,
+                        UseShellExecute = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    });
+                }
+            }
+            catch { }
+
+            EnsureQuotaWatcherRunning();
+        }
+
+        internal static string ResolvePythonw()
+        {
+            string localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string[] candidates = new[]
+            {
+                Path.Combine(localApp, @"Programs\Python\Python311\pythonw.exe"),
+                Path.Combine(localApp, @"Programs\Python\Python312\pythonw.exe"),
+                Path.Combine(localApp, @"Programs\Python\Python310\pythonw.exe"),
+                Path.Combine(localApp, @"Programs\Python\Python313\pythonw.exe")
+            };
+            foreach (var c in candidates)
+            {
+                if (File.Exists(c)) return c;
+            }
+            return "pythonw.exe";
+        }
+
+        internal static void EnsureQuotaWatcherRunning()
+        {
+            try
+            {
+                string pyScript = Path.Combine(AppDirectory, "antigravity_smart_switch.py");
+                if (!File.Exists(pyScript)) return;
+
+                bool mutexExists = false;
+                try
+                {
+                    using (var m = Mutex.OpenExisting(@"Local\AntigravitySmartQuotaWatcher"))
+                    {
+                        mutexExists = true;
+                    }
+                }
+                catch
+                {
+                    mutexExists = false;
+                }
+
+                if (mutexExists) return;
+
+                string pyw = ResolvePythonw();
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = WatcherPath,
+                    FileName = pyw,
+                    Arguments = "\"" + pyScript + "\" --watch",
                     WorkingDirectory = AppDirectory,
                     UseShellExecute = true,
                     WindowStyle = ProcessWindowStyle.Hidden

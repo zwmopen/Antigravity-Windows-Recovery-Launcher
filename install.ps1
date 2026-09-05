@@ -130,6 +130,12 @@ if (-not [string]::Equals($sourceAppFull, $installRootFull, [System.StringCompar
     Copy-Item -LiteralPath $sourceLocalizationHelper -Destination $installedLocalizationHelper -Force
     Copy-Item -LiteralPath $sourceEnableChinese -Destination $installedEnableChinese -Force
     Copy-Item -LiteralPath $sourceRestoreEnglish -Destination $installedRestoreEnglish -Force
+    foreach ($extra in @('antigravity_smart_switch.py', 'Invoke-AntigravitySmartSwitch.ps1', 'Antigravity-QuickSwitch.cmd')) {
+        $extraSrc = Join-Path $app $extra
+        if (Test-Path -LiteralPath $extraSrc) {
+            Copy-Item -LiteralPath $extraSrc -Destination (Join-Path $installRoot $extra) -Force
+        }
+    }
     New-Item -ItemType Directory -Path $installedExtension -Force | Out-Null
     Copy-Item -Path (Join-Path $sourceExtension '*') -Destination $installedExtension -Recurse -Force
     if (Test-Path -LiteralPath $sourceTray) {

@@ -52,8 +52,11 @@ if (Test-Path -LiteralPath $traySource) {
     if ($LASTEXITCODE -ne 0) { throw 'nodetray_build_failed' }
 }
 Copy-Item -LiteralPath (Join-Path $source 'Antigravity-ProxySupervisor.ps1') -Destination (Join-Path $release 'Antigravity-ProxySupervisor.ps1') -Force
-foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd')) {
-    Copy-Item -LiteralPath (Join-Path $source $helper) -Destination (Join-Path $release $helper) -Force
+foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd', 'antigravity_smart_switch.py', 'Invoke-AntigravitySmartSwitch.ps1', 'Antigravity-QuickSwitch.cmd')) {
+    $helperPath = Join-Path $source $helper
+    if (Test-Path -LiteralPath $helperPath) {
+        Copy-Item -LiteralPath $helperPath -Destination (Join-Path $release $helper) -Force
+    }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $extensionSource 'manifest.json'))) { throw 'localization_extension_missing' }
 New-Item -ItemType Directory -Path $extensionRelease -Force | Out-Null
