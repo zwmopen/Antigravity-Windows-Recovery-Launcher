@@ -59,6 +59,8 @@ ACCOUNTS_FILE = os.path.join(COCKPIT_DIR, "accounts.json")
 SERVER_FILE = os.path.join(COCKPIT_DIR, "server.json")
 QUOTA_CACHE_DIR = os.path.join(COCKPIT_DIR, "cache", "quota_api_v1_desktop", "authorized")
 DAEMON_LOG_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "smart-quota-watcher.log")
+PENDING_SWITCH_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "pending-switch.json")
+SUBSCRIPTION_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "subscription-report.json")
 
 LAUNCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-Recovery-Launcher.exe")
 DESKTOP_LNK = os.path.join(USER_PROFILE, "Desktop", "Antigravity 启动器.lnk")
@@ -71,6 +73,64 @@ def parse_iso_datetime(ts_str):
         if ts_str.endswith("Z"):
             return datetime.fromisoformat(ts_str[:-1]).replace(tzinfo=timezone.utc)
         return datetime.fromisoformat(ts_str)
+    except Exception:
+        return None
+
+
+def get_subscription_summary():
+    """读取本地订阅与专线候选节点健康状态摘要"""
+    if not os.path.exists(SUBSCRIPTION_REPORT_FILE):
+        return "本地订阅已就绪 (首次启动将自动校验节点健康度)"
+    try:
+        with open(SUBSCRIPTION_REPORT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        total_cnt = data.get("candidate_count", 0)
+        jp_cnt = data.get("japan_candidate_count", 0)
+        us_cnt = data.get("united_states_candidate_count", 0)
+        sources = data.get("sources", [])
+        src_parts = []
+        for s in sources:
+            name = s.get("source", "")
+            cnt = s.get("candidate_count", 0)
+            src_parts.append(f"{name}({cnt}线)")
+        details = ", ".join(src_parts) if src_parts else "就绪"
+        return f"已加载 {total_cnt} 条专线候选 (美:{us_cnt}线, 日:{jp_cnt}线) | 订阅源: {details}"
+    except Exception:
+        return "本地订阅节点已就绪"
+
+
+def write_pending_switch(target_account):
+    """记录切号待办事务，确保断电或重启后可自愈闭环"""
+    try:
+        os.makedirs(os.path.dirname(PENDING_SWITCH_FILE), exist_ok=True)
+        with open(PENDING_SWITCH_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "target_account_id": target_account["id"],
+                "target_email": target_account["email"],
+                "status": "switching",
+                "timestamp": time.time(),
+                "created_at": datetime.now().isoformat()
+            }, f, indent=2)
+    except Exception as e:
+        logger.warning(f"写入待切换事务文件异常: {e}")
+
+
+def clear_pending_switch():
+    """清除切号待办事务"""
+    try:
+        if os.path.exists(PENDING_SWITCH_FILE):
+            os.remove(PENDING_SWITCH_FILE)
+    except Exception:
+        pass
+
+
+def read_pending_switch():
+    """读取待办切换事务"""
+    if not os.path.exists(PENDING_SWITCH_FILE):
+        return None
+    try:
+        with open(PENDING_SWITCH_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
         return None
 
@@ -399,7 +459,7 @@ async def switch_account_via_websocket(server_info, target_account_id, timeout=1
     return False
 
 
-def launch_antigravity_via_launcher():
+def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed"):
     target = None
     if os.path.exists(LAUNCHER_EXE):
         target = LAUNCHER_EXE
@@ -409,9 +469,32 @@ def launch_antigravity_via_launcher():
     if not target:
         raise FileNotFoundError(f"未找到启动器文件: {LAUNCHER_EXE}")
     
-    logger.info(f"正在拉起桌面智能启动器: {target} ...")
-    subprocess.Popen([target], shell=True)
-    logger.info("✅ 启动器已拉起，自动挂载 17897 专线代理 + 模型自愈 + 汉化扩展！")
+    logger.info(f"正在以脱壳独立进程拉起桌面智能启动器: {target} (reason={recovery_reason}) ...")
+    flags = 0
+    if sys.platform == "win32":
+        # 彻底脱壳：脱离当前控制台、父进程 Job Object 与进程树
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        DETACHED_PROCESS = 0x00000008
+        CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+        flags = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB
+    
+    try:
+        if target.endswith(".exe"):
+            subprocess.Popen(
+                [target, "--background", f"--recovery-reason={recovery_reason}"],
+                creationflags=flags,
+                close_fds=True
+            )
+        else:
+            subprocess.Popen(
+                ["cmd.exe", "/c", "start", "", target],
+                creationflags=flags,
+                close_fds=True
+            )
+        logger.info("✅ 脱壳启动器已拉起，将无感平滑切换实例并挂载 17897 专线代理 + 模型自愈 + 汉化扩展！")
+    except Exception as e:
+        logger.warning(f"脱壳拉起启动器异常，执行备用方式: {e}")
+        subprocess.Popen([target], shell=True)
 
 
 def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
@@ -419,9 +502,11 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     curr_acc = next((a for a in accounts if a["is_current"]), None)
     curr_email = curr_acc["email"] if curr_acc else "未知"
     curr_effective = curr_acc["effective_quota"] if curr_acc else 0.0
+    sub_summary = get_subscription_summary()
     
     logger.info("=" * 65)
     logger.info(f"当前反重力账号: {curr_email} (有效额度: {curr_effective}%)")
+    logger.info(f"专线网络订阅状态: {sub_summary}")
     logger.info("账号池实时 CCOCK 选号引擎健康度看板:")
     for acc in accounts:
         marker = " <== [当前在用]" if acc["is_current"] else ""
@@ -440,27 +525,40 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         logger.info("[DryRun 演练模式] 未执行实际退出与切号操作。")
         return
     
-    # 1. 优雅退出 Antigravity
-    gracefully_exit_antigravity()
+    # 1. 记录切号待办事务，确保断电或重启后可自愈闭环
+    write_pending_switch(best_acc)
     
-    # 2. 读取 Cockpit 端口并切号
+    # 2. 发送气泡通知 (告知用户正在全自动接力无感切号)
+    send_windows_notification(
+        "CCOCK 自动续航守护神",
+        f"当前账号额度已降至 {curr_effective:.1f}%，已优选下一个满血账号: {best_acc['email']}\n正在全自动写入凭据并无感平滑重启..."
+    )
+    
+    # 3. 在线通过 WebSocket 写入 Cockpit 凭据 (无需强杀 Antigravity，避免连带被杀与数据丢失)
     server_info = load_cockpit_server_info()
     ok = asyncio.run(switch_account_via_websocket(server_info, best_acc["id"]))
     if not ok:
-        logger.error("切号失败，中断启动流程！")
+        logger.error("向 Cockpit 发送切号指令失败，取消本次切换！")
+        clear_pending_switch()
         return
     
-    logger.info(f"账号凭证写入完成，新账号: {best_acc['email']}")
+    logger.info(f"✅ Cockpit 账号凭证与 accounts.json 已更新成功！新账号: {best_acc['email']}")
     
-    # 3. 启动桌面启动器
-    launch_antigravity_via_launcher()
+    # 4. 派发脱壳启动器进行平滑重启与专线恢复 (由启动器内建的精确 Win32 进程关闭逻辑接管)
+    launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed")
+    
+    # 5. 适当等待后清除事务锁
+    time.sleep(3)
+    clear_pending_switch()
 
 
 def print_status_table():
     current_id, accounts = get_all_accounts_and_quotas()
     curr_acc = next((a for a in accounts if a["is_current"]), None)
+    sub_summary = get_subscription_summary()
     print("\n" + "=" * 80)
-    print(f"【CCOCK选号引擎 Antigravity 账号池配额与恢复排期看板】 当前在用: {curr_acc['email'] if curr_acc else '无'}")
+    print(f"【CCOCK选号引擎 Antigravity 账号池配额与恢复排期看板】")
+    print(f"当前在用: {curr_acc['email'] if curr_acc else '无'} | 专线网络订阅: {sub_summary}")
     print("=" * 80)
     print(f"{'序号':<3} {'账号邮箱':<28} {'有效额度':<9} {'5小时限额':<10} {'周限额':<8} {'周恢复倒计时':<12} {'CCOCK分':<8} {'状态'}")
     print("-" * 80)
@@ -507,15 +605,24 @@ def run_watch_daemon(threshold=5.0, interval=30):
         mutex_name = "Local\\AntigravitySmartQuotaWatcher"
         kernel32.CreateMutexW(None, False, mutex_name)
         if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-            logger.info("已存在运行中的【CCOCK自动续航守护神】实例，静默退出当前多余实例。")
+            logger.info("已存在运行中的【CCOCK无人值守自动续航守护神】实例，静默退出当前多余实例。")
             return
             
+    sub_summary = get_subscription_summary()
     logger.info("=" * 65)
     logger.info("🚀 【CCOCK无人值守自动续航守护神】已就绪！")
     logger.info(f"   * 自动切号阈值: <= {threshold}%")
     logger.info(f"   * 巡检轮询周期: {interval} 秒")
+    logger.info(f"   * 专线网络订阅: {sub_summary}")
     logger.info(f"   * 守护日志路径: {DAEMON_LOG_FILE}")
     logger.info("=" * 65)
+    
+    # 开机或守护启动自愈：检查是否存在未闭环的待切事务
+    pending = read_pending_switch()
+    if pending and (time.time() - pending.get("timestamp", 0) > 10):
+        logger.info(f"发现未闭环的切号待办事务 (目标: {pending.get('target_email')})，正在自动补发自愈拉起...")
+        launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed")
+        clear_pending_switch()
     
     loop_count = 0
     while True:
@@ -538,13 +645,8 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         logger.warning(
                             f"⚠️ 【阈值触发】当前账号 {curr_email} 有效额度打至阈值 ({curr_effective:.1f}% <= {threshold}%)！"
                         )
-                        logger.warning("🚀 正在无感启动自愈接力闭环：优雅关闭 -> 智能优选满血号 -> 写入凭据 -> 专线拉起置顶")
+                        logger.warning("🚀 正在启动CCOCK全自动无感自愈续航闭环：在线写凭据 -> 脱壳拉起启动器 -> 平滑置顶")
                         logger.warning("!" * 65)
-                        
-                        send_windows_notification(
-                            "Antigravity 自动续命守护",
-                            f"当前账号额度已降至 {curr_effective:.1f}%，正在自动平滑切换下一个满血账号并无感重启..."
-                        )
                         
                         run_smart_switch(threshold=threshold, force=True)
                         

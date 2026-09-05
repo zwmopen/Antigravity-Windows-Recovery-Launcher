@@ -56,9 +56,20 @@ if ($StopDaemon) {
 
 if ($StartDaemon) {
     $pythonw = (Get-Command pythonw -ErrorAction SilentlyContinue).Source
-    if (-not $pythonw) { $pythonw = 'python.exe' }
-    Start-Process -FilePath $pythonw -ArgumentList @($PyScript, '--watch', '--threshold', [string]$Threshold) -WindowStyle Hidden
-    Write-Host "【CCOCK自动续航守护神】已在后台静默启动！(阈值: <= $Threshold%)" -ForegroundColor Green
+    if (-not $pythonw) { $pythonw = 'pythonw.exe' }
+    $cmdLine = "`"$pythonw`" `"$PyScript`" --watch --threshold $Threshold"
+    try {
+        $cimResult = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+            CommandLine = $cmdLine
+            CurrentDirectory = $ScriptDir
+        }
+        if ($cimResult.ReturnValue -eq 0) {
+            Write-Host "【CCOCK无人值守自动续航守护神】已通过独立脱壳服务在后台就绪！(PID: $($cimResult.ProcessId), 阈值: <= $Threshold%)" -ForegroundColor Green
+            exit 0
+        }
+    } catch { }
+    Start-Process -FilePath $pythonw -ArgumentList @("`"$PyScript`"", '--watch', '--threshold', [string]$Threshold) -WindowStyle Hidden
+    Write-Host "【CCOCK无人值守自动续航守护神】已在后台静默启动！(阈值: <= $Threshold%)" -ForegroundColor Green
     exit 0
 }
 

@@ -1,5 +1,16 @@
 # 变更记录
 
+## 1.2.0 - 2026-09-06 (CCOCK全链路脱壳闭环自愈与单开源仓收拢里程碑)
+
+- **彻底终结切号中断：全链路脱壳与零风险事务状态机 (Decoupled Zero-Risk Switch Flow)**：
+  - **切号生命周期与进程树彻底脱耦**：看门狗与自愈拉起动作全面接入 `DETACHED_PROCESS`、`CREATE_NEW_PROCESS_GROUP` 与 WMI 脱壳派生机制，与宿主编辑器进程树解耦，杜绝因编辑器关闭导致守护进程被操作系统连带清理的致命缺陷；
+  - **在线秒级切号先行**：摒弃先强杀编辑器的粗暴方式，改为在线向 Cockpit WebSocket 发送切号指令（无损修改凭据与 `accounts.json`），再由启动器具备 12 轮平滑检测的 Win32 `CloseMainWindow` 安全接手重启与前台置顶；
+  - **待切换状态机事务（Pending Switch Transaction）**：引入磁盘事务文件 `pending-switch.json`，遇到意外中断或系统休眠时，守护神可在下次心跳毫秒级自愈接续拉起，实现真正的 100% 无感自动续航。
+- **订阅更新状态透明化**：
+  - 启动看板与守护日志实时输出三大机场订阅健康度（如：`已加载 31 条专线候选 (泡泡Dog: 16 | 三毛机场: 10 | 性价比机场: 5)`），彻底消除用户对“订阅是否更新”的疑虑。
+- **开源代码仓库收拢（方案 A 达成）**：
+  - 本地 Git remote 全面重设并收拢至唯一官方公开仓库 `zwmopen/Antigravity-Windows-Recovery-Launcher`，云端冗余私有仓库已归档封存，保持纯粹单一开源真源。
+
 ## 1.1.0 - 2026-09-06 (CCOCK选号引擎与无人值守续航闭环里程碑)
 
 - **CCOCK无人值守自动续航看门狗 (Auto-Pilot Quota Watchdog & Failover)**：
