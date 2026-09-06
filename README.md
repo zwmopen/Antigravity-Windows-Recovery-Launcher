@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-1.0.0-blue.svg" alt="版本 1.0.0" />
+  <img src="https://img.shields.io/badge/版本-1.3.0-blue.svg" alt="版本 1.3.0" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线调度-内存级无感热漂移-orange.svg" alt="专线调度" />
   <img src="https://img.shields.io/badge/界面汉化-首帧微任务零闪直译-blueviolet.svg" alt="界面汉化" />

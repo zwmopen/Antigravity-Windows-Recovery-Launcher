@@ -2336,6 +2336,24 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
         }
         Write-SafeLog -Event 'localization_loader_succeeded'
     }
+
+    $PendingAutoResumePath = Join-Path $ProxyRoot 'pending-auto-resume.json'
+    if (Test-Path -LiteralPath $PendingAutoResumePath) {
+        $SmartSwitchPy = Join-Path $ScriptRoot 'antigravity_smart_switch.py'
+        if (Test-Path -LiteralPath $SmartSwitchPy) {
+            $pyw = 'pythonw.exe'
+            $pyCandidates = @(
+                (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\pythonw.exe'),
+                (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\pythonw.exe'),
+                (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python310\pythonw.exe')
+            )
+            foreach ($c in $pyCandidates) {
+                if (Test-Path -LiteralPath $c) { $pyw = $c; break }
+            }
+            Write-SafeLog -Event 'auto_resume_dispatched'
+            Start-Process -FilePath $pyw -ArgumentList ('"' + $SmartSwitchPy + '" --auto-resume') -WorkingDirectory $ScriptRoot -WindowStyle Hidden
+        }
+    }
 }
 
 $state = [ordered]@{

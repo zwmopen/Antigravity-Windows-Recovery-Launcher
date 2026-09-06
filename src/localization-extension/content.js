@@ -207,6 +207,7 @@
     applying = true;
     try {
       nodes.forEach(translateSubtree);
+      applyTopConversationBadges();
     } finally {
       applying = false;
     }
@@ -255,11 +256,155 @@
     applying = true;
     try {
       translateSubtree(document.body || document.documentElement);
+      applyTopConversationBadges();
     } finally {
       applying = false;
     }
     document.documentElement.setAttribute('data-antigravity-zhcn', core.VERSION);
   }
+
+  function ensureBadgeStyles() {
+    if (document.getElementById('antigravity-top-badge-style')) return;
+    var style = document.createElement('style');
+    style.id = 'antigravity-top-badge-style';
+    style.textContent = [
+      '.ag-top-badge {',
+      '  display: inline-flex;',
+      '  align-items: center;',
+      '  justify-content: center;',
+      '  font-size: 10px;',
+      '  font-weight: 700;',
+      '  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;',
+      '  padding: 1px 5px;',
+      '  border-radius: 4px;',
+      '  letter-spacing: 0.03em;',
+      '  line-height: 1.2;',
+      '  margin-right: 5px;',
+      '  flex-shrink: 0;',
+      '  border: 1px solid rgba(255, 255, 255, 0.18);',
+      '  pointer-events: none;',
+      '  transition: transform 0.15s ease;',
+      '}',
+      '.ag-top-badge-1 {',
+      '  background: linear-gradient(135deg, #2563eb, #1d4ed8);',
+      '  color: #ffffff;',
+      '  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.45);',
+      '}',
+      '.ag-top-badge-2 {',
+      '  background: linear-gradient(135deg, #059669, #047857);',
+      '  color: #ffffff;',
+      '  box-shadow: 0 1px 3px rgba(5, 150, 105, 0.45);',
+      '}',
+      '.ag-top-badge-3 {',
+      '  background: linear-gradient(135deg, #7c3aed, #6d28d9);',
+      '  color: #ffffff;',
+      '  box-shadow: 0 1px 3px rgba(124, 58, 237, 0.45);',
+      '}'
+    ].join('\n');
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function applyTopConversationBadges() {
+    ensureBadgeStyles();
+    var rows = document.querySelectorAll('[data-testid="conversation-row-sidebar"]');
+    if (!rows || rows.length === 0) return;
+
+    var allBadges = document.querySelectorAll('.ag-top-badge');
+    var maxCount = Math.min(3, rows.length);
+    var validTargets = new Set();
+
+    for (var i = 0; i < maxCount; i++) {
+      var row = rows[i];
+      var titleDiv = row.querySelector('.truncate');
+      if (titleDiv) {
+        var num = i + 1;
+        var existingBadge = titleDiv.querySelector('.ag-top-badge');
+        if (!existingBadge) {
+          existingBadge = document.createElement('span');
+          titleDiv.prepend(existingBadge);
+        }
+        existingBadge.className = 'ag-top-badge ag-top-badge-' + num;
+        existingBadge.textContent = '#' + num;
+        validTargets.add(existingBadge);
+      }
+    }
+
+    allBadges.forEach(function (b) {
+      if (!validTargets.has(b) && b.parentElement) {
+        b.parentElement.removeChild(b);
+      }
+    });
+  }
+
+  globalThis.__AntigravityAutoResume = async function (maxCount, resumeText) {
+    maxCount = typeof maxCount === 'number' ? maxCount : 3;
+    resumeText = typeof resumeText === 'string' ? resumeText : '1';
+
+    applyTopConversationBadges();
+    var rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+    if (rows.length === 0) {
+      return { success: false, reason: 'no_conversations_found' };
+    }
+
+    var targetCount = Math.min(maxCount, rows.length);
+    var results = [];
+
+    for (var i = 0; i < targetCount; i++) {
+      var row = rows[i];
+      var a = row.querySelector('a');
+      var href = a ? a.getAttribute('href') : null;
+      if (!a) {
+        results.push({ index: i + 1, success: false, reason: 'no_anchor' });
+        continue;
+      }
+
+      a.click();
+      await new Promise(function (res) { setTimeout(res, 800); });
+
+      var stopButton = document.querySelector('button[aria-label*="Stop"], button[data-testid*="stop"]');
+      if (stopButton) {
+        results.push({ index: i + 1, href: href, skipped: true, reason: 'task_currently_running' });
+        continue;
+      }
+
+      var editable = document.querySelector('[data-lexical-editor="true"]');
+      if (!editable) {
+        results.push({ index: i + 1, href: href, success: false, reason: 'editor_not_found' });
+        continue;
+      }
+
+      var currentText = (editable.textContent || '').trim();
+      if (currentText.length > 0 && currentText !== resumeText) {
+        results.push({ index: i + 1, href: href, skipped: true, reason: 'draft_exists' });
+        continue;
+      }
+
+      editable.focus();
+      document.execCommand('insertText', false, resumeText);
+      await new Promise(function (res) { setTimeout(res, 200); });
+
+      var sendBtn = document.querySelector('button[data-testid="send-button"]');
+      if (sendBtn && !sendBtn.disabled) {
+        sendBtn.click();
+        results.push({ index: i + 1, href: href, success: true, text: resumeText });
+      } else {
+        results.push({ index: i + 1, href: href, success: false, reason: 'send_button_disabled' });
+      }
+
+      await new Promise(function (res) { setTimeout(res, 600); });
+    }
+
+    if (rows.length > 0) {
+      var firstLink = rows[0].querySelector('a');
+      if (firstLink) firstLink.click();
+    }
+
+    return {
+      success: true,
+      processed: results.length,
+      results: results
+    };
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', observeDocument, { once: true });
@@ -267,3 +412,4 @@
     observeDocument();
   }
 }());
+

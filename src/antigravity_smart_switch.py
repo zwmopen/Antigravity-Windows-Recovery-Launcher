@@ -60,7 +60,9 @@ SERVER_FILE = os.path.join(COCKPIT_DIR, "server.json")
 QUOTA_CACHE_DIR = os.path.join(COCKPIT_DIR, "cache", "quota_api_v1_desktop", "authorized")
 DAEMON_LOG_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "smart-quota-watcher.log")
 PENDING_SWITCH_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "pending-switch.json")
+PENDING_AUTO_RESUME_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "pending-auto-resume.json")
 SUBSCRIPTION_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "subscription-report.json")
+DEVTOOLS_PORT_FILE = os.path.join(os.environ.get("APPDATA", os.path.join(USER_PROFILE, "AppData", "Roaming")), "Antigravity", "DevToolsActivePort")
 
 LAUNCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-Recovery-Launcher.exe")
 DESKTOP_LNK = os.path.join(USER_PROFILE, "Desktop", "Antigravity 启动器.lnk")
@@ -133,6 +135,295 @@ def read_pending_switch():
             return json.load(f)
     except Exception:
         return None
+
+
+def write_pending_auto_resume(max_windows=3, text="1"):
+    """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌)"""
+    try:
+        os.makedirs(os.path.dirname(PENDING_AUTO_RESUME_FILE), exist_ok=True)
+        with open(PENDING_AUTO_RESUME_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "action": "auto_resume",
+                "text": text,
+                "max_windows": max_windows,
+                "timestamp": time.time(),
+                "created_at": datetime.now().isoformat(),
+                "ttl_seconds": 300,
+                "status": "pending"
+            }, f, indent=2)
+        logger.info(f"已写入大任务断点自动续接凭据 (前排 {max_windows} 个窗口，扣 '{text}')")
+    except Exception as e:
+        logger.warning(f"写入自动续接事务文件异常: {e}")
+
+
+def clear_pending_auto_resume():
+    """清除自动续接事务凭据"""
+    try:
+        if os.path.exists(PENDING_AUTO_RESUME_FILE):
+            os.remove(PENDING_AUTO_RESUME_FILE)
+    except Exception:
+        pass
+
+
+def read_pending_auto_resume():
+    """读取自动续接事务凭据 (逾期自动作废)"""
+    if not os.path.exists(PENDING_AUTO_RESUME_FILE):
+        return None
+    try:
+        with open(PENDING_AUTO_RESUME_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        ts = data.get("timestamp", 0)
+        ttl = data.get("ttl_seconds", 300)
+        if time.time() - ts > ttl:
+            logger.info("自动续接事务凭据已超过 5 分钟 TTL，自动作废。")
+            clear_pending_auto_resume()
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def get_devtools_active_port(wait_timeout=0):
+    """读取 DevToolsActivePort，支持可选的超时轮询等待"""
+    start_time = time.time()
+    while True:
+        if os.path.exists(DEVTOOLS_PORT_FILE):
+            try:
+                with open(DEVTOOLS_PORT_FILE, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                if lines:
+                    port = int(lines[0].strip())
+                    if 1 <= port <= 65535:
+                        return port
+            except Exception:
+                pass
+        if time.time() - start_time >= wait_timeout:
+            break
+        time.sleep(0.5)
+    return None
+
+
+async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
+    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本"""
+    import websockets
+    async with websockets.connect(ws_url, ping_interval=None) as ws:
+        script_template = """
+        (async () => {
+            let style = document.getElementById('antigravity-top-badge-style');
+            if (!style) {
+                style = document.createElement('style');
+                style.id = 'antigravity-top-badge-style';
+                style.textContent = `
+                    .ag-top-badge {
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: 10px;
+                        font-weight: 700;
+                        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                        padding: 1px 5px;
+                        border-radius: 4px;
+                        letter-spacing: 0.03em;
+                        line-height: 1.2;
+                        margin-right: 5px;
+                        flex-shrink: 0;
+                        border: 1px solid rgba(255, 255, 255, 0.18);
+                        pointer-events: none;
+                        transition: transform 0.15s ease;
+                    }
+                    .ag-top-badge-1 {
+                        background: linear-gradient(135deg, #2563eb, #1d4ed8);
+                        color: #ffffff;
+                        box-shadow: 0 1px 3px rgba(37, 99, 235, 0.45);
+                    }
+                    .ag-top-badge-2 {
+                        background: linear-gradient(135deg, #059669, #047857);
+                        color: #ffffff;
+                        box-shadow: 0 1px 3px rgba(5, 150, 105, 0.45);
+                    }
+                    .ag-top-badge-3 {
+                        background: linear-gradient(135deg, #7c3aed, #6d28d9);
+                        color: #ffffff;
+                        box-shadow: 0 1px 3px rgba(124, 58, 237, 0.45);
+                    }
+                `;
+                (document.head || document.documentElement).appendChild(style);
+            }
+
+            const maxCount = __MAX_WINDOWS__;
+            const resumeText = __RESUME_TEXT__;
+
+            // 动态轮询等待侧边栏会话列表加载渲染完成 (最多等待 15 秒)
+            let rows = [];
+            for (let retry = 0; retry < 30; retry++) {
+                rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                if (rows.length > 0) break;
+                await new Promise(r => setTimeout(r, 500));
+            }
+
+            if (rows.length === 0) {
+                return { success: false, reason: "no_conversations_found" };
+            }
+
+            // 实时动态抓取当前排在最顶部的最新 N 个会话
+            const targetCount = Math.min(maxCount, rows.length);
+            const validBadges = new Set();
+            const topSessionInfos = [];
+
+            // 1. 实时动态打标 (针对当前最新前排窗口挂载 #1, #2, #3，并动态清理其他旧标签)
+            for (let i = 0; i < targetCount; i++) {
+                const row = rows[i];
+                const titleDiv = row.querySelector('.truncate');
+                const rawTitle = titleDiv ? titleDiv.textContent.replace(/^#\d+\s*/, '') : '未知会话';
+                if (titleDiv) {
+                    let badge = titleDiv.querySelector('.ag-top-badge');
+                    if (!badge) {
+                        badge = document.createElement('span');
+                        titleDiv.prepend(badge);
+                    }
+                    badge.className = 'ag-top-badge ag-top-badge-' + (i + 1);
+                    badge.textContent = '#' + (i + 1);
+                    validBadges.add(badge);
+                }
+                topSessionInfos.push({
+                    rank: i + 1,
+                    title: rawTitle,
+                    href: (row.querySelector('a') || {}).getAttribute ? row.querySelector('a').getAttribute('href') : null
+                });
+            }
+
+            // 清理已掉出前 3 名的旧角标，确保标签完全随动态排序同步更新
+            document.querySelectorAll('.ag-top-badge').forEach(b => {
+                if (!validBadges.has(b) && b.parentElement) {
+                    b.parentElement.removeChild(b);
+                }
+            });
+
+            // 2. 依次切换到实时最新的前排窗口并扣 1 发送
+            const results = [];
+            for (let i = 0; i < targetCount; i++) {
+                const row = rows[i];
+                const info = topSessionInfos[i];
+                const a = row.querySelector('a');
+                const href = info.href;
+                if (!a) {
+                    results.push({ index: i + 1, title: info.title, success: false, reason: "no_anchor" });
+                    continue;
+                }
+
+                a.click();
+                await new Promise(r => setTimeout(r, 800));
+
+                const stopBtn = document.querySelector('button[aria-label*="Stop"], button[data-testid*="stop"]');
+                if (stopBtn) {
+                    results.push({ index: i + 1, title: info.title, href: href, skipped: true, reason: "task_running" });
+                    continue;
+                }
+
+                const editable = document.querySelector('[data-lexical-editor="true"]');
+                if (!editable) {
+                    results.push({ index: i + 1, title: info.title, href: href, success: false, reason: "editor_not_found" });
+                    continue;
+                }
+
+                const currentText = (editable.textContent || '').trim();
+                if (currentText.length > 0 && currentText !== resumeText) {
+                    results.push({ index: i + 1, title: info.title, href: href, skipped: true, reason: "draft_exists" });
+                    continue;
+                }
+
+                editable.focus();
+                document.execCommand('insertText', false, resumeText);
+                await new Promise(r => setTimeout(r, 200));
+
+                const sendBtn = document.querySelector('button[data-testid="send-button"]');
+                if (sendBtn && !sendBtn.disabled) {
+                    sendBtn.click();
+                    results.push({ index: i + 1, title: info.title, href: href, success: true, text: resumeText });
+                } else {
+                    results.push({ index: i + 1, title: info.title, href: href, success: false, reason: "send_button_disabled" });
+                }
+
+                await new Promise(r => setTimeout(r, 600));
+            }
+
+            // 3. 切回第 1 个窗口聚焦
+            if (rows.length > 0) {
+                const firstLink = rows[0].querySelector('a');
+                if (firstLink) firstLink.click();
+            }
+
+            return {
+                success: true,
+                processed: results.length,
+                results: results
+            };
+        })()
+        """
+        script = script_template.replace("__MAX_WINDOWS__", str(int(max_windows))).replace("__RESUME_TEXT__", json.dumps(str(text)))
+        req = {
+            "id": 101,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": script,
+                "awaitPromise": True,
+                "returnByValue": True
+            }
+        }
+        await ws.send(json.dumps(req))
+        resp = await ws.recv()
+        data = json.loads(resp)
+        return data.get("result", {}).get("result", {}).get("value", {})
+
+
+def execute_auto_resume(max_windows=3, text="1", wait_timeout=30):
+    """执行前排 1/2/3 窗口打标与自动扣 1 续接任务"""
+    if websockets is None:
+        logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
+        return False
+
+    logger.info(f"正在等待 Antigravity 实例与 DevTools 端口就绪 (最长等待 {wait_timeout} 秒)...")
+    port = get_devtools_active_port(wait_timeout=wait_timeout)
+    if not port:
+        logger.warning("未能获取到 DevToolsActivePort，跳过自动续接。")
+        return False
+
+    import urllib.request
+    ws_url = None
+    start_t = time.time()
+    while time.time() - start_t < 15:
+        try:
+            req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
+            pages = json.loads(req.read().decode("utf-8"))
+            page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+            if page:
+                ws_url = page["webSocketDebuggerUrl"]
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+    if not ws_url:
+        logger.warning("未能获取到 Antigravity 页面的 WebSocket 调试地址。")
+        return False
+
+    logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排 {max_windows} 个窗口打标与扣 '{text}' 续接...")
+    try:
+        result = asyncio.run(_cdp_execute_auto_resume(ws_url, max_windows=max_windows, text=text))
+        logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
+        
+        clear_pending_auto_resume()
+        
+        success_items = [r for r in result.get("results", []) if r.get("success")]
+        count_sent = len(success_items)
+        send_windows_notification(
+            "CCOCK 选号引擎 · 断点自动续接",
+            f"已自动打标前排 1/2/3 窗口！\n成功在 {count_sent} 个前排任务窗口扣 '1' 继续推进，已平滑切回主窗口！"
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"执行自动续接发生异常: {e}")
+        return False
 
 
 def load_cockpit_server_info():
@@ -525,8 +816,9 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         logger.info("[DryRun 演练模式] 未执行实际退出与切号操作。")
         return
     
-    # 1. 记录切号待办事务，确保断电或重启后可自愈闭环
+    # 1. 记录切号待办事务与大任务断点自动续接凭据，确保断电或重启后可自愈闭环
     write_pending_switch(best_acc)
+    write_pending_auto_resume(max_windows=3, text="1")
     
     # 2. 发送气泡通知 (告知用户正在全自动接力无感切号)
     send_windows_notification(
@@ -540,6 +832,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     if not ok:
         logger.error("向 Cockpit 发送切号指令失败，取消本次切换！")
         clear_pending_switch()
+        clear_pending_auto_resume()
         return
     
     logger.info(f"✅ Cockpit 账号凭证与 accounts.json 已更新成功！新账号: {best_acc['email']}")
@@ -547,8 +840,10 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     # 4. 派发脱壳启动器进行平滑重启与专线恢复 (由启动器内建的精确 Win32 进程关闭逻辑接管)
     launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed")
     
-    # 5. 适当等待后清除事务锁
+    # 5. 等待新实例就绪并执行前排 1/2/3 窗口自动打标与扣 1 续接
+    logger.info("切号指令已派发，正在等待新实例就绪并自动续接前排窗口 (扣 1)...")
     time.sleep(3)
+    execute_auto_resume(max_windows=3, text="1", wait_timeout=45)
     clear_pending_switch()
 
 
@@ -623,6 +918,16 @@ def run_watch_daemon(threshold=5.0, interval=30):
         logger.info(f"发现未闭环的切号待办事务 (目标: {pending.get('target_email')})，正在自动补发自愈拉起...")
         launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed")
         clear_pending_switch()
+
+    # 检查是否存在待自动续接的事务凭据
+    pending_resume = read_pending_auto_resume()
+    if pending_resume and is_antigravity_running():
+        logger.info("发现切号后待自动续接的事务凭据，正在执行前排窗口自动扣 1 续接...")
+        execute_auto_resume(
+            max_windows=pending_resume.get("max_windows", 3),
+            text=pending_resume.get("text", "1"),
+            wait_timeout=15
+        )
     
     loop_count = 0
     while True:
@@ -674,6 +979,9 @@ def main():
     parser.add_argument("--watch", action="store_true", help="启动无人值守看门狗守护进程模式")
     parser.add_argument("--interval", type=int, default=30, help="守护巡检轮询间隔秒数 (默认: 30)")
     parser.add_argument("--stop-watch", action="store_true", help="停止正在运行的看门狗守护进程")
+    parser.add_argument("--auto-resume", action="store_true", help="立即执行前排窗口打标与扣1自动续接")
+    parser.add_argument("--resume-text", type=str, default="1", help="自动续接发送的内容 (默认: 1)")
+    parser.add_argument("--resume-count", type=int, default=3, help="自动续接前排窗口数 (默认: 3)")
     
     args = parser.parse_args()
     
@@ -683,6 +991,8 @@ def main():
         run_watch_daemon(threshold=args.threshold, interval=args.interval)
     elif args.status:
         print_status_table()
+    elif args.auto_resume:
+        execute_auto_resume(max_windows=args.resume_count, text=args.resume_text, wait_timeout=5)
     else:
         run_smart_switch(
             threshold=args.threshold,
