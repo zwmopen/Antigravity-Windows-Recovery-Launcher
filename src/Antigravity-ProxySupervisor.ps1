@@ -1360,7 +1360,10 @@ function Save-SubscriptionReport {
             expired_sources = $expiredProfiles.Count
         }
     } catch {
-        Write-SafeLog -Event 'subscription_inventory_write_failed' -Values @{ error_type = $_.Exception.GetType().Name }
+        Write-SafeLog -Event 'subscription_inventory_write_failed' -Values @{
+            error_type = $_.Exception.GetType().Name
+            error_message = $_.Exception.Message
+        }
     }
 }
 

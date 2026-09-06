@@ -88,7 +88,7 @@ def get_subscription_summary():
     if not os.path.exists(SUBSCRIPTION_REPORT_FILE):
         return "本地订阅已就绪 (首次启动将自动校验节点健康度)"
     try:
-        with open(SUBSCRIPTION_REPORT_FILE, "r", encoding="utf-8") as f:
+        with open(SUBSCRIPTION_REPORT_FILE, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         total_cnt = data.get("candidate_count", 0)
         jp_cnt = data.get("japan_candidate_count", 0)
@@ -480,7 +480,7 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=
 def load_cockpit_server_info():
     if not os.path.exists(SERVER_FILE):
         raise FileNotFoundError(f"Cockpit server.json 未找到: {SERVER_FILE} (Cockpit Tools 是否已运行?)")
-    with open(SERVER_FILE, "r", encoding="utf-8") as f:
+    with open(SERVER_FILE, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     return {
         "ws_port": data.get("ws_port", 19528),
@@ -493,7 +493,7 @@ def get_all_accounts_and_quotas():
     if not os.path.exists(ACCOUNTS_FILE):
         raise FileNotFoundError(f"Cockpit accounts.json 未找到: {ACCOUNTS_FILE}")
     
-    with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+    with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
         acc_data = json.load(f)
     
     current_id = acc_data.get("current_account_id", "")
@@ -506,7 +506,7 @@ def get_all_accounts_and_quotas():
             if fname.endswith(".json"):
                 p = os.path.join(QUOTA_CACHE_DIR, fname)
                 try:
-                    with open(p, "r", encoding="utf-8") as cf:
+                    with open(p, "r", encoding="utf-8-sig") as cf:
                         cd = json.load(cf)
                     email = cd.get("email", "").strip().lower()
                     if email:
@@ -792,7 +792,7 @@ async def switch_account_via_websocket(server_info, target_account_id, timeout=1
                 break
     
     time.sleep(1.0)
-    with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+    with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
         curr = json.load(f).get("current_account_id")
         if curr == target_account_id:
             logger.info("校验 accounts.json 确认当前账号已更新成功。")
