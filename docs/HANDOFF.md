@@ -1,7 +1,7 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：1.4.2  
+> 对应版本：1.4.3  
 > 最后核对：2026-09-06。
 
 ## 项目定位和范围
@@ -139,6 +139,10 @@
 
 ## 当前状态和下一步
 
+- 2026-09-06 (v1.4.3)：双星看门狗二段重启冲突根除与 CDP 原生内核断点续接升级里程碑。
+  - **二段重复拉起与二次强杀彻底消除**：深入排查实机日志，根除了 `Antigravity-AccountWatcher.cs` 在内存中缓存旧账号导致的误判二次重启（此前在切号后 2 分钟触发强杀）；升级 C# 守卫至 `v0.5.5`，每次轮询动态读取 `watcher-current-account.txt`；加入 `IsSmartSwitchActive()` 门禁检测 `pending-switch.json` 自动静默退让；`antigravity_smart_switch.py` 切号第一步提前落盘，物理消灭竞态；
+  - **CDP 原生事件与发送按钮激活**：放弃前端无法触发 React 状态更新的 JS 合成 `beforeinput` 事件，全面升级为 Chromium 原生 `Input.insertText` 管道，直接穿透浏览器内核录入 `'1'`，实机测试证实输入框成功物理捕获文本，发送按钮立即转为 `disabled: false` 并成功触发点击，保证前排 1/2/3 窗口断点自动续接 100% 成功送达；
+  - **全链路超详细结构化追踪**：切号各阶段、选号决策、进程状态、CDP 响应、按钮激活与异常自愈均实时结构化记录至 `smart-quota-watcher.log` 与 `account-watcher.log`。
 - 2026-09-06 (v1.4.2)：切号瞬态旧实例优雅退出先行与断点续接 PID 排他闭环。
   - **旧实例优雅退出先行**：在 Cockpit 凭据成功写入后，切号引擎立即发送 Win32 `CloseMainWindow` 信号使旧 Antigravity 实例优雅退出，先保存工作区并释放锁，彻底消除了启动器在 30~60 秒候选节点探测期间旧实例向 17897 发送请求遭遇的 `400 User location is not supported for the API use` 和网络超时报错；
   - **断点续接 PID 排他架构**：新增 `get_antigravity_main_pid()` 与 `exclude_pids` 参数，续接调度器在后台精准等待**新 PID 进程拉起且 DevTools 页面就绪**后才派发 CDP，根除了此前误连旧实例导致 `task_running` 提前作废凭据的顽疾；
