@@ -26,6 +26,7 @@ import logging
 import argparse
 import subprocess
 import base64
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone
 
 if sys.platform == "win32":
@@ -219,6 +220,16 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
             for (let retry = 0; retry < 30; retry++) {
                 rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                 if (rows.length > 0) break;
+                // 若侧边栏可能处于折叠状态，在第 3 次重试时自动尝试点击展开侧边栏
+                if (retry === 3) {
+                    const toggleBtn = document.querySelector('button[aria-label*="sidebar" i], button[aria-label*="Sidebar" i], button[aria-label*="侧边栏" i]');
+                    if (toggleBtn) {
+                        toggleBtn.click();
+                        await new Promise(r => setTimeout(r, 600));
+                        rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                        if (rows.length > 0) break;
+                    }
+                }
                 await new Promise(r => setTimeout(r, 500));
             }
 
@@ -910,7 +921,7 @@ def check_language_server_quota_error():
 
 def run_watch_daemon(threshold=5.0, interval=30):
     os.makedirs(os.path.dirname(DAEMON_LOG_FILE), exist_ok=True)
-    file_handler = logging.FileHandler(DAEMON_LOG_FILE, encoding="utf-8")
+    file_handler = RotatingFileHandler(DAEMON_LOG_FILE, maxBytes=1024 * 1024, backupCount=2, encoding="utf-8")
     file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
     logger.addHandler(file_handler)
     

@@ -1,5 +1,17 @@
 # 变更记录
 
+## 1.4.1 - 2026-09-06 (切号恢复透传平滑重启与全链路自愈闭环强化里程碑)
+
+- **切号恢复原因全链路透传与平滑重启保障 (Seamless Restart on Account Change)**：
+  - **故障定位与根治**：定位此前切号后 Antigravity 出现 `antigravity_live_seamless_attached`（未重启直接热挂接）导致无法加载新账号凭据的根因——`Antigravity-Recovery-Launcher.cs` (`GetRecoveryReason`) 与 `Antigravity-AccountWatcher.cs` (`RecoveryModeForReason`) 曾将 `AccountChange` 与 `cockpit_account_changed` 误降级过滤为 `Startup`，导致监督器未能判定为强制重启；
+  - **全链路透传修复**：打通 Watcher -> Launcher -> Supervisor 三层透传管道，并在 `Antigravity-ProxySupervisor.ps1` 的 `$forceRestartRequested` 判定中纳入 `AccountChange`，确保切号时平滑重启编辑器以加载新 Cockpit 凭据，而网络故障仍保持无感热替换。
+- **全链路日志 1MB 自动安全轮转归档 (Log Rotation Across All Sentinels)**：
+  - `Antigravity-ProxySupervisor.ps1` (`Write-SafeLog`)、`Antigravity-Recovery-Launcher.cs` (`TraceLog`)、`Antigravity-AccountWatcher.cs` (`Log`) 与 `antigravity_smart_switch.py` (`RotatingFileHandler`) 全面引入超过 1MB 自动轮转（保留 `.1` 归档备份），彻底根除日志文件无限膨胀风险。
+- **并发订阅报告写入与文件锁冲突根除 (Safe Multi-Process Subscription Inventory)**：
+  - 优化 `Save-SubscriptionReport` 写入机制，改用带退避重试的共享文件流写入，彻底消除多进程（Python 守护神与 PowerShell 监督器）并发写入导致的共享冲突。
+- **CDP 侧边栏折叠自愈与断点自动扣 1 增强 (Sidebar Auto-Unfold on Resume)**：
+  - 在 CDP 自动续接调度器中加入侧边栏折叠检测，会话行数为空时自动寻址并点击侧边栏展开按钮唤醒前排列表，确保断点续接 100% 成功率。
+
 ## 1.4.0 - 2026-09-06 (看门狗断档根治与双星互保脱壳常驻架构里程碑)
 
 - **看门狗断档根治与“双星互保”常驻架构 (Dual-Sentinel Mutual Supervision)**：

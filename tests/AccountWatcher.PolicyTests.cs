@@ -63,7 +63,7 @@ internal static class AccountWatcherPolicyTests
             "new location failure triggers candidate rotation");
         Assert(AntigravityAccountWatcher.RecoveryModeForReason("proxy_network_failure") == "NetworkFailure" &&
             AntigravityAccountWatcher.RecoveryModeForReason("proxy_location_failure") == "LocationFailure" &&
-            AntigravityAccountWatcher.RecoveryModeForReason("cockpit_account_changed") == "Startup",
+            AntigravityAccountWatcher.RecoveryModeForReason("cockpit_account_changed") == "AccountChange",
             "repair reasons map to bounded supervisor recovery modes");
 
         return failures == 0 ? 0 : 1;

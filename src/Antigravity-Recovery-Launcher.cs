@@ -41,7 +41,18 @@ namespace AntigravityLauncher
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(LauncherLogPath));
+                string dir = Path.GetDirectoryName(LauncherLogPath);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                if (File.Exists(LauncherLogPath) && new FileInfo(LauncherLogPath).Length > 1024 * 1024)
+                {
+                    string backup = LauncherLogPath + ".1";
+                    try
+                    {
+                        if (File.Exists(backup)) File.Delete(backup);
+                        File.Move(LauncherLogPath, backup);
+                    }
+                    catch { }
+                }
                 File.AppendAllText(LauncherLogPath, DateTime.Now.ToString("o") + " [TRACE] " + msg + Environment.NewLine);
             }
             catch { }
@@ -152,7 +163,7 @@ namespace AntigravityLauncher
                 const string prefix = "--recovery-reason=";
                 if (!arg.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
                 string value = arg.Substring(prefix.Length);
-                if (value == "NetworkFailure" || value == "LocationFailure") return value;
+                if (value == "NetworkFailure" || value == "LocationFailure" || value == "AccountChange" || value == "cockpit_account_changed") return value;
             }
             return "Startup";
         }
@@ -519,16 +530,14 @@ namespace AntigravityLauncher
                     process.WaitForExit();
                     if (process.ExitCode != 0)
                     {
-                        Directory.CreateDirectory(Path.GetDirectoryName(LauncherLogPath));
-                        File.AppendAllText(LauncherLogPath, DateTime.Now.ToString("o") + " background=true recovery=" + recoveryReason + " exit=" + process.ExitCode + Environment.NewLine + output + Environment.NewLine + error + Environment.NewLine);
+                        TraceLog("background=true recovery=" + recoveryReason + " exit=" + process.ExitCode + Environment.NewLine + output + Environment.NewLine + error);
                     }
                     return process.ExitCode;
                 }
             }
             catch (Exception ex)
             {
-                try { Directory.CreateDirectory(Path.GetDirectoryName(LauncherLogPath)); File.AppendAllText(LauncherLogPath, DateTime.Now.ToString("o") + " background=true recovery=" + recoveryReason + " type=" + ex.GetType().Name + Environment.NewLine); }
-                catch { }
+                TraceLog("background=true recovery=" + recoveryReason + " type=" + ex.GetType().Name);
                 return 3;
             }
         }

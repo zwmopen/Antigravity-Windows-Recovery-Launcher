@@ -118,6 +118,16 @@ function Write-SafeLog {
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
 
+    # 超过 1MB 自动轮转归档，防止日志无限制膨胀
+    if (Test-Path -LiteralPath $LogPath) {
+        $logItem = Get-Item -LiteralPath $LogPath -ErrorAction SilentlyContinue
+        if ($null -ne $logItem -and $logItem.Length -gt 1048576) {
+            $archivePath = $LogPath + '.1'
+            Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+            Move-Item -LiteralPath $LogPath -Destination $archivePath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     # Logging is diagnostic only. It must never interrupt recovery after the
     # existing Antigravity process has already been stopped. Add-Content opens
     # the file with restrictive sharing and has caused real half-finished
@@ -1325,9 +1335,23 @@ function Save-SubscriptionReport {
         }
 
         New-Item -ItemType Directory -Path $ProxyRoot -Force | Out-Null
+        $reportJson = $report | ConvertTo-Json -Depth 8
         $tempPath = $SubscriptionReportPath + '.tmp'
-        $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tempPath -Encoding UTF8
-        Move-Item -LiteralPath $tempPath -Destination $SubscriptionReportPath -Force
+        $reportJson | Set-Content -LiteralPath $tempPath -Encoding UTF8
+        $moveSuccess = $false
+        for ($retryMove = 0; $retryMove -lt 5; $retryMove++) {
+            try {
+                Move-Item -LiteralPath $tempPath -Destination $SubscriptionReportPath -Force -ErrorAction Stop
+                $moveSuccess = $true
+                break
+            } catch {
+                Start-Sleep -Milliseconds 100
+            }
+        }
+        if (-not $moveSuccess) {
+            [System.IO.File]::WriteAllText($SubscriptionReportPath, $reportJson, [System.Text.Encoding]::UTF8)
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
         $script:SubscriptionInventory = $report
         Write-SafeLog -Event 'subscription_inventory_completed' -Values @{
             source_count = $rows.Count
@@ -2266,7 +2290,7 @@ $existingAntigravity = @(Get-CimInstance Win32_Process -ErrorAction SilentlyCont
     [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedAntigravityPath
 })
 $hasExistingAntigravity = $existingAntigravity.Count -gt 0
-$forceRestartRequested = ($RecoveryReason -in @('Force', 'UserRequestedRepair', 'LocationFailure'))
+$forceRestartRequested = ($RecoveryReason -in @('Force', 'UserRequestedRepair', 'LocationFailure', 'AccountChange', 'cockpit_account_changed'))
 
 $antigravityPid = 0
 $readiness = @{ LanguageServerPid = 0; ProxyConnections = 0 }

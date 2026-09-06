@@ -30,7 +30,7 @@ internal static class AntigravityAccountWatcher
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Antigravity", "localization-extension-pending.flag");
     private const string RequiredProxyArgument = "--proxy-server=http://127.0.0.1:17897";
-    private const string WatcherVersion = "0.5.3";
+    private const string WatcherVersion = "0.5.4";
     internal const int MaxRepairAttempts = 3;
     internal const int SuccessfulRepairCooldownSeconds = 30;
     internal const int HealthFailureThreshold = 3;
@@ -74,6 +74,9 @@ internal static class AntigravityAccountWatcher
             return "LocationFailure";
         if (string.Equals(reason, "proxy_network_failure", StringComparison.OrdinalIgnoreCase))
             return "NetworkFailure";
+        if (string.Equals(reason, "cockpit_account_changed", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(reason, "AccountChange", StringComparison.OrdinalIgnoreCase))
+            return "AccountChange";
         return "Startup";
     }
 
@@ -115,7 +118,18 @@ internal static class AntigravityAccountWatcher
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(WatcherLogPath));
+            string dir = Path.GetDirectoryName(WatcherLogPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            if (File.Exists(WatcherLogPath) && new FileInfo(WatcherLogPath).Length > 1024 * 1024)
+            {
+                string backup = WatcherLogPath + ".1";
+                try
+                {
+                    if (File.Exists(backup)) File.Delete(backup);
+                    File.Move(WatcherLogPath, backup);
+                }
+                catch { }
+            }
             File.AppendAllText(WatcherLogPath, DateTime.Now.ToString("o") + " " + message + Environment.NewLine);
         }
         catch { }
