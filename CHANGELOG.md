@@ -1,5 +1,20 @@
 # 变更记录
 
+## 1.4.0 - 2026-09-06 (看门狗断档根治与双星互保脱壳常驻架构里程碑)
+
+- **看门狗断档根治与“双星互保”常驻架构 (Dual-Sentinel Mutual Supervision)**：
+  - **故障彻底根治**：定位并根除了此前 `build.ps1` 终止守卫未自动拉起、终端子进程 Job Object 连带被清理导致长达 53 分钟“无人看守真空期”的致命缺陷；
+  - **双星互保永动模型**：
+    - **C# 系统级守卫 (`Antigravity-AccountWatcher.exe`)**：每 20 秒自愈巡检，增加对 Python 看门狗的进程级和命名互斥锁双重感知；一旦掉线立即通过 **WMI (`Win32_Process.Create`) 独立脱壳派生**，杜绝被调用方终端进程树连带清理；
+    - **Python 自动驾驶守护神 (`antigravity_smart_switch.py`)**：每 60 秒扫描 C# 守卫存活；若发现掉线立即通过 WMI 独立脱壳派生复活 C#，互为保镖、坚不可摧；
+    - **64 位内核互斥锁防 GC**：显式指定 `ctypes.c_void_p` 并在全局作用域持久化持有句柄，防止句柄被 Python GC 释放。
+- **多源实时配额穿透监听（双通道零延迟感知）**：
+  - **通道 A（静态磁盘缓存）**：保持 30 秒轮询，$\le 5\%$ 阈值触发；
+  - **通道 B（实时错误穿透监听）**：增量 tail 读取 `%APPDATA%\Antigravity\logs\language_server.log`，一旦捕获 `RESOURCE_EXHAUSTED` / `429` / `quota exceeded` / `hit your 5-hour limit` 报错特征，**零等待立即瞬发触发切号与前排窗口扣 1 续接**！
+- **自动化安装与构建全链路防真空**：
+  - `build.ps1` 编译结束若先前杀掉了旧实例，立即通过 WMI 独立拉起新实例，绝不留空真空期；
+  - `install.ps1` 统一通过 WMI 独立脱壳部署 C# 守卫与 Python 看门狗双常驻。
+
 ## 1.3.0 - 2026-09-06 (大任务断点全自动扣 1 续接与实时前排 1/2/3 窗口动态打标里程碑)
 
 - **前排 1/2/3 窗口实时动态打标 (Real-time Top 3 Dynamic Session Badging)**：

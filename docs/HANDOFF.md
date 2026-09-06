@@ -1,7 +1,7 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：1.2.0  
+> 对应版本：1.4.0  
 > 最后核对：2026-09-06。
 
 ## 项目定位和范围
@@ -139,7 +139,15 @@
 
 ## 当前状态和下一步
 
-- 2026-09-06：攻克 Cockpit Tools 原生自动切号在 Antigravity 2.12.x 环境下超时（APP_PATH_NOT_FOUND）与配额轮询盲区（10 分钟超长缓存）问题。
+- 2026-09-06 (v1.4.0)：彻底根除“额度用尽后未切号、未续接前排窗口”的看门狗真空掉线故障。
+  - **故障深度根治**：定位 08:33~09:26 期间因 `build.ps1` 终止守卫未自动重启，以及前台控制台 Job Object 连带清理 Python 子进程导致整机长达 53 分钟守护盲区；
+  - **双星互保架构 (Dual-Sentinel)**：
+    - C# 守卫 (`Antigravity-AccountWatcher.exe` v0.5.3) 每 20 秒巡检，一旦发现 Python 守护神掉线，立即通过 WMI (`Win32_Process.Create`) 独立脱壳拉起；
+    - Python 守护神 (`antigravity_smart_switch.py`) 每 60 秒扫描 C# 守卫，一旦发现掉线立即通过 WMI 独立脱壳拉起，互为永动机自愈保镖；
+    - 64 位命名内核互斥锁防 GC 回收持久化；
+  - **多源配额穿透感知**：在常规 30 秒磁盘轮询之外，新增增量 tail 监听 `%APPDATA%\Antigravity\logs\language_server.log`，捕获 `RESOURCE_EXHAUSTED` / `429` 瞬发触发无感切号与前排 1/2/3 窗口扣 1 续接；
+  - **实机全链路双向杀进程测试**：杀 Python 后 C# 于 30s 内成功 WMI 复活；杀 C# 后 Python 于 60s 内成功 WMI 复活，双向自愈 100% PASS。
+- 2026-09-06 (v1.3.0)：攻克 Cockpit Tools 原生自动切号在 Antigravity 2.12.x 环境下超时（APP_PATH_NOT_FOUND）与配额轮询盲区（10 分钟超长缓存）问题。
   - 核心架构创新：在启动器工具链内扩展 `antigravity_smart_switch.py`、`Invoke-AntigravitySmartSwitch.ps1` 与 `Antigravity-QuickSwitch.cmd`。
   - 注入“CCOCK”专属选号引擎规则：
     1. 触发阈值：有效额度 <= 5% 立即触发切号；

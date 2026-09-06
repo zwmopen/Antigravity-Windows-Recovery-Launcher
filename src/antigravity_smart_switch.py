@@ -63,8 +63,10 @@ PENDING_SWITCH_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy"
 PENDING_AUTO_RESUME_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "pending-auto-resume.json")
 SUBSCRIPTION_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "subscription-report.json")
 DEVTOOLS_PORT_FILE = os.path.join(os.environ.get("APPDATA", os.path.join(USER_PROFILE, "AppData", "Roaming")), "Antigravity", "DevToolsActivePort")
+LANGUAGE_SERVER_LOG = os.path.join(os.environ.get("APPDATA", os.path.join(USER_PROFILE, "AppData", "Roaming")), "Antigravity", "logs", "language_server.log")
 
 LAUNCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-Recovery-Launcher.exe")
+ACCOUNT_WATCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-AccountWatcher.exe")
 DESKTOP_LNK = os.path.join(USER_PROFILE, "Desktop", "Antigravity 启动器.lnk")
 
 
@@ -827,25 +829,108 @@ def stop_watch_daemon():
     logger.info(f"已停止 {stopped} 个运行中的自动续航守护进程。")
 
 
+_global_mutex_handle = None
+_last_language_log_pos = 0
+
+
+def ensure_account_watcher_running():
+    """双星互保：检查并自愈拉起 Antigravity-AccountWatcher 系统级守卫"""
+    if sys.platform != "win32" or not psutil:
+        return
+    
+    target_exe = ACCOUNT_WATCHER_EXE
+    if not os.path.exists(target_exe):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        target_exe = os.path.join(script_dir, "Antigravity-AccountWatcher.exe")
+    if not os.path.exists(target_exe):
+        return
+    
+    # 扫描当前运行进程
+    for p in psutil.process_iter(["name"]):
+        try:
+            if p.info["name"] and p.info["name"].lower() == "antigravity-accountwatcher.exe":
+                return # 正常常驻运行中
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+            
+    logger.info("⚠️ 检测到系统级守卫 Antigravity-AccountWatcher 掉线，正在自愈脱壳拉起...")
+    try:
+        cmd = f'powershell -NoProfile -Command "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{ CommandLine = \'{target_exe}\'; CurrentDirectory = \'{os.path.dirname(target_exe)}\' }}"'
+        subprocess.run(cmd, shell=True, capture_output=True, timeout=5)
+        logger.info("✅ 系统级守卫 Antigravity-AccountWatcher 已通过脱壳服务成功自愈重启！")
+    except Exception as e:
+        logger.warning(f"自愈拉起 Antigravity-AccountWatcher 异常: {e}")
+
+
+def check_language_server_quota_error():
+    """穿透监听 language_server.log，毫秒级感知 429 / RESOURCE_EXHAUSTED / quota 耗尽报错"""
+    global _last_language_log_pos
+    if not os.path.exists(LANGUAGE_SERVER_LOG):
+        _last_language_log_pos = 0
+        return False
+        
+    try:
+        size = os.path.getsize(LANGUAGE_SERVER_LOG)
+        if _last_language_log_pos == 0:
+            # 首次启动：定位到当前文件末尾，避免历史旧错误造成误切
+            _last_language_log_pos = size
+            return False
+            
+        if size < _last_language_log_pos:
+            # 文件被重建或轮转
+            _last_language_log_pos = 0
+            
+        if size == _last_language_log_pos:
+            return False
+            
+        with open(LANGUAGE_SERVER_LOG, "r", encoding="utf-8", errors="ignore") as f:
+            f.seek(_last_language_log_pos)
+            new_content = f.read()
+            _last_language_log_pos = f.tell()
+            
+        quota_err_patterns = [
+            "RESOURCE_EXHAUSTED",
+            "quota exceeded",
+            "quotaExceeded",
+            "hit your 5-hour limit",
+            "Too Many Requests",
+            "status:429",
+            "code: 429",
+            "HTTP 429"
+        ]
+        for pat in quota_err_patterns:
+            if pat.lower() in new_content.lower():
+                logger.warning(f"🚨 [实时日志穿透感知] 在 language_server.log 捕获到模型额度耗尽特征: '{pat}'！")
+                return True
+    except Exception as e:
+        logger.debug(f"检查 language_server 日志异常: {e}")
+        
+    return False
+
+
 def run_watch_daemon(threshold=5.0, interval=30):
     os.makedirs(os.path.dirname(DAEMON_LOG_FILE), exist_ok=True)
     file_handler = logging.FileHandler(DAEMON_LOG_FILE, encoding="utf-8")
     file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
     logger.addHandler(file_handler)
     
-    # 互斥锁防止多个 Watcher 重复运行
+    # 互斥锁防止多个 Watcher 重复运行 (显式指定 64 位指针类型并持久化持有句柄)
     if sys.platform == "win32":
+        global _global_mutex_handle
         import ctypes
         kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
         mutex_name = "Local\\AntigravitySmartQuotaWatcher"
-        kernel32.CreateMutexW(None, False, mutex_name)
+        handle = kernel32.CreateMutexW(None, False, mutex_name)
         if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
             logger.info("已存在运行中的【CCOCK无人值守自动续航守护神】实例，静默退出当前多余实例。")
             return
+        _global_mutex_handle = handle
             
     sub_summary = get_subscription_summary()
     logger.info("=" * 65)
-    logger.info("🚀 【CCOCK无人值守自动续航守护神】已就绪！")
+    logger.info("🚀 【CCOCK无人值守自动续航守护神】已就绪！(双星互保脱壳常驻模式)")
     logger.info(f"   * 自动切号阈值: <= {threshold}%")
     logger.info(f"   * 巡检轮询周期: {interval} 秒")
     logger.info(f"   * 专线网络订阅: {sub_summary}")
@@ -872,6 +957,23 @@ def run_watch_daemon(threshold=5.0, interval=30):
     loop_count = 0
     while True:
         try:
+            # 1. 双星互保：每 2 轮 (约 60 秒) 检查一次 C# 守卫存活状态
+            if loop_count % 2 == 0:
+                ensure_account_watcher_running()
+
+            # 2. 穿透监听：只要 language_server 出现配额耗尽/429 报错，无需等待磁盘缓存，立刻触发无感切号与续接！
+            log_quota_hit = check_language_server_quota_error()
+            if log_quota_hit and is_antigravity_running():
+                logger.warning("!" * 65)
+                logger.warning("🚀 【实时日志报错触发】捕获到模型 429/配额耗尽异常！立刻启动全自动无感自愈续航闭环！")
+                logger.warning("!" * 65)
+                run_smart_switch(threshold=threshold, force=True)
+                logger.info("自愈切换指令已下发，休眠 35 秒等待新实例完全就绪...")
+                time.sleep(35)
+                loop_count = 0
+                continue
+
+            # 3. 常规磁盘配额轮询
             if is_antigravity_running():
                 current_id, accounts = get_all_accounts_and_quotas()
                 curr_acc = next((a for a in accounts if a["is_current"]), None)

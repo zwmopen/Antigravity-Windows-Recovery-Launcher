@@ -7,9 +7,9 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading;
 
-[assembly: AssemblyVersion("0.5.2.0")]
-[assembly: AssemblyFileVersion("0.5.2.0")]
-[assembly: AssemblyInformationalVersion("0.5.2")]
+[assembly: AssemblyVersion("0.5.3.0")]
+[assembly: AssemblyFileVersion("0.5.3.0")]
+[assembly: AssemblyInformationalVersion("0.5.3")]
 
 internal static class AntigravityAccountWatcher
 {
@@ -30,7 +30,7 @@ internal static class AntigravityAccountWatcher
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Antigravity", "localization-extension-pending.flag");
     private const string RequiredProxyArgument = "--proxy-server=http://127.0.0.1:17897";
-    private const string WatcherVersion = "0.5.2";
+    private const string WatcherVersion = "0.5.3";
     internal const int MaxRepairAttempts = 3;
     internal const int SuccessfulRepairCooldownSeconds = 30;
     internal const int HealthFailureThreshold = 3;
@@ -334,15 +334,62 @@ internal static class AntigravityAccountWatcher
 
             if (mutexExists) return;
 
-            string pyw = ResolvePythonw();
-            Process.Start(new ProcessStartInfo
+            // 双重核验：防止互斥锁因异常暂时未开，扫描进程列表确认是否存在运行中的 --watch 实例
+            try
             {
-                FileName = pyw,
-                Arguments = "\"" + pyScript + "\" --watch",
-                WorkingDirectory = AppDirectory,
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Hidden
-            });
+                using (var searcher = new ManagementObjectSearcher(
+                    "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'python%'"))
+                using (var results = searcher.Get())
+                {
+                    foreach (ManagementObject p in results)
+                    {
+                        string cmd = Convert.ToString(p["CommandLine"]);
+                        if (!string.IsNullOrEmpty(cmd) &&
+                            cmd.IndexOf("antigravity_smart_switch.py", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                            cmd.IndexOf("--watch", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            string pyw = ResolvePythonw();
+            string cmdLine = "\"" + pyw + "\" \"" + pyScript + "\" --watch";
+
+            // 优先通过 WMI 独立脱壳派生启动，杜绝随当前控制台/Job Object 连带终止
+            bool wmiStarted = false;
+            try
+            {
+                using (var processClass = new ManagementClass("Win32_Process"))
+                {
+                    var inParams = processClass.GetMethodParameters("Create");
+                    inParams["CommandLine"] = cmdLine;
+                    inParams["CurrentDirectory"] = AppDirectory;
+                    var outParams = processClass.InvokeMethod("Create", inParams, null);
+                    uint ret = Convert.ToUInt32(outParams["ReturnValue"]);
+                    if (ret == 0)
+                    {
+                        wmiStarted = true;
+                        Log("quota_watcher_spawned_via_wmi pid=" + outParams["ProcessId"]);
+                    }
+                }
+            }
+            catch { }
+
+            if (!wmiStarted)
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = pyw,
+                    Arguments = "\"" + pyScript + "\" --watch",
+                    WorkingDirectory = AppDirectory,
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                });
+                Log("quota_watcher_spawned_via_shellexecute");
+            }
         }
         catch { }
     }

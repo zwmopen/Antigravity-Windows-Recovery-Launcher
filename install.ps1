@@ -250,6 +250,20 @@ foreach ($processInfo in $watcherProcesses) {
     Stop-Process -Id ([int]$processInfo.ProcessId) -Force -ErrorAction SilentlyContinue
 }
 Start-Sleep -Milliseconds 500
-Start-Process -FilePath $watcher -WorkingDirectory $installRoot -WindowStyle Hidden
+# 统一通过 WMI 独立脱壳派生启动 C# 守卫，杜绝随当前控制台/Job Object 连带终止
+try {
+    Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+        CommandLine = "`"$watcher`""
+        CurrentDirectory = $installRoot
+    } | Out-Null
+} catch {
+    Start-Process -FilePath $watcher -WorkingDirectory $installRoot -WindowStyle Hidden
+}
+
+# 部署并拉起 Python 看门狗 (独立脱壳后台常驻)
+$installedPyHelper = Join-Path $installRoot 'Invoke-AntigravitySmartSwitch.ps1'
+if (Test-Path -LiteralPath $installedPyHelper) {
+    & $installedPyHelper -StartDaemon
+}
 
 Write-Output $launcher

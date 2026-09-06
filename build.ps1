@@ -66,4 +66,15 @@ Get-ChildItem -LiteralPath $release -File | ForEach-Object {
     [pscustomobject]@{ file = $_.Name; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash; size = $_.Length }
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $release 'manifest.json') -Encoding UTF8
 
+if ($runningWatchers.Count -gt 0) {
+    try {
+        Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+            CommandLine = "`"$watcherOutput`""
+            CurrentDirectory = $release
+        } | Out-Null
+    } catch {
+        Start-Process -FilePath $watcherOutput -WorkingDirectory $release -WindowStyle Hidden
+    }
+}
+
 Write-Output $release
