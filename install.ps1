@@ -118,6 +118,13 @@ $runningTrays = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | 
 foreach ($processInfo in $runningTrays) {
     Stop-Process -Id ([int]$processInfo.ProcessId) -Force -ErrorAction SilentlyContinue
 }
+# 停止旧版本常驻的 Python 智能看门狗守护进程，防止热更新时内存旧字节码屏蔽新修复
+$runningPyWatchers = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.CommandLine -like "*antigravity_smart_switch.py*" -and $_.CommandLine -like "*--watch*"
+})
+foreach ($pyProc in $runningPyWatchers) {
+    Stop-Process -Id ([int]$pyProc.ProcessId) -Force -ErrorAction SilentlyContinue
+}
 Start-Sleep -Milliseconds 300
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
 $sourceAppFull = [System.IO.Path]::GetFullPath($app).TrimEnd('\')

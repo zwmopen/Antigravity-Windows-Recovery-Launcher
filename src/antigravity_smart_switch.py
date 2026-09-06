@@ -233,14 +233,13 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 for (let retry = 0; retry < 25; retry++) {
                     rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                     if (rows.length > 0) break;
-                    if (retry === 3) {
-                        const toggleBtn = document.querySelector('button[aria-label*="sidebar" i], button[aria-label*="Sidebar" i], button[aria-label*="侧边栏" i]');
-                        if (toggleBtn) {
-                            toggleBtn.click();
-                            await new Promise(r => setTimeout(r, 600));
-                            rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                            if (rows.length > 0) break;
-                        }
+                    // 仅当侧边栏确实处于折叠状态 (aria-expanded === "false") 时，才点击展开
+                    const toggleBtn = document.querySelector('[data-testid="sidebar-toggle"], button[aria-label*="sidebar" i], button[aria-label*="Sidebar" i], button[aria-label*="侧边栏" i]');
+                    if (toggleBtn && toggleBtn.getAttribute('aria-expanded') === 'false') {
+                        toggleBtn.click();
+                        await new Promise(r => setTimeout(r, 600));
+                        rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                        if (rows.length > 0) break;
                     }
                     await new Promise(r => setTimeout(r, 500));
                 }
