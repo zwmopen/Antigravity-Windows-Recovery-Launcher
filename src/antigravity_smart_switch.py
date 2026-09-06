@@ -65,6 +65,7 @@ PENDING_AUTO_RESUME_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-p
 SUBSCRIPTION_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "subscription-report.json")
 DEVTOOLS_PORT_FILE = os.path.join(os.environ.get("APPDATA", os.path.join(USER_PROFILE, "AppData", "Roaming")), "Antigravity", "DevToolsActivePort")
 LANGUAGE_SERVER_LOG = os.path.join(os.environ.get("APPDATA", os.path.join(USER_PROFILE, "AppData", "Roaming")), "Antigravity", "logs", "language_server.log")
+WATCHER_CURRENT_ACCOUNT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "watcher-current-account.txt")
 
 LAUNCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-Recovery-Launcher.exe")
 ACCOUNT_WATCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-AccountWatcher.exe")
@@ -344,7 +345,7 @@ def get_antigravity_main_pid():
     return 0
 
 
-def execute_auto_resume(max_windows=3, text="1", wait_timeout=60, exclude_pids=None):
+def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=None):
     """执行前排 1/2/3 窗口打标与自动扣 1 续接任务"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
@@ -496,8 +497,8 @@ def get_all_accounts_and_quotas():
         # 3. 周剩余额度安全分（0~50分）：周额度越充沛越能持续支撑对话
         score_weekly = min(50.0, q_w_val * 0.5)
         
-        ccock_score = round(score_5h + score_urgency + score_weekly, 1)
-        tiger_score = ccock_score
+        cockpit_score = round(score_5h + score_urgency + score_weekly, 1)
+        tiger_score = cockpit_score
         
         results.append({
             "id": acc_id,
@@ -514,8 +515,7 @@ def get_all_accounts_and_quotas():
             "score_5h": score_5h,
             "score_urgency": score_urgency,
             "score_weekly": score_weekly,
-            "ccock_score": ccock_score,
-            "cockpit_score": ccock_score,
+            "cockpit_score": cockpit_score,
             "tiger_score": tiger_score
         })
     
@@ -544,10 +544,10 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
     
     if candidates:
         # 按 Cockpit Tools 综合评分降序排列
-        candidates.sort(key=lambda x: x["ccock_score"], reverse=True)
+        candidates.sort(key=lambda x: x["cockpit_score"], reverse=True)
         best = candidates[0]
         reason = (
-            f"Cockpit Tools 智能优选 [得分: {best['ccock_score']}]：5小时满血({best['gemini_5h']}%)，"
+            f"Cockpit Tools 智能优选 [得分: {best['cockpit_score']}]：5小时满血({best['gemini_5h']}%)，"
             f"周恢复时间仅剩 {best['days_to_w_reset']}天 (优先消化即将到期额度)，周额度剩余 {best['gemini_weekly']}%"
         )
         return best, reason
@@ -558,7 +558,7 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         if not acc["disabled"] and not acc["is_current"] and acc["effective_quota"] > 0
     ]
     if fallback:
-        fallback.sort(key=lambda x: x["ccock_score"], reverse=True)
+        fallback.sort(key=lambda x: x["cockpit_score"], reverse=True)
         best = fallback[0]
         return best, f"兜底选择非零剩余额度账号 ({best['effective_quota']}%)"
     
@@ -769,7 +769,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     logger.info("账号池实时 Cockpit Tools 智能健康度看板:")
     for acc in accounts:
         marker = " <== [当前在用]" if acc["is_current"] else ""
-        print(f"  * {acc['email']:28} | 有效: {acc['effective_quota']:5.1f}% | 5h: {acc['gemini_5h']:5.1f}% | 周额: {acc['gemini_weekly']:5.1f}% (剩{acc['days_to_w_reset']:3.1f}天) | Cockpit分: {acc['ccock_score']:5.1f}{marker}")
+        print(f"  * {acc['email']:28} | 有效: {acc['effective_quota']:5.1f}% | 5h: {acc['gemini_5h']:5.1f}% | 周额: {acc['gemini_weekly']:5.1f}% (剩{acc['days_to_w_reset']:3.1f}天) | Cockpit分: {acc['cockpit_score']:5.1f}{marker}")
     logger.info("=" * 65)
     
     if not force and not target and curr_effective > threshold:
@@ -796,16 +796,24 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     old_pid = get_antigravity_main_pid()
 
-    # 3. 在线通过 WebSocket 写入 Cockpit 凭据 (无损写入凭据并更新 accounts.json)
+    # 3. 在线通过 WebSocket 写入 Cockpit Tools 凭据 (无损写入凭据并更新 accounts.json)
     server_info = load_cockpit_server_info()
     ok = asyncio.run(switch_account_via_websocket(server_info, best_acc["id"]))
     if not ok:
-        logger.error("向 Cockpit 发送切号指令失败，取消本次切换！")
+        logger.error("向 Cockpit Tools 发送切号指令失败，取消本次切换！")
         clear_pending_switch()
         clear_pending_auto_resume()
         return
     
-    logger.info(f"✅ Cockpit 账号凭证与 accounts.json 已更新成功！新账号: {best_acc['email']}")
+    logger.info(f"✅ Cockpit Tools 账号凭证与 accounts.json 已更新成功！新账号: {best_acc['email']}")
+
+    # 同步更新 watcher-current-account.txt，通知 C# AccountWatcher 该变更已由切号器全权接管，彻底杜绝二段重复拉起与二次强杀
+    try:
+        os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
+        with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
+            f.write(best_acc["id"].strip())
+    except Exception as e:
+        logger.debug(f"同步 watcher-current-account.txt 异常: {e}")
     
     # 3.5 凭据写入成功后，立即优雅退出旧实例，释放锁并彻底避免在专线探测自愈期间遭遇 400 Location 报错
     gracefully_exit_antigravity(timeout_seconds=3.0)
@@ -814,8 +822,9 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     launch_antigravity_via_launcher(recovery_reason="AccountChange")
     
     # 5. 等待新实例真正就绪 (排除旧 PID)，并自动续接前排 1/2/3 窗口 (扣 1)
+    # 设置 180 秒超时，确保专线多节点健康探测与真实模型握手完整完成后再连接 CDP 续接
     logger.info("切号指令已派发，正在等待新实例就绪并自动续接前排窗口 (扣 1)...")
-    execute_auto_resume(max_windows=3, text="1", wait_timeout=60, exclude_pids=[old_pid] if old_pid else None)
+    execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=[old_pid] if old_pid else None)
     clear_pending_switch()
 
 
@@ -838,7 +847,7 @@ def print_status_table():
             status = "✕ 5h额度耗尽"
         else:
             status = "✔ 健康待命"
-        print(f"{i:<3} {acc['email']:<28} {acc['effective_quota']:>5.1f}%   {acc['gemini_5h']:>6.1f}%    {acc['gemini_weekly']:>5.1f}%     剩 {acc['days_to_w_reset']:>4.1f} 天    {acc['ccock_score']:>6.1f}   {status}")
+        print(f"{i:<3} {acc['email']:<28} {acc['effective_quota']:>5.1f}%   {acc['gemini_5h']:>6.1f}%    {acc['gemini_weekly']:>5.1f}%     剩 {acc['days_to_w_reset']:>4.1f} 天    {acc['cockpit_score']:>6.1f}   {status}")
     print("=" * 80 + "\n")
 
 
