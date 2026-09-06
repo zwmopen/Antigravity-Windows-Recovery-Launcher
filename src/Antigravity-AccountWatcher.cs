@@ -20,6 +20,7 @@ internal static class AntigravityAccountWatcher
     private static readonly string LauncherPath = Path.Combine(AppDirectory, "Antigravity-Recovery-Launcher.exe");
     private static readonly string WatcherLogPath = Path.Combine(RuntimeDirectory, "account-watcher.log");
     private static readonly string AccountIdStatePath = Path.Combine(RuntimeDirectory, "watcher-current-account.txt");
+    private static readonly string PendingSwitchPath = Path.Combine(RuntimeDirectory, "pending-switch.json");
     private static readonly string LanguageServerLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Antigravity", "logs", "language_server.log");
@@ -30,13 +31,43 @@ internal static class AntigravityAccountWatcher
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Antigravity", "localization-extension-pending.flag");
     private const string RequiredProxyArgument = "--proxy-server=http://127.0.0.1:17897";
-    private const string WatcherVersion = "0.5.4";
+    private const string WatcherVersion = "0.5.5";
     internal const int MaxRepairAttempts = 3;
     internal const int SuccessfulRepairCooldownSeconds = 30;
     internal const int HealthFailureThreshold = 3;
     internal const int HealthCheckIntervalSeconds = 20;
     internal const int HealthRepairCooldownSeconds = 60;
     internal const int ExhaustedHealthRetrySeconds = 300;
+
+    internal static string ReadHandledAccountId()
+    {
+        try
+        {
+            if (File.Exists(AccountIdStatePath))
+            {
+                return File.ReadAllText(AccountIdStatePath).Trim();
+            }
+        }
+        catch { }
+        return "";
+    }
+
+    internal static bool IsSmartSwitchActive()
+    {
+        try
+        {
+            if (File.Exists(PendingSwitchPath))
+            {
+                var fi = new FileInfo(PendingSwitchPath);
+                if ((DateTime.UtcNow - fi.LastWriteTimeUtc).TotalSeconds < 180)
+                {
+                    return true;
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
 
     internal static bool AccountIdChanged(string activeAccountId, string handledAccountId)
     {
@@ -418,7 +449,7 @@ internal static class AntigravityAccountWatcher
 
             DateTime observed = File.Exists(AccountsPath) ? File.GetLastWriteTimeUtc(AccountsPath) : DateTime.MinValue;
             string activeAccountId = ReadCurrentAccountId();
-            string handledAccountId = File.Exists(AccountIdStatePath) ? File.ReadAllText(AccountIdStatePath).Trim() : "";
+            string handledAccountId = ReadHandledAccountId();
             int runtimeDriftChecks = 0;
             string pendingAccountId = "";
             string suppressedAccountId = "";
@@ -450,6 +481,11 @@ internal static class AntigravityAccountWatcher
                     nextQuotaWatcherUtc = DateTime.UtcNow.AddSeconds(30);
                     EnsureQuotaWatcherRunning();
                 }
+
+                // 动态刷新当前已处理账号，确保与 smart_switch 同步
+                handledAccountId = ReadHandledAccountId();
+                bool smartSwitchActive = IsSmartSwitchActive();
+
                 if (File.Exists(AccountsPath))
                 {
                     DateTime current = File.GetLastWriteTimeUtc(AccountsPath);
@@ -457,7 +493,14 @@ internal static class AntigravityAccountWatcher
                     {
                         observed = current;
                         string observedAccountId = ReadCurrentAccountId();
-                        if (AccountIdChanged(observedAccountId, handledAccountId))
+                        if (smartSwitchActive)
+                        {
+                            Log("accounts_file_write_ignored reason=smart_switch_active");
+                            pendingAccountId = "";
+                            accountRepairAttempts = 0;
+                            nextAccountRepairUtc = DateTime.MinValue;
+                        }
+                        else if (AccountIdChanged(observedAccountId, handledAccountId))
                         {
                             if (!string.Equals(observedAccountId, suppressedAccountId, StringComparison.OrdinalIgnoreCase) &&
                                 !string.Equals(observedAccountId, pendingAccountId, StringComparison.OrdinalIgnoreCase))
@@ -476,41 +519,63 @@ internal static class AntigravityAccountWatcher
                 }
 
                 activeAccountId = ReadCurrentAccountId();
-                bool accountIdChanged = AccountIdChanged(activeAccountId, handledAccountId);
-                if (!accountIdChanged)
+                if (smartSwitchActive)
                 {
                     if (!string.IsNullOrEmpty(pendingAccountId))
                     {
-                        Log("account_change_cancelled reason=returned_to_handled_account");
+                        Log("account_change_cancelled reason=smart_switch_active");
                     }
                     pendingAccountId = "";
                     suppressedAccountId = "";
                     accountRepairAttempts = 0;
                     nextAccountRepairUtc = DateTime.MinValue;
                 }
-                else if (!string.Equals(activeAccountId, suppressedAccountId, StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(activeAccountId, pendingAccountId, StringComparison.OrdinalIgnoreCase))
+                else
                 {
-                    pendingAccountId = activeAccountId;
-                    accountRepairAttempts = 0;
-                    nextAccountRepairUtc = DateTime.UtcNow.AddSeconds(5);
-                    Log("account_change_observed source=account_id_poll");
+                    bool accountIdChanged = AccountIdChanged(activeAccountId, handledAccountId);
+                    if (!accountIdChanged)
+                    {
+                        if (!string.IsNullOrEmpty(pendingAccountId))
+                        {
+                            Log("account_change_cancelled reason=returned_to_handled_account");
+                        }
+                        pendingAccountId = "";
+                        suppressedAccountId = "";
+                        accountRepairAttempts = 0;
+                        nextAccountRepairUtc = DateTime.MinValue;
+                    }
+                    else if (!string.Equals(activeAccountId, suppressedAccountId, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(activeAccountId, pendingAccountId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        pendingAccountId = activeAccountId;
+                        accountRepairAttempts = 0;
+                        nextAccountRepairUtc = DateTime.UtcNow.AddSeconds(5);
+                        Log("account_change_observed source=account_id_poll");
+                    }
                 }
 
                 DateTime utcNow = DateTime.UtcNow;
                 bool launcherRunning = LauncherIsRunning();
                 bool accountRepairDue = !string.IsNullOrEmpty(pendingAccountId) &&
-                    accountRepairAttempts < MaxRepairAttempts;
+                    accountRepairAttempts < MaxRepairAttempts && !smartSwitchActive;
                 if (CanStartRepair(accountRepairDue, launcherRunning, repairInProgress,
                     utcNow, nextAccountRepairUtc, repairCooldownUntilUtc))
                 {
+                    if (IsSmartSwitchActive())
+                    {
+                        pendingAccountId = "";
+                        accountRepairAttempts = 0;
+                        Log("account_change_cancelled reason=smart_switch_active");
+                        continue;
+                    }
                     string stableAccountId = ReadCurrentAccountId();
+                    handledAccountId = ReadHandledAccountId();
                     if (!string.Equals(stableAccountId, pendingAccountId, StringComparison.OrdinalIgnoreCase) ||
                         !AccountIdChanged(stableAccountId, handledAccountId))
                     {
                         pendingAccountId = "";
                         accountRepairAttempts = 0;
-                        Log("account_change_cancelled reason=unstable_account_id");
+                        Log("account_change_cancelled reason=account_already_handled");
                         continue;
                     }
 

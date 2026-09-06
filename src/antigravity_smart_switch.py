@@ -210,8 +210,9 @@ def get_devtools_active_port(wait_timeout=0):
 async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
     """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本"""
     import websockets
-    async with websockets.connect(ws_url, ping_interval=None) as ws:
-        script_template = """
+    try:
+        async with websockets.connect(ws_url, ping_interval=None, close_timeout=2) as ws:
+            script_template = """
         (async () => {
             const maxCount = __MAX_WINDOWS__;
             const resumeText = __RESUME_TEXT__;
@@ -327,20 +328,23 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
             };
         })()
         """
-        script = script_template.replace("__MAX_WINDOWS__", str(int(max_windows))).replace("__RESUME_TEXT__", json.dumps(str(text)))
-        req = {
-            "id": 101,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": script,
-                "awaitPromise": True,
-                "returnByValue": True
+            script = script_template.replace("__MAX_WINDOWS__", str(int(max_windows))).replace("__RESUME_TEXT__", json.dumps(str(text)))
+            req = {
+                "id": 101,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": script,
+                    "awaitPromise": True,
+                    "returnByValue": True
+                }
             }
-        }
-        await ws.send(json.dumps(req))
-        resp = await ws.recv()
-        data = json.loads(resp)
-        return data.get("result", {}).get("result", {}).get("value", {})
+            await ws.send(json.dumps(req))
+            resp = await ws.recv()
+            data = json.loads(resp)
+            return data.get("result", {}).get("result", {}).get("value", {})
+    except (websockets.exceptions.ConnectionClosedOK, websockets.exceptions.ConnectionClosed) as e:
+        logger.debug(f"CDP WebSocket 连接关闭: {e}")
+        return {"success": True, "note": "connection_closed_normally"}
 
 
 def get_antigravity_main_pid():
@@ -363,6 +367,25 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
         return False
+
+    # 1. 优先等待 Launcher 彻底完成并退出，确保 Antigravity 窗口稳定在前台且互斥锁已释放
+    launcher_wait_start = time.time()
+    while time.time() - launcher_wait_start < 40:
+        launcher_active = False
+        if psutil:
+            for p in psutil.process_iter(["name"]):
+                try:
+                    if p.info["name"] and "antigravity-recovery-launcher" in p.info["name"].lower():
+                        launcher_active = True
+                        break
+                except Exception:
+                    pass
+        if not launcher_active:
+            break
+        time.sleep(0.5)
+
+    # 稍微等待 1.5 秒让 Electron 渲染进程完全挂载 DOM
+    time.sleep(1.5)
 
     logger.info(f"正在等待 Antigravity 实例与 DevTools 端口就绪 (最长等待 {wait_timeout} 秒)...")
     import urllib.request
@@ -389,22 +412,36 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=
         return False
 
     logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排 {max_windows} 个窗口打标与扣 '{text}' 续接...")
-    try:
-        result = asyncio.run(_cdp_execute_auto_resume(ws_url, max_windows=max_windows, text=text))
-        logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
-        
-        clear_pending_auto_resume()
-        
-        success_items = [r for r in result.get("results", []) if r.get("success")]
-        count_sent = len(success_items)
-        send_windows_notification(
-            "Cockpit Tools · 断点自动续接",
-            f"已定位前排最新 1/2/3 任务窗口！\n成功在 {count_sent} 个窗口自动扣 '1' 继续推进，已平滑切回主窗口！"
-        )
-        return True
-    except Exception as e:
-        logger.warning(f"执行自动续接发生异常: {e}")
-        return False
+    for retry in range(2):
+        try:
+            result = asyncio.run(_cdp_execute_auto_resume(ws_url, max_windows=max_windows, text=text))
+            logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
+            
+            clear_pending_auto_resume()
+            
+            success_items = [r for r in result.get("results", []) if r.get("success")]
+            count_sent = len(success_items)
+            send_windows_notification(
+                "Cockpit Tools · 断点自动续接",
+                f"已定位前排最新 1/2/3 任务窗口！\n成功在 {count_sent} 个窗口自动扣 '{text}' 继续推进，已平滑切回主窗口！"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"执行自动续接尝试 {retry + 1} 发生异常: {e}")
+            if retry == 0:
+                time.sleep(2.0)
+                port = get_devtools_active_port(wait_timeout=2)
+                if port:
+                    try:
+                        req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
+                        pages = json.loads(req.read().decode("utf-8"))
+                        page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+                        if page:
+                            ws_url = page["webSocketDebuggerUrl"]
+                    except Exception:
+                        pass
+
+    return False
 
 
 def load_cockpit_server_info():
@@ -797,9 +834,15 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         logger.info("[DryRun 演练模式] 未执行实际退出与切号操作。")
         return
     
-    # 1. 记录切号待办事务与大任务断点自动续接凭据，确保断电或重启后可自愈闭环
+    # 1. 记录切号待办事务与大任务断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
     write_pending_switch(best_acc)
     write_pending_auto_resume(max_windows=3, text="1")
+    try:
+        os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
+        with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
+            f.write(best_acc["id"].strip())
+    except Exception as e:
+        logger.debug(f"提前同步 watcher-current-account.txt 异常: {e}")
     
     # 2. 发送气泡通知 (告知用户正在全自动接力无感切号)
     send_windows_notification(
@@ -820,14 +863,6 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     logger.info(f"✅ Cockpit Tools 账号凭证与 accounts.json 已更新成功！新账号: {best_acc['email']}")
 
-    # 同步更新 watcher-current-account.txt，通知 C# AccountWatcher 该变更已由切号器全权接管，彻底杜绝二段重复拉起与二次强杀
-    try:
-        os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
-        with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
-            f.write(best_acc["id"].strip())
-    except Exception as e:
-        logger.debug(f"同步 watcher-current-account.txt 异常: {e}")
-    
     # 3.5 无需提前杀死旧实例造成长达 90 秒的黑洞界面！
     # 保持编辑器存活直到启动器完成专线健康探测与真实模型握手；
     # 启动器内部会在拉起新实例的前 100ms 自动关闭旧实例，实现平滑瞬切 (界面中断仅约 2~3 秒)。

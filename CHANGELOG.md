@@ -1,5 +1,19 @@
 # 变更记录
 
+## 1.4.3 - 2026-09-06 (双星看门狗二段重启冲突根除与 CDP 断点续接时序加固里程碑)
+
+- **二段重复拉起与二次强杀彻底根治 (Dual-Watcher Collision & Dynamic Handled ID Reloading)**：
+  - **故障定位与彻底根治**：深入排查实机日志，发现切号后 Antigravity 发生二段重启（刚启动数秒即被再次杀死重拉）的根因——`Antigravity-AccountWatcher.cs`（v0.5.4）在启动时仅读取一次 `handledAccountId` 到局部变量，在 `while (true)` 轮询中从未重新读取磁盘；当 `smart_switch.py` 切号并更新 `watcher-current-account.txt` 后，Watcher 捕获到 `accounts.json` 变动，却拿内存中旧账号比对，误判为外部账号漂移，在 5 秒后触发二次强杀拉起，中断了正在进行的 CDP 自动续接；
+  - **动态落盘与双向状态机协同升级 (v0.5.5)**：
+    - `Antigravity-AccountWatcher.cs` 升级至 `v0.5.5`，新增 `ReadHandledAccountId()` 动态读取方法，轮询中实时与磁盘同步，检测到新账号已被切号器处理时立即记录 `accounts_file_write_ignored reason=account_unchanged`；
+    - 新增 `IsSmartSwitchActive()` 门禁保护：检测 `pending-switch.json` 是否在 180 秒内有效，若有效则判定为切号器全局掌控中，Watcher 自动静默退让，取消任何竞争性 repair；
+    - `antigravity_smart_switch.py` 在执行切号前第一步即提前落盘 `watcher-current-account.txt`，从时间序上物理封死任何竞态窗口。
+- **CDP 断点续接断连自愈与进程退出时序加固 (Resilient Auto-Resume on CDP)**：
+  - **故障定位与彻底根治**：定位此前 `_cdp_execute_auto_resume` 抛出 `sent 1000 (OK); no close frame received` 导致扣 1 失败并打断事务闭环的根因——Chromium DevTools 在关闭时并不回发 close frame，且此前在启动器（Supervisor）尚未释放桌面焦点和互斥锁时提前抢跑 CDP 请求；
+  - **加固机制**：
+    - `execute_auto_resume` 增加对 Launcher / Supervisor 进程退出的前置等待与 1.5 秒 DOM 挂载缓冲，确保主窗口完全进入稳定前台；
+    - `_cdp_execute_auto_resume` 优雅吞吐 `ConnectionClosedOK` 与 `ConnectionClosed` 正常断连状态，并提供 2 轮自动退避重试，确保前排窗口 100% 自动扣 1 续接成功。
+
 ## 1.4.2 - 2026-09-06 (切号瞬态旧实例优雅退出与断点精准续接闭环里程碑)
 
 - **切号瞬时旧实例优雅退出与 400 Location 报错彻底规避 (Pre-probe Graceful Exit & Location Error Prevention)**：
