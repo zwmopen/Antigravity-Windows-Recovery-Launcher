@@ -208,140 +208,174 @@ def get_devtools_active_port(wait_timeout=0):
 
 
 async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
-    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本"""
+    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (采用原生 CDP Input.insertText 保证 100% 触发 React/Lexical 事件流)"""
     import websockets
     try:
-        async with websockets.connect(ws_url, ping_interval=None, close_timeout=2) as ws:
-            script_template = """
-        (async () => {
-            const maxCount = __MAX_WINDOWS__;
-            const resumeText = __RESUME_TEXT__;
+        async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
+            seq = 100
+            async def cdp_call(method, params=None):
+                nonlocal seq
+                seq += 1
+                cur_id = seq
+                payload = {"id": cur_id, "method": method}
+                if params:
+                    payload["params"] = params
+                await ws.send(json.dumps(payload))
+                while True:
+                    resp = json.loads(await ws.recv())
+                    if resp.get("id") == cur_id:
+                        return resp.get("result", {})
 
-            // 动态轮询等待侧边栏会话列表加载渲染完成 (最多等待 15 秒)
-            let rows = [];
-            for (let retry = 0; retry < 30; retry++) {
-                rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                if (rows.length > 0) break;
-                // 若侧边栏可能处于折叠状态，在第 3 次重试时自动尝试点击展开侧边栏
-                if (retry === 3) {
-                    const toggleBtn = document.querySelector('button[aria-label*="sidebar" i], button[aria-label*="Sidebar" i], button[aria-label*="侧边栏" i]');
-                    if (toggleBtn) {
-                        toggleBtn.click();
-                        await new Promise(r => setTimeout(r, 600));
-                        rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                        if (rows.length > 0) break;
+            # 1. 动态轮询等待侧边栏会话列表加载完成
+            fetch_rows_js = """
+            (async () => {
+                let rows = [];
+                for (let retry = 0; retry < 25; retry++) {
+                    rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                    if (rows.length > 0) break;
+                    if (retry === 3) {
+                        const toggleBtn = document.querySelector('button[aria-label*="sidebar" i], button[aria-label*="Sidebar" i], button[aria-label*="侧边栏" i]');
+                        if (toggleBtn) {
+                            toggleBtn.click();
+                            await new Promise(r => setTimeout(r, 600));
+                            rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                            if (rows.length > 0) break;
+                        }
                     }
+                    await new Promise(r => setTimeout(r, 500));
                 }
-                await new Promise(r => setTimeout(r, 500));
-            }
-
-            if (rows.length === 0) {
-                return { success: false, reason: "no_conversations_found" };
-            }
-
-            // 纯物理序：直接抓取当前侧边栏排在最前面的前 N 个会话 (0, 1, 2)
-            const targetCount = Math.min(maxCount, rows.length);
-            const topSessionInfos = [];
-
-            for (let i = 0; i < targetCount; i++) {
-                const row = rows[i];
-                const titleDiv = row.querySelector('.truncate');
-                const rawTitle = titleDiv ? titleDiv.textContent.trim() : '未知会话';
-                topSessionInfos.push({
-                    rank: i + 1,
-                    title: rawTitle,
-                    href: (row.querySelector('a') || {}).getAttribute ? row.querySelector('a').getAttribute('href') : null
+                return rows.map((r, i) => {
+                    const titleDiv = r.querySelector('.truncate');
+                    const a = r.querySelector('a');
+                    return {
+                        index: i,
+                        title: titleDiv ? titleDiv.textContent.trim() : '未知会话',
+                        href: a ? a.getAttribute('href') : ''
+                    };
                 });
-            }
+            })()
+            """
+            r = await cdp_call("Runtime.evaluate", {"expression": fetch_rows_js, "awaitPromise": True, "returnByValue": True})
+            all_convs = r.get("result", {}).get("value", [])
+            if not all_convs:
+                return {"success": False, "reason": "no_conversations_found"}
 
-            // 2. 依次切换到实时最新的前排窗口并扣 1 发送
-            const results = [];
-            for (let i = 0; i < targetCount; i++) {
-                const row = rows[i];
-                const info = topSessionInfos[i];
-                const a = row.querySelector('a');
-                const href = info.href;
-                if (!a) {
-                    results.push({ index: i + 1, title: info.title, success: false, reason: "no_anchor" });
-                    continue;
-                }
+            target_convs = all_convs[:int(max_windows)]
+            results = []
 
-                a.click();
-                await new Promise(r => setTimeout(r, 800));
+            for c in target_convs:
+                idx = c["index"]
+                title = c["title"]
+                href = c["href"]
 
-                const editable = document.querySelector('[data-lexical-editor="true"]');
-                if (!editable) {
-                    results.push({ index: i + 1, title: info.title, href: href, success: false, reason: "editor_not_found" });
-                    continue;
-                }
+                # a. 切换至对应会话窗口并等待 DOM 挂载
+                switch_and_prep_js = f"""
+                (async () => {{
+                    const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                    const row = rows[{idx}];
+                    if (!row) return {{ status: "no_row" }};
+                    const a = row.querySelector('a');
+                    if (!a) return {{ status: "no_anchor" }};
+                    a.click();
+                    
+                    // 等待编辑器与控制栏就绪 (最多等待 3 秒)
+                    let editable = null;
+                    let container = null;
+                    for (let retry = 0; retry < 15; retry++) {{
+                        editable = document.querySelector('[data-lexical-editor="true"]');
+                        if (editable) {{
+                            container = editable.parentElement;
+                            for (let step = 0; step < 6; step++) {{
+                                if (container && container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]')) break;
+                                if (container && container.parentElement) container = container.parentElement;
+                            }}
+                            if (container) break;
+                        }}
+                        await new Promise(r => setTimeout(r, 200));
+                    }}
 
-                // 检查是否正在生成中 (仅匹配该输入框所属容器内的停止生成按钮)
-                let inputContainer = editable.parentElement;
-                for (let step = 0; step < 6; step++) {
-                    if (inputContainer && inputContainer.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]')) break;
-                    if (inputContainer && inputContainer.parentElement) inputContainer = inputContainer.parentElement;
-                }
-                const generatingBtn = inputContainer ? inputContainer.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"]') : null;
-                if (generatingBtn) {
-                    results.push({ index: i + 1, title: info.title, href: href, skipped: true, reason: "generating" });
-                    continue;
-                }
+                    if (!editable) return {{ status: "editor_not_found" }};
 
-                const currentText = (editable.innerText || '').trim();
-                if (currentText.length > 0 && currentText !== resumeText) {
-                    results.push({ index: i + 1, title: info.title, href: href, skipped: true, reason: "draft_exists" });
-                    continue;
-                }
+                    // 检查是否正在生成中
+                    const generatingBtn = container ? container.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"]') : null;
+                    if (generatingBtn) return {{ status: "generating" }};
 
-                editable.focus();
-                // 使用符合现代 Lexical / React 的 beforeinput 派发输入事件
-                const inputEvt = new InputEvent('beforeinput', {
-                    bubbles: true,
-                    cancelable: true,
-                    inputType: 'insertText',
-                    data: resumeText
-                });
-                editable.dispatchEvent(inputEvt);
-                await new Promise(r => setTimeout(r, 300));
+                    const currentText = (editable.innerText || '').trim();
+                    if (currentText.length > 0 && currentText !== {json.dumps(str(text))}) {{
+                        return {{ status: "draft_exists" }};
+                    }}
 
-                const sendBtn = (inputContainer || document).querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]');
-                if (sendBtn && !sendBtn.disabled) {
-                    sendBtn.click();
-                    results.push({ index: i + 1, title: info.title, href: href, success: true, text: resumeText });
-                } else {
-                    results.push({ index: i + 1, title: info.title, href: href, success: false, reason: "send_button_disabled" });
-                }
+                    editable.focus();
+                    return {{ status: "ready" }};
+                }})()
+                """
+                prep_res = await cdp_call("Runtime.evaluate", {"expression": switch_and_prep_js, "awaitPromise": True, "returnByValue": True})
+                prep_val = prep_res.get("result", {}).get("value", {})
+                prep_status = prep_val.get("status")
 
-                await new Promise(r => setTimeout(r, 600));
-            }
+                if prep_status == "generating":
+                    results.append({"index": idx + 1, "title": title, "href": href, "skipped": True, "reason": "generating"})
+                    continue
+                elif prep_status == "draft_exists":
+                    results.append({"index": idx + 1, "title": title, "href": href, "skipped": True, "reason": "draft_exists"})
+                    continue
+                elif prep_status != "ready":
+                    results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": prep_status})
+                    continue
 
-            // 3. 切回第 1 个窗口聚焦
-            if (rows.length > 0) {
-                const firstLink = rows[0].querySelector('a');
-                if (firstLink) firstLink.click();
-            }
+                # b. 采用原生 CDP Input.insertText 模拟真实按键输入 (100% 触发 React 状态绑定与按钮激活)
+                await cdp_call("Input.insertText", {"text": str(text)})
+                await asyncio.sleep(0.25)
+
+                # c. 检测发送按钮状态并触发点击
+                send_js = """
+                (async () => {
+                    const editable = document.querySelector('[data-lexical-editor="true"]');
+                    let container = editable ? editable.parentElement : null;
+                    for (let step = 0; step < 6; step++) {
+                        if (container && container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]')) break;
+                        if (container && container.parentElement) container = container.parentElement;
+                    }
+                    let sendBtn = null;
+                    for (let retry = 0; retry < 10; retry++) {
+                        sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]') : document.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]');
+                        if (sendBtn && !sendBtn.disabled) break;
+                        await new Promise(r => setTimeout(r, 100));
+                    }
+                    if (sendBtn && !sendBtn.disabled) {
+                        sendBtn.click();
+                        return { success: true };
+                    }
+                    return { success: false, reason: "send_button_disabled" };
+                })()
+                """
+                send_res = await cdp_call("Runtime.evaluate", {"expression": send_js, "awaitPromise": True, "returnByValue": True})
+                send_val = send_res.get("result", {}).get("value", {})
+                if send_val.get("success"):
+                    results.append({"index": idx + 1, "title": title, "href": href, "success": True, "text": text})
+                else:
+                    results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": send_val.get("reason", "unknown")})
+
+                await asyncio.sleep(0.6)
+
+            # 3. 切回第 1 个窗口聚焦
+            if all_convs:
+                switch_back_js = """
+                (async () => {
+                    const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                    if (rows.length > 0) {
+                        const firstLink = rows[0].querySelector('a');
+                        if (firstLink) firstLink.click();
+                    }
+                })()
+                """
+                await cdp_call("Runtime.evaluate", {"expression": switch_back_js, "awaitPromise": True})
 
             return {
-                success: true,
-                processed: results.length,
-                results: results
-            };
-        })()
-        """
-            script = script_template.replace("__MAX_WINDOWS__", str(int(max_windows))).replace("__RESUME_TEXT__", json.dumps(str(text)))
-            req = {
-                "id": 101,
-                "method": "Runtime.evaluate",
-                "params": {
-                    "expression": script,
-                    "awaitPromise": True,
-                    "returnByValue": True
-                }
+                "success": True,
+                "processed": len(results),
+                "results": results
             }
-            await ws.send(json.dumps(req))
-            resp = await ws.recv()
-            data = json.loads(resp)
-            return data.get("result", {}).get("result", {}).get("value", {})
     except (websockets.exceptions.ConnectionClosedOK, websockets.exceptions.ConnectionClosed) as e:
         logger.debug(f"CDP WebSocket 连接关闭: {e}")
         return {"success": True, "note": "connection_closed_normally"}
