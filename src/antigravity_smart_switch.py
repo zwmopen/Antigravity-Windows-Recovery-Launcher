@@ -268,29 +268,42 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 a.click();
                 await new Promise(r => setTimeout(r, 800));
 
-                const stopBtn = document.querySelector('button[aria-label*="Stop"], button[data-testid*="stop"]');
-                if (stopBtn) {
-                    results.push({ index: i + 1, title: info.title, href: href, skipped: true, reason: "task_running" });
-                    continue;
-                }
-
                 const editable = document.querySelector('[data-lexical-editor="true"]');
                 if (!editable) {
                     results.push({ index: i + 1, title: info.title, href: href, success: false, reason: "editor_not_found" });
                     continue;
                 }
 
-                const currentText = (editable.textContent || '').trim();
+                // 检查是否正在生成中 (仅匹配该输入框所属容器内的停止生成按钮)
+                let inputContainer = editable.parentElement;
+                for (let step = 0; step < 6; step++) {
+                    if (inputContainer && inputContainer.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]')) break;
+                    if (inputContainer && inputContainer.parentElement) inputContainer = inputContainer.parentElement;
+                }
+                const generatingBtn = inputContainer ? inputContainer.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"]') : null;
+                if (generatingBtn) {
+                    results.push({ index: i + 1, title: info.title, href: href, skipped: true, reason: "generating" });
+                    continue;
+                }
+
+                const currentText = (editable.innerText || '').trim();
                 if (currentText.length > 0 && currentText !== resumeText) {
                     results.push({ index: i + 1, title: info.title, href: href, skipped: true, reason: "draft_exists" });
                     continue;
                 }
 
                 editable.focus();
-                document.execCommand('insertText', false, resumeText);
-                await new Promise(r => setTimeout(r, 200));
+                // 使用符合现代 Lexical / React 的 beforeinput 派发输入事件
+                const inputEvt = new InputEvent('beforeinput', {
+                    bubbles: true,
+                    cancelable: true,
+                    inputType: 'insertText',
+                    data: resumeText
+                });
+                editable.dispatchEvent(inputEvt);
+                await new Promise(r => setTimeout(r, 300));
 
-                const sendBtn = document.querySelector('button[data-testid="send-button"]');
+                const sendBtn = (inputContainer || document).querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]');
                 if (sendBtn && !sendBtn.disabled) {
                     sendBtn.click();
                     results.push({ index: i + 1, title: info.title, href: href, success: true, text: resumeText });
@@ -815,8 +828,9 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     except Exception as e:
         logger.debug(f"同步 watcher-current-account.txt 异常: {e}")
     
-    # 3.5 凭据写入成功后，立即优雅退出旧实例，释放锁并彻底避免在专线探测自愈期间遭遇 400 Location 报错
-    gracefully_exit_antigravity(timeout_seconds=3.0)
+    # 3.5 无需提前杀死旧实例造成长达 90 秒的黑洞界面！
+    # 保持编辑器存活直到启动器完成专线健康探测与真实模型握手；
+    # 启动器内部会在拉起新实例的前 100ms 自动关闭旧实例，实现平滑瞬切 (界面中断仅约 2~3 秒)。
 
     # 4. 派发脱壳启动器进行平滑重启与专线恢复 (由启动器接管候选探测与新实例拉起)
     launch_antigravity_via_launcher(recovery_reason="AccountChange")
