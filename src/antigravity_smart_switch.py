@@ -2,7 +2,7 @@
 """
 Antigravity Smart Account Switcher & Smooth Launcher
 =====================================================
-CCOCK专属切号规则 (CCOCK Rules):
+Cockpit Tools 智能切号规则 (Cockpit Rules):
 1. 触发条件：
    当前账号有效额度 <= 5.0% 立即触发切号。
 2. 优先级排序：
@@ -384,7 +384,7 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=60, exclude_pids=N
         success_items = [r for r in result.get("results", []) if r.get("success")]
         count_sent = len(success_items)
         send_windows_notification(
-            "CCOCK 选号引擎 · 断点自动续接",
+            "Cockpit Tools · 断点自动续接",
             f"已定位前排最新 1/2/3 任务窗口！\n成功在 {count_sent} 个窗口自动扣 '1' 继续推进，已平滑切回主窗口！"
         )
         return True
@@ -475,7 +475,7 @@ def get_all_accounts_and_quotas():
             sec_to_w_reset = 7.0 * 86400.0
             days_to_w_reset = 7.0
         
-        # CCOCK综合评分机制 (CCOCK Score)：
+        # Cockpit Tools 综合评分机制 (Cockpit Score)：
         # 1. 5小时满血度（0~150分）：越高越好，>=95% 满血加 50 分
         score_5h = q_5h_val + (50.0 if q_5h_val >= 95.0 else 0.0)
         
@@ -515,6 +515,7 @@ def get_all_accounts_and_quotas():
             "score_urgency": score_urgency,
             "score_weekly": score_weekly,
             "ccock_score": ccock_score,
+            "cockpit_score": ccock_score,
             "tiger_score": tiger_score
         })
     
@@ -542,11 +543,11 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
     ]
     
     if candidates:
-        # 按 CCOCK 选号引擎综合评分降序排列
+        # 按 Cockpit Tools 综合评分降序排列
         candidates.sort(key=lambda x: x["ccock_score"], reverse=True)
         best = candidates[0]
         reason = (
-            f"CCOCK选号引擎优选 [得分: {best['ccock_score']}]：5小时满血({best['gemini_5h']}%)，"
+            f"Cockpit Tools 智能优选 [得分: {best['ccock_score']}]：5小时满血({best['gemini_5h']}%)，"
             f"周恢复时间仅剩 {best['days_to_w_reset']}天 (优先消化即将到期额度)，周额度剩余 {best['gemini_weekly']}%"
         )
         return best, reason
@@ -765,10 +766,10 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     logger.info("=" * 65)
     logger.info(f"当前反重力账号: {curr_email} (有效额度: {curr_effective}%)")
     logger.info(f"专线网络订阅状态: {sub_summary}")
-    logger.info("账号池实时 CCOCK 选号引擎健康度看板:")
+    logger.info("账号池实时 Cockpit Tools 智能健康度看板:")
     for acc in accounts:
         marker = " <== [当前在用]" if acc["is_current"] else ""
-        print(f"  * {acc['email']:28} | 有效: {acc['effective_quota']:5.1f}% | 5h: {acc['gemini_5h']:5.1f}% | 周额: {acc['gemini_weekly']:5.1f}% (剩{acc['days_to_w_reset']:3.1f}天) | CCOCK分: {acc['ccock_score']:5.1f}{marker}")
+        print(f"  * {acc['email']:28} | 有效: {acc['effective_quota']:5.1f}% | 5h: {acc['gemini_5h']:5.1f}% | 周额: {acc['gemini_weekly']:5.1f}% (剩{acc['days_to_w_reset']:3.1f}天) | Cockpit分: {acc['ccock_score']:5.1f}{marker}")
     logger.info("=" * 65)
     
     if not force and not target and curr_effective > threshold:
@@ -789,7 +790,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     # 2. 发送气泡通知 (告知用户正在全自动接力无感切号)
     send_windows_notification(
-        "CCOCK 自动续航守护神",
+        "Cockpit Tools 自动续航守护神",
         f"当前账号额度已降至 {curr_effective:.1f}%，已优选下一个满血账号: {best_acc['email']}\n正在全自动写入凭据并无感平滑重启..."
     )
     
@@ -823,10 +824,10 @@ def print_status_table():
     curr_acc = next((a for a in accounts if a["is_current"]), None)
     sub_summary = get_subscription_summary()
     print("\n" + "=" * 80)
-    print(f"【CCOCK选号引擎 Antigravity 账号池配额与恢复排期看板】")
+    print(f"【Cockpit Tools 智能账号池配额与恢复排期看板】")
     print(f"当前在用: {curr_acc['email'] if curr_acc else '无'} | 专线网络订阅: {sub_summary}")
     print("=" * 80)
-    print(f"{'序号':<3} {'账号邮箱':<28} {'有效额度':<9} {'5小时限额':<10} {'周限额':<8} {'周恢复倒计时':<12} {'CCOCK分':<8} {'状态'}")
+    print(f"{'序号':<3} {'账号邮箱':<28} {'有效额度':<9} {'5小时限额':<10} {'周限额':<8} {'周恢复倒计时':<12} {'Cockpit分':<8} {'状态'}")
     print("-" * 80)
     for i, acc in enumerate(accounts, 1):
         if acc["is_current"]:
@@ -953,13 +954,13 @@ def run_watch_daemon(threshold=5.0, interval=30):
         mutex_name = "Local\\AntigravitySmartQuotaWatcher"
         handle = kernel32.CreateMutexW(None, False, mutex_name)
         if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-            logger.info("已存在运行中的【CCOCK无人值守自动续航守护神】实例，静默退出当前多余实例。")
+            logger.info("已存在运行中的【Cockpit Tools 无人值守自动续航守护神】实例，静默退出当前多余实例。")
             return
         _global_mutex_handle = handle
             
     sub_summary = get_subscription_summary()
     logger.info("=" * 65)
-    logger.info("🚀 【CCOCK无人值守自动续航守护神】已就绪！(双星互保脱壳常驻模式)")
+    logger.info("🚀 【Cockpit Tools 无人值守自动续航守护神】已就绪！(双星互保脱壳常驻模式)")
     logger.info(f"   * 自动切号阈值: <= {threshold}%")
     logger.info(f"   * 巡检轮询周期: {interval} 秒")
     logger.info(f"   * 专线网络订阅: {sub_summary}")
@@ -970,7 +971,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
     pending = read_pending_switch()
     if pending and (time.time() - pending.get("timestamp", 0) > 10):
         logger.info(f"发现未闭环的切号待办事务 (目标: {pending.get('target_email')})，正在自动补发自愈拉起...")
-        launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed")
+        launch_antigravity_via_launcher(recovery_reason="AccountChange")
         clear_pending_switch()
 
     # 检查是否存在待自动续接的事务凭据
@@ -1021,7 +1022,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         logger.warning(
                             f"⚠️ 【阈值触发】当前账号 {curr_email} 有效额度打至阈值 ({curr_effective:.1f}% <= {threshold}%)！"
                         )
-                        logger.warning("🚀 正在启动CCOCK全自动无感自愈续航闭环：在线写凭据 -> 脱壳拉起启动器 -> 平滑置顶")
+                        logger.warning("🚀 正在启动 Cockpit Tools 全自动无感自愈续航闭环：在线写凭据 -> 脱壳拉起启动器 -> 平滑置顶")
                         logger.warning("!" * 65)
                         
                         run_smart_switch(threshold=threshold, force=True)
@@ -1041,7 +1042,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Antigravity 智能切号与平滑重启工具 (CCOCK选号引擎版)")
+    parser = argparse.ArgumentParser(description="Antigravity 智能切号与平滑重启工具 (Cockpit Tools 智能版)")
     parser.add_argument("--threshold", type=float, default=5.0, help="自动切号配额百分比阈值 (默认: 5.0)")
     parser.add_argument("--target", type=str, default=None, help="指定切换的目标账号 (邮箱或 ID)")
     parser.add_argument("--dry-run", action="store_true", help="演练模式，仅计算选号不实际执行")

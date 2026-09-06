@@ -64,12 +64,12 @@ if ($StartDaemon) {
             CurrentDirectory = $ScriptDir
         }
         if ($cimResult.ReturnValue -eq 0) {
-            Write-Host "【CCOCK无人值守自动续航守护神】已通过独立脱壳服务在后台就绪！(PID: $($cimResult.ProcessId), 阈值: <= $Threshold%)" -ForegroundColor Green
+            Write-Host "【Cockpit Tools 无人值守自动续航守护神】已通过独立脱壳服务在后台就绪！(PID: $($cimResult.ProcessId), 阈值: <= $Threshold%)" -ForegroundColor Green
             exit 0
         }
     } catch { }
     Start-Process -FilePath $pythonw -ArgumentList @("`"$PyScript`"", '--watch', '--threshold', [string]$Threshold) -WindowStyle Hidden
-    Write-Host "【CCOCK无人值守自动续航守护神】已在后台静默启动！(阈值: <= $Threshold%)" -ForegroundColor Green
+    Write-Host "【Cockpit Tools 无人值守自动续航守护神】已在后台静默启动！(阈值: <= $Threshold%)" -ForegroundColor Green
     exit 0
 }
 
