@@ -209,47 +209,6 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
     async with websockets.connect(ws_url, ping_interval=None) as ws:
         script_template = """
         (async () => {
-            let style = document.getElementById('antigravity-top-badge-style');
-            if (!style) {
-                style = document.createElement('style');
-                style.id = 'antigravity-top-badge-style';
-                style.textContent = `
-                    .ag-top-badge {
-                        display: inline-flex;
-                        align-items: center;
-                        justify-content: center;
-                        font-size: 10px;
-                        font-weight: 700;
-                        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-                        padding: 1px 5px;
-                        border-radius: 4px;
-                        letter-spacing: 0.03em;
-                        line-height: 1.2;
-                        margin-right: 5px;
-                        flex-shrink: 0;
-                        border: 1px solid rgba(255, 255, 255, 0.18);
-                        pointer-events: none;
-                        transition: transform 0.15s ease;
-                    }
-                    .ag-top-badge-1 {
-                        background: linear-gradient(135deg, #2563eb, #1d4ed8);
-                        color: #ffffff;
-                        box-shadow: 0 1px 3px rgba(37, 99, 235, 0.45);
-                    }
-                    .ag-top-badge-2 {
-                        background: linear-gradient(135deg, #059669, #047857);
-                        color: #ffffff;
-                        box-shadow: 0 1px 3px rgba(5, 150, 105, 0.45);
-                    }
-                    .ag-top-badge-3 {
-                        background: linear-gradient(135deg, #7c3aed, #6d28d9);
-                        color: #ffffff;
-                        box-shadow: 0 1px 3px rgba(124, 58, 237, 0.45);
-                    }
-                `;
-                (document.head || document.documentElement).appendChild(style);
-            }
-
             const maxCount = __MAX_WINDOWS__;
             const resumeText = __RESUME_TEXT__;
 
@@ -265,39 +224,20 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 return { success: false, reason: "no_conversations_found" };
             }
 
-            // 实时动态抓取当前排在最顶部的最新 N 个会话
+            // 纯物理序：直接抓取当前侧边栏排在最前面的前 N 个会话 (0, 1, 2)
             const targetCount = Math.min(maxCount, rows.length);
-            const validBadges = new Set();
             const topSessionInfos = [];
 
-            // 1. 实时动态打标 (针对当前最新前排窗口挂载 #1, #2, #3，并动态清理其他旧标签)
             for (let i = 0; i < targetCount; i++) {
                 const row = rows[i];
                 const titleDiv = row.querySelector('.truncate');
-                const rawTitle = titleDiv ? titleDiv.textContent.replace(/^#\d+\s*/, '') : '未知会话';
-                if (titleDiv) {
-                    let badge = titleDiv.querySelector('.ag-top-badge');
-                    if (!badge) {
-                        badge = document.createElement('span');
-                        titleDiv.prepend(badge);
-                    }
-                    badge.className = 'ag-top-badge ag-top-badge-' + (i + 1);
-                    badge.textContent = '#' + (i + 1);
-                    validBadges.add(badge);
-                }
+                const rawTitle = titleDiv ? titleDiv.textContent.trim() : '未知会话';
                 topSessionInfos.push({
                     rank: i + 1,
                     title: rawTitle,
                     href: (row.querySelector('a') || {}).getAttribute ? row.querySelector('a').getAttribute('href') : null
                 });
             }
-
-            // 清理已掉出前 3 名的旧角标，确保标签完全随动态排序同步更新
-            document.querySelectorAll('.ag-top-badge').forEach(b => {
-                if (!validBadges.has(b) && b.parentElement) {
-                    b.parentElement.removeChild(b);
-                }
-            });
 
             // 2. 依次切换到实时最新的前排窗口并扣 1 发送
             const results = [];
@@ -418,7 +358,7 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=30):
         count_sent = len(success_items)
         send_windows_notification(
             "CCOCK 选号引擎 · 断点自动续接",
-            f"已自动打标前排 1/2/3 窗口！\n成功在 {count_sent} 个前排任务窗口扣 '1' 继续推进，已平滑切回主窗口！"
+            f"已定位前排最新 1/2/3 任务窗口！\n成功在 {count_sent} 个窗口自动扣 '1' 继续推进，已平滑切回主窗口！"
         )
         return True
     except Exception as e:
