@@ -1336,21 +1336,20 @@ function Save-SubscriptionReport {
 
         New-Item -ItemType Directory -Path $ProxyRoot -Force | Out-Null
         $reportJson = $report | ConvertTo-Json -Depth 8
-        $tempPath = $SubscriptionReportPath + '.tmp'
-        $reportJson | Set-Content -LiteralPath $tempPath -Encoding UTF8
-        $moveSuccess = $false
-        for ($retryMove = 0; $retryMove -lt 5; $retryMove++) {
+        $written = $false
+        for ($retry = 0; $retry -lt 5; $retry++) {
             try {
-                Move-Item -LiteralPath $tempPath -Destination $SubscriptionReportPath -Force -ErrorAction Stop
-                $moveSuccess = $true
+                $fs = New-Object System.IO.FileStream($SubscriptionReportPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+                $sw = New-Object System.IO.StreamWriter($fs, [System.Text.Encoding]::UTF8)
+                $sw.Write($reportJson)
+                $sw.Flush()
+                $sw.Dispose()
+                $fs.Dispose()
+                $written = $true
                 break
             } catch {
-                Start-Sleep -Milliseconds 100
+                Start-Sleep -Milliseconds 150
             }
-        }
-        if (-not $moveSuccess) {
-            [System.IO.File]::WriteAllText($SubscriptionReportPath, $reportJson, [System.Text.Encoding]::UTF8)
-            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
         }
         $script:SubscriptionInventory = $report
         Write-SafeLog -Event 'subscription_inventory_completed' -Values @{

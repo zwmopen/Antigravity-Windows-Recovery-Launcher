@@ -1,5 +1,16 @@
 # 变更记录
 
+## 1.4.2 - 2026-09-06 (切号瞬态旧实例优雅退出与断点精准续接闭环里程碑)
+
+- **切号瞬时旧实例优雅退出与 400 Location 报错彻底规避 (Pre-probe Graceful Exit & Location Error Prevention)**：
+  - **故障定位与彻底根治**：定位切号过程中用户偶发 `400 User location is not supported for the API use` 与网络超时的根本诱因——在切号后启动器执行候选专线质量与模型探针预检（需约 30~60 秒）期间，旧 Antigravity 实例此前仍保持存活；若此时用户会话发起模型请求，会因 17897 端口中间状态或候选节点切换导致请求落空或报错；
+  - **优雅退出先行闭环**：在 Cockpit 凭据写入成功后，切号引擎立即向旧实例发送 Win32 `CloseMainWindow` 优雅退出信号（超时 3 秒兜底），先释放凭据锁与本地会话，彻底杜绝探针探测期间旧实例请求向 Google 发送导致的网络或地区 400 异常。
+- **断点自动续接 PID 排他感知与真实新实例就绪等待 (Accurate Process Tracking on Auto-Resume)**：
+  - **故障定位与彻底根治**：此前切号派发后仅固定休眠 3 秒即调用 CDP，导致脚本误连接到尚未退出的旧实例 DevToolsActivePort，误判为 `task_running` 而提前销毁了续接凭据，新实例启动后反而未能扣 1；
+  - **排他等待新 PID 架构**：新增 `get_antigravity_main_pid()`，续接调度器接收 `exclude_pids=[old_pid]`，精准等待新实例主进程拉起、DevTools 调试端口就绪后才派发 CDP，确保在新实例的前排窗口 100% 自动打标并扣 1 推进。
+- **并发订阅报告写入全面转为共享文件流 (Zero-Contention FileStream)**：
+  - `Save-SubscriptionReport` 全面改用 `[System.IO.FileShare]::ReadWrite` 原生文件流与重试退避，彻底消除多进程并发访问引起的 `subscription_inventory_write_failed` 异常。
+
 ## 1.4.1 - 2026-09-06 (切号恢复透传平滑重启与全链路自愈闭环强化里程碑)
 
 - **切号恢复原因全链路透传与平滑重启保障 (Seamless Restart on Account Change)**：

@@ -329,35 +329,49 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
         return data.get("result", {}).get("result", {}).get("value", {})
 
 
-def execute_auto_resume(max_windows=3, text="1", wait_timeout=30):
+def get_antigravity_main_pid():
+    """获取 Antigravity 主进程 PID (排除 --type=xxx 渲染或工具子进程)"""
+    if not psutil:
+        return 0
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if p.info["name"] and p.info["name"].lower() == "antigravity.exe":
+                cmd = " ".join(p.info.get("cmdline") or [])
+                if "--type=" not in cmd:
+                    return p.info["pid"]
+        except Exception:
+            pass
+    return 0
+
+
+def execute_auto_resume(max_windows=3, text="1", wait_timeout=60, exclude_pids=None):
     """执行前排 1/2/3 窗口打标与自动扣 1 续接任务"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
         return False
 
     logger.info(f"正在等待 Antigravity 实例与 DevTools 端口就绪 (最长等待 {wait_timeout} 秒)...")
-    port = get_devtools_active_port(wait_timeout=wait_timeout)
-    if not port:
-        logger.warning("未能获取到 DevToolsActivePort，跳过自动续接。")
-        return False
-
     import urllib.request
     ws_url = None
     start_t = time.time()
-    while time.time() - start_t < 15:
-        try:
-            req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
-            pages = json.loads(req.read().decode("utf-8"))
-            page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
-            if page:
-                ws_url = page["webSocketDebuggerUrl"]
-                break
-        except Exception:
-            pass
-        time.sleep(0.5)
+    while time.time() - start_t < wait_timeout:
+        curr_pid = get_antigravity_main_pid()
+        if curr_pid and (not exclude_pids or curr_pid not in exclude_pids):
+            port = get_devtools_active_port(wait_timeout=2)
+            if port:
+                try:
+                    req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
+                    pages = json.loads(req.read().decode("utf-8"))
+                    page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+                    if page:
+                        ws_url = page["webSocketDebuggerUrl"]
+                        break
+                except Exception:
+                    pass
+        time.sleep(1.0)
 
     if not ws_url:
-        logger.warning("未能获取到 Antigravity 页面的 WebSocket 调试地址。")
+        logger.warning("未能获取到新 Antigravity 页面的 WebSocket 调试地址，跳过自动续接。")
         return False
 
     logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排 {max_windows} 个窗口打标与扣 '{text}' 续接...")
@@ -779,7 +793,9 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         f"当前账号额度已降至 {curr_effective:.1f}%，已优选下一个满血账号: {best_acc['email']}\n正在全自动写入凭据并无感平滑重启..."
     )
     
-    # 3. 在线通过 WebSocket 写入 Cockpit 凭据 (无需强杀 Antigravity，避免连带被杀与数据丢失)
+    old_pid = get_antigravity_main_pid()
+
+    # 3. 在线通过 WebSocket 写入 Cockpit 凭据 (无损写入凭据并更新 accounts.json)
     server_info = load_cockpit_server_info()
     ok = asyncio.run(switch_account_via_websocket(server_info, best_acc["id"]))
     if not ok:
@@ -790,13 +806,15 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     logger.info(f"✅ Cockpit 账号凭证与 accounts.json 已更新成功！新账号: {best_acc['email']}")
     
-    # 4. 派发脱壳启动器进行平滑重启与专线恢复 (由启动器内建的精确 Win32 进程关闭逻辑接管)
-    launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed")
+    # 3.5 凭据写入成功后，立即优雅退出旧实例，释放锁并彻底避免在专线探测自愈期间遭遇 400 Location 报错
+    gracefully_exit_antigravity(timeout_seconds=3.0)
+
+    # 4. 派发脱壳启动器进行平滑重启与专线恢复 (由启动器接管候选探测与新实例拉起)
+    launch_antigravity_via_launcher(recovery_reason="AccountChange")
     
-    # 5. 等待新实例就绪并执行前排 1/2/3 窗口自动打标与扣 1 续接
+    # 5. 等待新实例真正就绪 (排除旧 PID)，并自动续接前排 1/2/3 窗口 (扣 1)
     logger.info("切号指令已派发，正在等待新实例就绪并自动续接前排窗口 (扣 1)...")
-    time.sleep(3)
-    execute_auto_resume(max_windows=3, text="1", wait_timeout=45)
+    execute_auto_resume(max_windows=3, text="1", wait_timeout=60, exclude_pids=[old_pid] if old_pid else None)
     clear_pending_switch()
 
 

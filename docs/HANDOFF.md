@@ -1,7 +1,7 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：1.4.1  
+> 对应版本：1.4.2  
 > 最后核对：2026-09-06。
 
 ## 项目定位和范围
@@ -139,6 +139,10 @@
 
 ## 当前状态和下一步
 
+- 2026-09-06 (v1.4.2)：切号瞬态旧实例优雅退出先行与断点续接 PID 排他闭环。
+  - **旧实例优雅退出先行**：在 Cockpit 凭据成功写入后，切号引擎立即发送 Win32 `CloseMainWindow` 信号使旧 Antigravity 实例优雅退出，先保存工作区并释放锁，彻底消除了启动器在 30~60 秒候选节点探测期间旧实例向 17897 发送请求遭遇的 `400 User location is not supported for the API use` 和网络超时报错；
+  - **断点续接 PID 排他架构**：新增 `get_antigravity_main_pid()` 与 `exclude_pids` 参数，续接调度器在后台精准等待**新 PID 进程拉起且 DevTools 页面就绪**后才派发 CDP，根除了此前误连旧实例导致 `task_running` 提前作废凭据的顽疾；
+  - **并发订阅报告写入共享流**：重构 `Save-SubscriptionReport`，使用 `FileMode.Create` + `FileShare.ReadWrite` 共享流与指数退避重试，彻底消除了 `subscription_inventory_write_failed` 异常。
 - 2026-09-06 (v1.4.1)：全面升级透传重启机制与全链路自愈闭环。
   - **切号透传平滑重启**：修复 `Antigravity-AccountWatcher.cs` 与 `Antigravity-Recovery-Launcher.cs` 中将 `AccountChange` / `cockpit_account_changed` 误降级为 `Startup` 的隐患，打通恢复原因全链路透传管道。切号时监督器精准触发平滑重启加载新身份，杜绝客户端与 Language Server 仍滞留旧账号凭据；
   - **全链路日志 1MB 自动安全轮转**：PowerShell 监督器、C# 守卫、C# 启动器、Python 看门狗全面应用 1MB 自动轮转（保留 `.1`），杜绝日志文件无限膨胀；
