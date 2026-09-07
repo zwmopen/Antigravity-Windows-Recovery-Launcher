@@ -70,6 +70,91 @@ LANGUAGE_SERVER_LOG = os.path.join(ROAMING_APPDATA, "Antigravity", "logs", "lang
 WATCHER_CURRENT_ACCOUNT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "watcher-current-account.txt")
 INCIDENT_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "incident-report.json")
 INCIDENT_HISTORY_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "incident-history.json")
+AUTO_RESUME_LOCK_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "auto-resume.lock")
+QUARANTINE_ACCOUNTS_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "quarantined-accounts.json")
+
+
+class AutoResumeLock:
+    """跨进程排他互斥锁，确保任何时刻全局只有一个 CDP 自动续接进程在运行，杜绝并发踩踏"""
+    def __init__(self, lock_file=AUTO_RESUME_LOCK_FILE):
+        self.lock_file = lock_file
+        self.handle = None
+
+    def acquire(self):
+        try:
+            os.makedirs(os.path.dirname(self.lock_file), exist_ok=True)
+            self.handle = open(self.lock_file, "a+")
+            if sys.platform == "win32":
+                import msvcrt
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except (IOError, OSError):
+            if self.handle:
+                try:
+                    self.handle.close()
+                except Exception:
+                    pass
+                self.handle = None
+            return False
+
+    def release(self):
+        if self.handle:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    self.handle.seek(0)
+                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
+            try:
+                self.handle.close()
+            except Exception:
+                pass
+            self.handle = None
+
+
+def load_quarantined_accounts():
+    """读取因 429 被临时关押的账号列表 { account_id: expire_timestamp }"""
+    if not os.path.exists(QUARANTINE_ACCOUNTS_FILE):
+        return {}
+    try:
+        with open(QUARANTINE_ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        now = time.time()
+        # 清理已过期的关押记录
+        active_q = {k: v for k, v in data.items() if v > now}
+        return active_q
+    except Exception:
+        return {}
+
+
+def record_quarantine_account(account_id, duration_seconds=9000):
+    """将触发 429 报错的账号加入临时关押名单，避免短时间内再次被优选"""
+    try:
+        data = load_quarantined_accounts()
+        expire_at = time.time() + duration_seconds
+        data[account_id] = expire_at
+        os.makedirs(os.path.dirname(QUARANTINE_ACCOUNTS_FILE), exist_ok=True)
+        with open(QUARANTINE_ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        logger.info(f"🚫 已将账号 {account_id} 加入 429 临时关押名单，持续 {int(duration_seconds // 60)} 分钟 (至 {datetime.fromtimestamp(expire_at).strftime('%H:%M:%S')})")
+    except Exception as e:
+        logger.debug(f"记录关押账号异常: {e}")
+
+
+def remove_quarantined_account(account_id):
+    """当用户在 Cockpit 手动选择或人工介入时，解除对应账号的关押状态"""
+    try:
+        data = load_quarantined_accounts()
+        if account_id in data:
+            del data[account_id]
+            with open(QUARANTINE_ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"🔓 已解除账号 {account_id} 的 429 临时关押状态")
+    except Exception as e:
+        logger.debug(f"解除关押账号异常: {e}")
+
 
 # 全局文件日志：确保无论 CLI 测试、脚本调用还是后台守护，日志均可落盘
 try:
@@ -454,7 +539,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 title = c["title"]
                 href = c["href"]
 
-                # a. 切换至对应会话窗口并等待 DOM 挂载
+                # a. 切换至对应会话窗口并等待路由与 DOM 彻底挂载沉降
                 switch_and_prep_js = f"""
                 (async () => {{
                     const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
@@ -462,37 +547,47 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                     if (!row) return {{ status: "no_row" }};
                     const a = row.querySelector('a');
                     if (!a) return {{ status: "no_anchor" }};
-                    a.click();
                     
-                    // 等待编辑器与控制栏就绪 (最多等待 3 秒)
+                    const targetHref = a.getAttribute('href') || '';
+                    if (targetHref && !location.href.includes(targetHref)) {{
+                        a.click();
+                        // 显式等待路由地址切换完成 (最多 1.5 秒)
+                        for (let i = 0; i < 15; i++) {{
+                            if (location.href.includes(targetHref)) break;
+                            await new Promise(r => setTimeout(r, 100));
+                        }}
+                        // 给 React 充足的组件重新挂载与状态重置时间
+                        await new Promise(r => setTimeout(r, 350));
+                    }}
+
+                    // 等待编辑器输入区挂载 (最多等待 3 秒)
                     let editable = null;
-                    let container = null;
                     for (let retry = 0; retry < 15; retry++) {{
                         editable = document.querySelector('[data-lexical-editor="true"]');
-                        if (editable) {{
-                            container = editable.parentElement;
-                            for (let step = 0; step < 6; step++) {{
-                                if (container && container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]')) break;
-                                if (container && container.parentElement) container = container.parentElement;
-                            }}
-                            if (container) break;
-                        }}
+                        if (editable) break;
                         await new Promise(r => setTimeout(r, 200));
                     }}
 
                     if (!editable) return {{ status: "editor_not_found" }};
 
-                    // 检查是否正在生成中
-                    const generatingBtn = container ? container.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"]') : null;
-                    if (generatingBtn) return {{ status: "generating" }};
+                    // 检查是否正在生成中 (Stop/Cancel 按钮存在即视为生成中)
+                    const isGenerating = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"]');
+                    if (isGenerating) return {{ status: "generating" }};
 
                     const currentText = (editable.innerText || '').trim();
                     if (currentText.length > 0 && currentText !== {json.dumps(str(text))}) {{
                         return {{ status: "draft_exists" }};
                     }}
 
+                    // 聚焦并清空可能残留的历史草稿，避免字符重复拼接
                     editable.focus();
-                    return {{ status: "ready" }};
+                    if (currentText === {json.dumps(str(text))}) {{
+                        return {{ status: "ready_has_text" }};
+                    }} else {{
+                        document.execCommand('selectAll', false, null);
+                        document.execCommand('delete', false, null);
+                        return {{ status: "ready" }};
+                    }}
                 }})()
                 """
                 prep_res = await cdp_call("Runtime.evaluate", {"expression": switch_and_prep_js, "awaitPromise": True, "returnByValue": True})
@@ -505,15 +600,16 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 elif prep_status == "draft_exists":
                     results.append({"index": idx + 1, "title": title, "href": href, "skipped": True, "reason": "draft_exists"})
                     continue
-                elif prep_status != "ready":
+                elif prep_status not in ("ready", "ready_has_text"):
                     results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": prep_status})
                     continue
 
-                # b. 采用原生 CDP Input.insertText 模拟真实按键输入 (100% 触发 React 状态绑定与按钮激活)
-                await cdp_call("Input.insertText", {"text": str(text)})
-                await asyncio.sleep(0.25)
+                if prep_status == "ready":
+                    # b. 采用原生 CDP Input.insertText 模拟真实按键输入 (触发 Lexical 状态模型绑定)
+                    await cdp_call("Input.insertText", {"text": str(text)})
+                    await asyncio.sleep(0.3)
 
-                # c. 检测发送按钮状态并触发点击
+                # c. 检测发送按钮并触发点击 (双重提交机制：按钮点击 + 原生 Enter 保底)
                 send_js = """
                 (async () => {
                     const editable = document.querySelector('[data-lexical-editor="true"]');
@@ -523,21 +619,51 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                         if (container && container.parentElement) container = container.parentElement;
                     }
                     let sendBtn = null;
-                    for (let retry = 0; retry < 16; retry++) {
+                    for (let retry = 0; retry < 15; retry++) {
                         sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]') : document.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]');
-                        if (sendBtn && !sendBtn.disabled) break;
+                        if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
                         await new Promise(r => setTimeout(r, 100));
                     }
-                    if (sendBtn && !sendBtn.disabled) {
+                    if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
                         sendBtn.click();
-                        return { success: true };
+                        return { success: true, method: "button_click" };
                     }
-                    return { success: false, reason: "send_button_disabled" };
+                    return { success: false, reason: "button_not_clickable" };
                 })()
                 """
                 send_res = await cdp_call("Runtime.evaluate", {"expression": send_js, "awaitPromise": True, "returnByValue": True})
                 send_val = send_res.get("result", {}).get("value", {})
-                if send_val.get("success"):
+                is_sent = send_val.get("success", False)
+
+                if not is_sent:
+                    # 保底双重提交机制：若按钮点击未触发，派发原生键盘 Enter 键 (KeyCode: 13) 提交
+                    await cdp_call("Input.dispatchKeyEvent", {
+                        "type": "keyDown",
+                        "windowsVirtualKeyCode": 13,
+                        "unmodifiedText": "\r",
+                        "text": "\r"
+                    })
+                    await cdp_call("Input.dispatchKeyEvent", {
+                        "type": "keyUp",
+                        "windowsVirtualKeyCode": 13,
+                        "unmodifiedText": "\r",
+                        "text": "\r"
+                    })
+                    await asyncio.sleep(0.35)
+
+                # d. 最终验证发送状态 (输入框清空或出现停止生成按钮)
+                verify_js = """
+                (() => {
+                    const editable = document.querySelector('[data-lexical-editor="true"]');
+                    const currentText = editable ? (editable.innerText || '').trim() : '';
+                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"]');
+                    return { cleared: currentText.length === 0, generating: isGen };
+                })()
+                """
+                verify_res = await cdp_call("Runtime.evaluate", {"expression": verify_js, "returnByValue": True})
+                verify_val = verify_res.get("result", {}).get("value", {})
+
+                if is_sent or verify_val.get("cleared") or verify_val.get("generating"):
                     logger.info(f"✅ CDP 窗口 [{idx+1}] 发送成功: 会话='{title}' 成功输入 '{text}' 并触发发送")
                     results.append({"index": idx + 1, "title": title, "href": href, "success": True, "text": text})
                 else:
@@ -612,73 +738,50 @@ def send_windows_notification(title, message):
 
 
 def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=None):
-    """执行前排 1/2/3 窗口打标与自动扣 1 续接任务"""
+    """执行前排 1/2/3 窗口打标与自动扣 1 续接任务 (单飞互斥保护)"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
         return False
 
-    # 1. 优先等待 Launcher 彻底完成并退出，确保 Antigravity 窗口稳定在前台且互斥锁已释放
-    launcher_wait_start = time.time()
-    while time.time() - launcher_wait_start < 150:
-        launcher_active = False
-        if psutil:
-            for p in psutil.process_iter(["name"]):
-                try:
-                    if p.info["name"] and "antigravity-recovery-launcher" in p.info["name"].lower():
-                        launcher_active = True
-                        break
-                except Exception:
-                    pass
-        if not launcher_active:
-            break
-        time.sleep(0.5)
-
-    # 稍微等待 1.5 秒让 Electron 渲染进程完全挂载 DOM
-    time.sleep(1.5)
-
-    logger.info(f"正在等待 Antigravity 实例与 DevTools 端口就绪 (最长等待 {wait_timeout} 秒)...")
-    import urllib.request
-    ws_url = None
-    start_t = time.time()
-    while time.time() - start_t < wait_timeout:
-        curr_pid = get_antigravity_main_pid()
-        if curr_pid and (not exclude_pids or curr_pid not in exclude_pids):
-            port = get_devtools_active_port(wait_timeout=2)
-            if port:
-                try:
-                    req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
-                    pages = json.loads(req.read().decode("utf-8"))
-                    page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
-                    if page:
-                        ws_url = page["webSocketDebuggerUrl"]
-                        break
-                except Exception:
-                    pass
-        time.sleep(1.0)
-
-    if not ws_url:
-        logger.warning("未能获取到新 Antigravity 页面的 WebSocket 调试地址，跳过自动续接。")
+    lock = AutoResumeLock()
+    if not lock.acquire():
+        logger.info("⚡ 检测到另一个自动续接任务正在执行中，本实例自动安全退出，彻底避免双进程并发踩踏。")
         return False
 
-    logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排 {max_windows} 个窗口打标与扣 '{text}' 续接...")
-    for retry in range(2):
-        try:
-            result = asyncio.run(_cdp_execute_auto_resume(ws_url, max_windows=max_windows, text=text))
-            logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
-            
+    try:
+        token = read_pending_auto_resume()
+        if token:
+            max_windows = token.get("max_windows", max_windows)
+            text = token.get("text", text)
+            # 立即消费令牌，防止后续重复调用
             clear_pending_auto_resume()
-            
-            success_items = [r for r in result.get("results", []) if r.get("success")]
-            count_sent = len(success_items)
-            send_windows_notification(
-                "Cockpit Tools · 断点自动续接",
-                f"已定位前排最新 1/2/3 任务窗口！\n成功在 {count_sent} 个窗口自动扣 '{text}' 继续推进，已平滑切回主窗口！"
-            )
-            return True
-        except Exception as e:
-            logger.warning(f"执行自动续接尝试 {retry + 1} 发生异常: {e}")
-            if retry == 0:
-                time.sleep(2.0)
+
+        # 1. 优先等待 Launcher 彻底完成并退出，确保 Antigravity 窗口稳定在前台且互斥锁已释放
+        launcher_wait_start = time.time()
+        while time.time() - launcher_wait_start < 150:
+            launcher_active = False
+            if psutil:
+                for p in psutil.process_iter(["name"]):
+                    try:
+                        if p.info["name"] and "antigravity-recovery-launcher" in p.info["name"].lower():
+                            launcher_active = True
+                            break
+                    except Exception:
+                        pass
+            if not launcher_active:
+                break
+            time.sleep(0.5)
+
+        # 稍微等待 1.5 秒让 Electron 渲染进程完全挂载 DOM
+        time.sleep(1.5)
+
+        logger.info(f"正在等待 Antigravity 实例与 DevTools 端口就绪 (最长等待 {wait_timeout} 秒)...")
+        import urllib.request
+        ws_url = None
+        start_t = time.time()
+        while time.time() - start_t < wait_timeout:
+            curr_pid = get_antigravity_main_pid()
+            if curr_pid and (not exclude_pids or curr_pid not in exclude_pids):
                 port = get_devtools_active_port(wait_timeout=2)
                 if port:
                     try:
@@ -687,10 +790,48 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=
                         page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
                         if page:
                             ws_url = page["webSocketDebuggerUrl"]
+                            break
                     except Exception:
                         pass
+            time.sleep(1.0)
 
-    return False
+        if not ws_url:
+            logger.warning("未能获取到新 Antigravity 页面的 WebSocket 调试地址，跳过自动续接。")
+            return False
+
+        logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排 {max_windows} 个窗口打标与扣 '{text}' 续接...")
+        for retry in range(2):
+            try:
+                result = asyncio.run(_cdp_execute_auto_resume(ws_url, max_windows=max_windows, text=text))
+                logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
+
+                clear_pending_auto_resume()
+
+                success_items = [r for r in result.get("results", []) if r.get("success")]
+                count_sent = len(success_items)
+                send_windows_notification(
+                    "Cockpit Tools · 断点自动续接",
+                    f"已定位前排最新 1/2/3 任务窗口！\n成功在 {count_sent} 个窗口自动扣 '{text}' 继续推进，已平滑切回主窗口！"
+                )
+                return True
+            except Exception as e:
+                logger.warning(f"执行自动续接尝试 {retry + 1} 发生异常: {e}")
+                if retry == 0:
+                    time.sleep(2.0)
+                    port = get_devtools_active_port(wait_timeout=2)
+                    if port:
+                        try:
+                            req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
+                            pages = json.loads(req.read().decode("utf-8"))
+                            page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+                            if page:
+                                ws_url = page["webSocketDebuggerUrl"]
+                        except Exception:
+                            pass
+
+        return False
+    finally:
+        lock.release()
 
 
 def load_cockpit_server_info():
@@ -831,12 +972,15 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
     
     # 门禁过滤（注意事项3）：
     # 1. 排除当前在用与已禁用账号；
-    # 2. 周额度 <= 5% 必须一票否决淘汰（周额度耗尽则无法工作）；
-    # 3. 5小时额度 <= 5% 必须一票否决淘汰。
+    # 2. 排除处于 429 临时关押冷却期的账号；
+    # 3. 周额度 <= 5% 必须一票否决淘汰（周额度耗尽则无法工作）；
+    # 4. 5小时额度 <= 5% 必须一票否决淘汰。
+    quarantined = load_quarantined_accounts()
     candidates = [
         acc for acc in accounts
         if not acc["disabled"]
         and not acc["is_current"]
+        and acc["id"] not in quarantined
         and acc["gemini_weekly"] > threshold
         and acc["gemini_5h"] > threshold
     ]
@@ -851,11 +995,17 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         )
         return best, reason
     
-    # 兜底选择非零可用账号
+    # 兜底选择非零可用账号 (优先非关押)
     fallback = [
         acc for acc in accounts
-        if not acc["disabled"] and not acc["is_current"] and acc["effective_quota"] > 0
+        if not acc["disabled"] and not acc["is_current"] and acc["id"] not in quarantined and acc["effective_quota"] > 0
     ]
+    if not fallback:
+        # 若所有非关押账号均耗尽，才允许从关押账号中最后兜底
+        fallback = [
+            acc for acc in accounts
+            if not acc["disabled"] and not acc["is_current"] and acc["effective_quota"] > 0
+        ]
     if fallback:
         fallback.sort(key=lambda x: x["cockpit_score"], reverse=True)
         best = fallback[0]
@@ -1268,6 +1418,26 @@ def check_language_server_quota_error():
                 matched_snippet = matched_lines[0] if matched_lines else new_content[:200].strip()
                 logger.warning(f"🚨 [实时日志穿透感知] 在 language_server.log 捕获到模型额度耗尽特征: '{pat}'！")
                 logger.warning(f"   * 原始报错文本: {matched_snippet[:240]}")
+
+                # 动态提取重置倒计时并对触发 429 的账号施加临时关押
+                duration = 9000
+                m = re.search(r'Resets in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?', matched_snippet)
+                if m:
+                    h = int(m.group(1) or 0)
+                    mi = int(m.group(2) or 0)
+                    s = int(m.group(3) or 0)
+                    calc_dur = h * 3600 + mi * 60 + s
+                    if calc_dur > 0:
+                        duration = calc_dur
+
+                try:
+                    with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
+                        curr_id = json.load(f).get("current_account_id")
+                    if curr_id:
+                        record_quarantine_account(curr_id, duration)
+                except Exception:
+                    pass
+
                 record_incident(
                     incident_type="MODEL_QUOTA_EXHAUSTED",
                     severity="WARNING",
@@ -1368,6 +1538,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
                             f.write(current_id.strip())
                         reset_language_server_log_pos()
+                        remove_quarantined_account(current_id)
             except Exception as e:
                 logger.debug(f"人工切号感知异常: {e}")
 

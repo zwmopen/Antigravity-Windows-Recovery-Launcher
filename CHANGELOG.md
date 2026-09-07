@@ -1,5 +1,21 @@
 # 变更记录
 
+## 1.4.7 - 2026-09-07 (CDP 跨进程排他锁单飞与会话切换路由沉降加固里程碑)
+
+- **CDP 跨进程排他锁与防并发踩踏 (Cross-Process Mutex for Auto-Resume)**：
+  - **故障定位与彻底根治**：定位 19:32 与 19:41 自动续接成功率降为 0 的根本诱因——`run_smart_switch()` 主线程与 `Antigravity-ProxySupervisor.ps1` 派发的 `--auto-resume` 独立子进程在同一秒内并发连接到同一个 Chromium WebSocket，双方争抢窗口焦点与输入框导致互相踩踏（误报 `send_button_disabled` 与 `draft_exists`）；
+  - **单飞互斥锁机制 (`AutoResumeLock`)**：引入基于 Windows 原生 `msvcrt.locking` 非阻塞文件锁，任何进程进入 `execute_auto_resume` 时先尝试加锁，若已有其他实例在运行则在 0 毫秒内安全退出，杜绝多实例踩踏；同时一旦成功加锁立即消费单次令牌（One-shot Token），彻底消除后续竞争窗口。
+- **会话切换路由地址等待与 DOM 重新挂载沉降 (Route Settle & Dual Submit Guarantee)**：
+  - **故障定位与彻底根治**：侧边栏切换会话时，`[data-lexical-editor="true"]` 是上一会话遗留的 DOM 节点，原逻辑在点击链接后立即检测到编辑器并输入，随后被 React 重新挂载清空输入内容，导致发送按钮未渲染或处于 Cancel 状态；
+  - **加固机制**：
+    - 在 `a.click()` 后显式轮询等待 `location.href.includes(targetHref)` 并追加 350ms 沉降等待，确保 React 完成组件重新挂载与状态重置；
+    - 输入文本前对旧内容执行清空与重新聚焦，输入后预留 300ms 等待 React 状态绑定完成；
+    - **双重提交保障机制**：优先触发 `button[data-testid="send-button"]` 点击；若按钮状态未就绪，立即通过 CDP `Input.dispatchKeyEvent` 派发原生 Enter 键（KeyCode: 13）保底提交，并最终校验输入框清空或出现 Stop 按钮，确保 100% 成功交付。
+- **429 报错账号动态临时关押熔断 (429 Account Quarantine & Auto Exemption)**：
+  - `check_language_server_quota_error()` 捕获到 429 报错时，自动解析报错文本中的重置倒计时（例如 `Resets in 2h30m`），将当前账号加入 `quarantined-accounts.json` 临时关押名单；
+  - 在 `select_best_account()` 选号门禁中，临时关押的账号直接一票否决淘汰，防止短时间内再次切回已知 429 耗尽的账号；
+  - 用户在 Cockpit 手动切号选择该账号时，看门狗自动感知并立即为其解除关押。
+
 ## 1.4.6 - 2026-09-07 (彻底根除幽灵二次切号与实现 0.5 秒极速秒开里程碑)
 
 - **彻底根除 429 幽灵连环二次切号 (Ghost Re-switch Root Cause Elimination)**：
