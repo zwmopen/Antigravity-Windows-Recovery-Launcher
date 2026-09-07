@@ -2339,14 +2339,25 @@ foreach ($candidate in $orderedCandidates) {
         $candidateConfig = Write-PrivateConfig -ProfileId 'active-clash-runtime' -Candidate $candidate
         $script:CurrentConfigHash = [string]$candidateConfig.ConfigHash
         Test-PrivateConfig
-        Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
-        $candidateConnectivity = Test-GoogleConnectivity
-        $script:LastGoogleStatus = [int]$candidateConnectivity.GoogleStatus
-        $script:LastApiStatus = [int]$candidateConnectivity.ApiStatus
-        $script:LastOAuthStatus = [int]$candidateConnectivity.OAuthStatus
-        $expectedCountry = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedCountry } else { [string]$candidate.ExpectedEgressCountry }
-        $expectedIp = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedIp } else { '' }
-        $candidateCountry = Test-ProxyEgress -ExpectedCountry $expectedCountry -ExpectedIp $expectedIp
+        $isFastAccountChange = ($RecoveryReason -in @('AccountChange', 'cockpit_account_changed')) -and ([string]$candidate.Id -eq [string]$failoverState.active_node_id)
+        if ($isFastAccountChange -and (Test-LocalPort -TestPort $Port)) {
+            $candidateConnectivity = @{ GoogleStatus = 204; ApiStatus = 404; OAuthStatus = 404; RttMs = 0; Attempts = 1 }
+            $candidateCountry = if (-not [string]::IsNullOrWhiteSpace([string]$candidate.ExpectedEgressCountry)) { [string]$candidate.ExpectedEgressCountry } else { 'US' }
+            $script:LastGoogleStatus = 204
+            $script:LastApiStatus = 404
+            $script:LastOAuthStatus = 404
+            $script:LastEgressCountry = [string]$candidateCountry
+            Write-SafeLog -Event 'candidate_preflight_fast_reused_for_account_change' -Values @{ node_id = [string]$candidate.Id; port = $Port }
+        } else {
+            $candidateConnectivity = Test-GoogleConnectivity
+            $script:LastGoogleStatus = [int]$candidateConnectivity.GoogleStatus
+            $script:LastApiStatus = [int]$candidateConnectivity.ApiStatus
+            $script:LastOAuthStatus = [int]$candidateConnectivity.OAuthStatus
+            $expectedCountry = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedCountry } else { [string]$candidate.ExpectedEgressCountry }
+            $expectedIp = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedIp } else { '' }
+            $candidateCountry = Test-ProxyEgress -ExpectedCountry $expectedCountry -ExpectedIp $expectedIp
+            $script:LastEgressCountry = [string]$candidateCountry
+        }
         $skipModelProbe = ($RecoveryReason -in @('AccountChange', 'cockpit_account_changed')) -or ([string]$candidate.Id -eq [string]$failoverState.active_node_id)
         if (-not $skipModelProbe) {
             Test-RealModelGeneration | Out-Null

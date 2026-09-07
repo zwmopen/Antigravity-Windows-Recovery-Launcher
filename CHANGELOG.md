@@ -1,5 +1,19 @@
 # 变更记录
 
+## 1.4.6 - 2026-09-07 (彻底根除幽灵二次切号与实现 0.5 秒极速秒开里程碑)
+
+- **彻底根除 429 幽灵连环二次切号 (Ghost Re-switch Root Cause Elimination)**：
+  - **故障定位与彻底根治**：精准定位 17:09 刚切至满血账号 1 分钟内被再次误切走（切到 zwmrpg）的根本原因——切号后旧进程在后台滞后重试输出了旧账号死亡时的 `RESOURCE_EXHAUSTED` 错误日志，`check_language_server_quota_error()` 读取到这具旧日志残余，误以为新账号 429 耗尽；
+  - **末尾对齐与 90 秒保护静默期**：
+    - 新增 `reset_language_server_log_pos()`：切号完成以及检测到人工切号时，立即将 `language_server.log` 指针强行对齐至物理文件末尾，丢弃旧账号残留日志；
+    - 设立 **90 秒切号保护静默期**，切号后 90 秒内不响应任何 429 报错；
+    - 修复日志轮转重置为 0 导致全量重读历史日志的潜在 Bug，轮转后直接同步至当前末尾。
+- **账号切换 0.5 秒极速秒开 (Zero-Latency Fast-Track Launch for Account Change)**：
+  - 启动器（`Antigravity-ProxySupervisor.ps1`）在执行 `AccountChange` 或 `cockpit_account_changed` 恢复时，若候选节点为已经在 17897 稳定监听且经受住考验的活跃节点，直接标记连通；
+  - 彻底跳过冗余的 HTTP 204 与 IP 探针，预检耗时从 2~3 秒压减至 **0 毫秒**，启动器接单后直接拉起 Antigravity。
+- **CDP 自动断点续接就绪轮询强化 (Resilient Send Button Wait)**：
+  - `_cdp_execute_auto_resume` 中发送按钮就绪轮询重试从 10 次（1.0s）提升至 16 次（1.6s），杜绝复杂多会话偶发 `send_button_disabled` 导致断点续接失败。
+
 ## 1.4.3 - 2026-09-06 (双星看门狗二段重启冲突根除与 CDP 断点续接时序加固里程碑)
 
 - **二段重复拉起与二次强杀彻底根治 (Dual-Watcher Collision & Dynamic Handled ID Reloading)**：

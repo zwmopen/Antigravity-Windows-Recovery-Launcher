@@ -523,7 +523,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                         if (container && container.parentElement) container = container.parentElement;
                     }
                     let sendBtn = null;
-                    for (let retry = 0; retry < 10; retry++) {
+                    for (let retry = 0; retry < 16; retry++) {
                         sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]') : document.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]');
                         if (sendBtn && !sendBtn.disabled) break;
                         await new Promise(r => setTimeout(r, 100));
@@ -1129,6 +1129,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     logger.info("切号指令已派发，正在等待新实例就绪并自动续接前排窗口 (扣 1)...")
     execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=[old_pid] if old_pid else None)
     clear_pending_switch()
+    reset_language_server_log_pos()
 
 
 def print_status_table():
@@ -1173,6 +1174,21 @@ def stop_watch_daemon():
 
 _global_mutex_handle = None
 _last_language_log_pos = 0
+_last_switch_time = 0.0
+
+
+def reset_language_server_log_pos():
+    """切号完成后将日志指针同步到当前文件末尾，并记录切号时间戳，彻底消除旧账号残留报错引起的幽灵连环二次切号"""
+    global _last_language_log_pos, _last_switch_time
+    _last_switch_time = time.time()
+    try:
+        if os.path.exists(LANGUAGE_SERVER_LOG):
+            _last_language_log_pos = os.path.getsize(LANGUAGE_SERVER_LOG)
+        else:
+            _last_language_log_pos = 0
+        logger.debug(f"已重置 language_server 日志指针至最新末尾: {_last_language_log_pos}，并进入 90 秒保护静默期")
+    except Exception as e:
+        logger.debug(f"重置 language_server 日志指针异常: {e}")
 
 
 def ensure_account_watcher_running():
@@ -1206,11 +1222,16 @@ def ensure_account_watcher_running():
 
 def check_language_server_quota_error():
     """穿透监听 language_server.log，毫秒级感知 429 / RESOURCE_EXHAUSTED / quota 耗尽报错"""
-    global _last_language_log_pos
+    global _last_language_log_pos, _last_switch_time
+
+    # 保护冷却期：刚切号的 90 秒内不响应 429 报错，防止读取到旧会话未断开或旧进程的残余日志
+    if time.time() - _last_switch_time < 90:
+        return False
+
     if not os.path.exists(LANGUAGE_SERVER_LOG):
         _last_language_log_pos = 0
         return False
-        
+
     try:
         size = os.path.getsize(LANGUAGE_SERVER_LOG)
         if _last_language_log_pos == 0:
@@ -1219,8 +1240,9 @@ def check_language_server_quota_error():
             return False
             
         if size < _last_language_log_pos:
-            # 文件被重建或轮转
-            _last_language_log_pos = 0
+            # 文件被重建或轮转：直接对齐到当前文件末尾，避免重新扫描整个文件
+            _last_language_log_pos = size
+            return False
             
         if size == _last_language_log_pos:
             return False
@@ -1345,6 +1367,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         logger.info("   正在平滑同步本地锚点 watcher-current-account.txt，彻底抑制二段误杀！")
                         with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
                             f.write(current_id.strip())
+                        reset_language_server_log_pos()
             except Exception as e:
                 logger.debug(f"人工切号感知异常: {e}")
 
