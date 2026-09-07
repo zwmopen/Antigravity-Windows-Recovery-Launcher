@@ -38,6 +38,8 @@ $StatePath = Join-Path $ProxyRoot 'supervisor-state.json'
 $FailoverStatePath = Join-Path $ProxyRoot 'failover-state.json'
 $SubscriptionReportPath = Join-Path $ProxyRoot 'subscription-report.json'
 $FixedUpstreamPath = Join-Path $ProxyRoot 'fixed-upstream.json'
+$IncidentReportPath = Join-Path $ProxyRoot 'incident-report.json'
+$IncidentHistoryPath = Join-Path $ProxyRoot 'incident-history.json'
 $PidPath = Join-Path $ProxyRoot 'mihomo.pid'
 $LogPath = Join-Path $ProxyRoot 'supervisor.log'
 $Port = 17897
@@ -172,6 +174,55 @@ function Write-SafeLog {
     if ($PassThru) { return $false }
 }
 
+function Write-IncidentReport {
+    param(
+        [Parameter(Mandatory = $true)][string]$IncidentType,
+        [Parameter(Mandatory = $true)][string]$Severity,
+        [Parameter(Mandatory = $true)][string]$Summary,
+        [Parameter(Mandatory = $true)][string]$RootCause,
+        [hashtable]$Evidence = @{},
+        [string]$ActionTaken = '',
+        [string]$RecommendedAction = ''
+    )
+
+    try {
+        $now = Get-Date
+        $incidentId = 'INC-' + $now.ToString('yyyyMMdd-HHmmss')
+        $report = [ordered]@{
+            incident_id = $incidentId
+            timestamp = $now.ToString('o')
+            incident_type = $IncidentType
+            severity = $Severity
+            source = 'ProxySupervisor'
+            summary = $Summary
+            root_cause = $RootCause
+            evidence = $Evidence
+            action_taken = $ActionTaken
+            recommended_action = $RecommendedAction
+        }
+
+        $history = @()
+        if (Test-Path -LiteralPath $IncidentHistoryPath) {
+            try {
+                $raw = Get-Content -LiteralPath $IncidentHistoryPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                    $parsed = $raw | ConvertFrom-Json
+                    if ($parsed -is [array]) { $history = @($parsed) }
+                    elseif ($null -ne $parsed) { $history = @($parsed) }
+                }
+            } catch { }
+        }
+        $history = @($report) + @($history | Select-Object -First 29)
+        try {
+            $history | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $IncidentHistoryPath -Encoding UTF8 -Force
+        } catch { }
+
+        $tempReport = $IncidentReportPath + '.tmp'
+        $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tempReport -Encoding UTF8 -Force
+        Move-Item -LiteralPath $tempReport -Destination $IncidentReportPath -Force
+    } catch { }
+}
+
 function Save-SupervisorFailureState {
     param([Parameter(Mandatory = $true)][string]$Event)
 
@@ -236,6 +287,40 @@ function Save-SupervisorFailureState {
         $tempPath = $StatePath + '.tmp'
         $failureState | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tempPath -Encoding UTF8
         Move-Item -LiteralPath $tempPath -Destination $StatePath -Force
+
+        try {
+            $rootCause = switch ($Event) {
+                'all_candidates_in_cooldown' { 'All proxy candidates in cooldown. No healthy node available.' }
+                'no_healthy_candidate_available' { 'Exhausted candidates. None passed Google or model gate.' }
+                'google_connectivity_failed' { 'Proxy failed Google connectivity (generate_204 or API).' }
+                'mihomo_missing' { 'Mihomo executable kernel not found.' }
+                'antigravity_missing' { 'Antigravity.exe executable not found.' }
+                'antigravity_exited_during_startup' { 'Antigravity exited or crashed during startup.' }
+                'antigravity_startup_health_timeout' { 'Antigravity timed out initializing Language Server.' }
+                default { 'Supervisor recovery interrupted: ' + $Event }
+            }
+            $recAction = switch ($Event) {
+                'all_candidates_in_cooldown' { 'Check subscription validity or wait 20 minutes for cooldown.' }
+                'no_healthy_candidate_available' { 'Check subscription balance, traffic and node reachability.' }
+                'antigravity_exited_during_startup' { 'Check if antivirus or security software blocked Antigravity.' }
+                default { 'Click desktop launcher again to restart recovery.' }
+            }
+            Write-IncidentReport -IncidentType ('SUPERVISOR_' + $Event.ToUpperInvariant()) -Severity 'CRITICAL' `
+                -Summary ('Proxy supervisor failure: ' + $Event) -RootCause $rootCause `
+                -Evidence @{
+                    failure_event = $Event
+                    active_node_id = [string]$script:CurrentFailoverState.active_node_id
+                    candidate_count = [int]$script:DiscoveredCandidateCount
+                    candidate_index = [int]$script:CandidateIndex
+                    google_status = [int]$script:LastGoogleStatus
+                    api_status = [int]$script:LastApiStatus
+                    oauth_status = [int]$script:LastOAuthStatus
+                    egress_country = [string]$script:LastEgressCountry
+                    model_probe_state = [string]$script:LastModelProbeState
+                } `
+                -ActionTaken 'Saved failure snapshot and safely terminated recovery run.' `
+                -RecommendedAction $recAction
+        } catch { }
         return $true
     } catch {
         try { Write-SafeLog -Event 'failure_state_write_failed' -Values @{ error_type = $_.Exception.GetType().Name } } catch { }
@@ -1756,12 +1841,21 @@ function Test-RealModelGeneration {
         $failureKind = if ($transportFailure -and $status -ne 'SUCCESS') { 'model_transport' } else { 'model_non_ok' }
     }
 
+    $errSnippet = ''
+    if (-not [string]::IsNullOrWhiteSpace($probeDiagnosticText)) {
+        $errSnippet = ($probeDiagnosticText -replace '[\r\n\t]+', ' ').Trim()
+    } elseif ($probeOutput.Count -gt 0) {
+        $errSnippet = (($probeOutput | ForEach-Object { [string]$_ }) -join ' ' -replace '[\r\n\t]+', ' ').Trim()
+    }
+    if ($errSnippet.Length -gt 150) { $errSnippet = $errSnippet.Substring(0, 150) }
+
     Write-SafeLog -Event 'model_generation_probe_failed' -Values @{
         exit_code = $exitCode
         status = $status
         location_failure = $locationFailure
         failure_kind = $failureKind
         duration_ms = $durationMs
+        error_detail = $errSnippet
     }
     $script:LastModelProbeState = 'failed'
     throw $failureKind
@@ -1920,6 +2014,8 @@ function Stop-ExistingAntigravity {
     if ($existing.Count -eq 0) {
         return
     }
+    $pids = ($existing | ForEach-Object { [string]$_.ProcessId }) -join ','
+    Write-SafeLog -Event 'stopping_existing_antigravity' -Values @{ count = $existing.Count; pids = $pids }
 
     foreach ($processInfo in $existing) {
         $process = Get-Process -Id $processInfo.ProcessId -ErrorAction SilentlyContinue
@@ -1951,6 +2047,10 @@ function Stop-ExistingAntigravity {
         -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
         [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedPath
     })
+    if ($remaining.Count -gt 0) {
+        $remPids = ($remaining | ForEach-Object { [string]$_.ProcessId }) -join ','
+        Write-SafeLog -Event 'force_terminating_lingering_antigravity' -Values @{ count = $remaining.Count; pids = $remPids }
+    }
     foreach ($processInfo in $remaining) {
         Stop-Process -Id $processInfo.ProcessId -Force -ErrorAction SilentlyContinue
     }
@@ -1964,7 +2064,7 @@ function Stop-ExistingAntigravity {
             [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedPath
         })
         if ($stillRunning.Count -eq 0) {
-            Write-SafeLog -Event 'existing_antigravity_stopped' -Values @{ count = $existing.Count }
+            Write-SafeLog -Event 'existing_antigravity_stopped' -Values @{ count = $existing.Count; pids = $pids }
             return
         }
     }

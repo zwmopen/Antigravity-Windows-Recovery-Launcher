@@ -64,12 +64,107 @@ PENDING_SWITCH_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy"
 PENDING_AUTO_RESUME_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "pending-auto-resume.json")
 SUBSCRIPTION_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "subscription-report.json")
 DEVTOOLS_PORT_FILE = os.path.join(os.environ.get("APPDATA", os.path.join(USER_PROFILE, "AppData", "Roaming")), "Antigravity", "DevToolsActivePort")
-LANGUAGE_SERVER_LOG = os.path.join(os.environ.get("APPDATA", os.path.join(USER_PROFILE, "AppData", "Roaming")), "Antigravity", "logs", "language_server.log")
 WATCHER_CURRENT_ACCOUNT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "watcher-current-account.txt")
+INCIDENT_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "incident-report.json")
+INCIDENT_HISTORY_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "incident-history.json")
+
+# 全局文件日志：确保无论 CLI 测试、脚本调用还是后台守护，日志均可落盘
+try:
+    os.makedirs(os.path.dirname(DAEMON_LOG_FILE), exist_ok=True)
+    _shared_file_handler = RotatingFileHandler(DAEMON_LOG_FILE, maxBytes=1024 * 1024, backupCount=2, encoding="utf-8")
+    _shared_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
+    logger.addHandler(_shared_file_handler)
+except Exception:
+    pass
 
 LAUNCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-Recovery-Launcher.exe")
 ACCOUNT_WATCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-AccountWatcher.exe")
 DESKTOP_LNK = os.path.join(USER_PROFILE, "Desktop", "Antigravity 启动器.lnk")
+
+
+def record_incident(incident_type, severity, summary, root_cause, action_taken, evidence=None, recommended_action="系统正在/已完成自动自愈，无需手动干预。"):
+    """记录极其详细的结构化故障现场快照 (Incident Report)，实现毫秒级全链路自诊与高透明度"""
+    try:
+        os.makedirs(os.path.dirname(INCIDENT_REPORT_FILE), exist_ok=True)
+        now_dt = datetime.now()
+        now_iso = now_dt.astimezone().isoformat()
+        incident_id = f"INC-{now_dt.strftime('%Y%m%d-%H%M%S')}"
+        record = {
+            "incident_id": incident_id,
+            "timestamp": now_iso,
+            "incident_type": incident_type,
+            "severity": severity,
+            "source": "AntigravitySmartSwitch",
+            "summary": summary,
+            "root_cause": root_cause,
+            "evidence": evidence or {},
+            "action_taken": action_taken,
+            "recommended_action": recommended_action
+        }
+        
+        # 1. 历史故障列表 (最多保留 30 条)
+        history = []
+        if os.path.exists(INCIDENT_HISTORY_FILE):
+            try:
+                with open(INCIDENT_HISTORY_FILE, "r", encoding="utf-8") as hf:
+                    history = json.load(hf)
+                if not isinstance(history, list):
+                    history = []
+            except Exception:
+                history = []
+        history.insert(0, record)
+        history = history[:30]
+        try:
+            with open(INCIDENT_HISTORY_FILE, "w", encoding="utf-8") as hf:
+                json.dump(history, hf, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+        # 2. 当前最新故障现场快照 (原子写入)
+        temp_file = INCIDENT_REPORT_FILE + ".tmp"
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2)
+        if os.path.exists(INCIDENT_REPORT_FILE):
+            try:
+                os.remove(INCIDENT_REPORT_FILE)
+            except Exception:
+                pass
+        os.rename(temp_file, INCIDENT_REPORT_FILE)
+        
+        logger.warning(f"📋 【现场故障诊断快照已生成】 [{severity}] {summary} (ID: {incident_id})")
+        logger.warning(f"   * 根因诊断: {root_cause}")
+        logger.warning(f"   * 已执行动作: {action_taken}")
+        logger.warning(f"   * 后续指引: {recommended_action}")
+    except Exception as e:
+        logger.debug(f"记录故障快照异常: {e}")
+
+
+def print_incident_report():
+    """打印最近一次系统故障现场诊断报告"""
+    if not os.path.exists(INCIDENT_REPORT_FILE):
+        print("\n✅ 系统当前无任何已归档的故障快照 (未发生异常崩溃或配额熔断)。\n")
+        return
+    try:
+        with open(INCIDENT_REPORT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        print("\n" + "=" * 80)
+        print("【Antigravity 故障现场智能自诊快照 (Incident Report)】")
+        print("=" * 80)
+        print(f"事件 ID   : {data.get('incident_id')}")
+        print(f"发生时间  : {data.get('timestamp')}")
+        print(f"严重级别  : [{data.get('severity')}] - {data.get('incident_type')}")
+        print(f"事件摘要  : {data.get('summary')}")
+        print(f"根因诊断  : {data.get('root_cause')}")
+        print(f"已执行动作: {data.get('action_taken')}")
+        print(f"后续指引  : {data.get('recommended_action')}")
+        evidence = data.get('evidence')
+        if evidence:
+            print("现场证据  :")
+            for k, v in evidence.items():
+                print(f"   - {k}: {v}")
+        print("=" * 80 + "\n")
+    except Exception as e:
+        print(f"读取故障报告异常: {e}")
 
 
 def parse_iso_datetime(ts_str):
@@ -226,24 +321,29 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                     if resp.get("id") == cur_id:
                         return resp.get("result", {})
 
-            # 1. 动态轮询等待侧边栏会话列表加载完成
             fetch_rows_js = """
             (async () => {
                 let rows = [];
+                let toggleFound = false;
+                let toggleAria = null;
                 for (let retry = 0; retry < 120; retry++) {
                     rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                     if (rows.length > 0) break;
                     // 仅当侧边栏确实处于折叠状态 (aria-expanded === "false") 时，才点击展开
                     const toggleBtn = document.querySelector('[data-testid="sidebar-toggle"], button[aria-label*="sidebar" i], button[aria-label*="Sidebar" i], button[aria-label*="侧边栏" i]');
-                    if (toggleBtn && toggleBtn.getAttribute('aria-expanded') === 'false') {
-                        toggleBtn.click();
-                        await new Promise(r => setTimeout(r, 600));
-                        rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                        if (rows.length > 0) break;
+                    if (toggleBtn) {
+                        toggleFound = true;
+                        toggleAria = toggleBtn.getAttribute('aria-expanded');
+                        if (toggleAria === 'false') {
+                            toggleBtn.click();
+                            await new Promise(r => setTimeout(r, 600));
+                            rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                            if (rows.length > 0) break;
+                        }
                     }
                     await new Promise(r => setTimeout(r, 500));
                 }
-                return rows.map((r, i) => {
+                const convs = rows.map((r, i) => {
                     const titleDiv = r.querySelector('.truncate');
                     const a = r.querySelector('a');
                     return {
@@ -252,12 +352,36 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                         href: a ? a.getAttribute('href') : ''
                     };
                 });
+                return {
+                    convs: convs,
+                    diagnostics: {
+                        rows_found: rows.length,
+                        toggle_found: toggleFound,
+                        toggle_aria: toggleAria,
+                        title: document.title,
+                        url: window.location.href
+                    }
+                };
             })()
             """
             r = await cdp_call("Runtime.evaluate", {"expression": fetch_rows_js, "awaitPromise": True, "returnByValue": True})
-            all_convs = r.get("result", {}).get("value", [])
+            eval_val = r.get("result", {}).get("value", {})
+            all_convs = eval_val.get("convs", [])
+            diag = eval_val.get("diagnostics", {})
             if not all_convs:
-                return {"success": False, "reason": "no_conversations_found"}
+                logger.warning(f"CDP 侧边栏会话列表检索结束 (发现 0 个会话)，DOM 现场: {diag}")
+                record_incident(
+                    incident_type="CDP_RESUME_NO_CONVERSATIONS",
+                    severity="INFO",
+                    summary="CDP 自动续接未检索到前排历史会话",
+                    root_cause="轮询 60 秒后未在 DOM 中发现 conversation-row-sidebar 元素。侧边栏可能为空或未展开。",
+                    evidence=diag,
+                    action_taken="跳过自动发送，保持当前新窗口正常在前台使用",
+                    recommended_action="若需自动续接前排任务，请确认 Antigravity 侧边栏存在历史对话记录。"
+                )
+                return {"success": False, "reason": "no_conversations_found", "diagnostics": diag}
+
+            logger.info(f"CDP 成功检索到 {len(all_convs)} 个侧边栏会话，准备前排处理 (最多 {max_windows} 个)...")
 
             target_convs = all_convs[:int(max_windows)]
             results = []
@@ -351,9 +475,12 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 send_res = await cdp_call("Runtime.evaluate", {"expression": send_js, "awaitPromise": True, "returnByValue": True})
                 send_val = send_res.get("result", {}).get("value", {})
                 if send_val.get("success"):
+                    logger.info(f"✅ CDP 窗口 [{idx+1}] 发送成功: 会话='{title}' 成功输入 '{text}' 并触发发送")
                     results.append({"index": idx + 1, "title": title, "href": href, "success": True, "text": text})
                 else:
-                    results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": send_val.get("reason", "unknown")})
+                    fail_reason = send_val.get("reason", "unknown")
+                    logger.warning(f"⚠️ CDP 窗口 [{idx+1}] 发送未触发: 会话='{title}' (原因: {fail_reason})")
+                    results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": fail_reason})
 
                 await asyncio.sleep(0.6)
 
@@ -370,9 +497,13 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 """
                 await cdp_call("Runtime.evaluate", {"expression": switch_back_js, "awaitPromise": True})
 
+            succ_cnt = sum(1 for item in results if item.get("success"))
+            logger.info(f"CDP 自动续接处理完毕: 总共处理 {len(results)} 个会话窗口，成功续接发送: {succ_cnt} 个")
+
             return {
                 "success": True,
                 "processed": len(results),
+                "success_count": succ_cnt,
                 "results": results
             }
     except (websockets.exceptions.ConnectionClosedOK, websockets.exceptions.ConnectionClosed) as e:
@@ -1026,7 +1157,19 @@ def check_language_server_quota_error():
         ]
         for pat in quota_err_patterns:
             if pat.lower() in new_content.lower():
+                matched_lines = [line.strip() for line in new_content.splitlines() if pat.lower() in line.lower()]
+                matched_snippet = matched_lines[0] if matched_lines else new_content[:200].strip()
                 logger.warning(f"🚨 [实时日志穿透感知] 在 language_server.log 捕获到模型额度耗尽特征: '{pat}'！")
+                logger.warning(f"   * 原始报错文本: {matched_snippet[:240]}")
+                record_incident(
+                    incident_type="MODEL_QUOTA_EXHAUSTED",
+                    severity="WARNING",
+                    summary=f"检测到模型配额耗尽特征: '{pat}'",
+                    root_cause=f"Language Server 捕获到 Gemini API 返回 429/RESOURCE_EXHAUSTED 错误: {matched_snippet[:240]}",
+                    evidence={"pattern": pat, "snippet": matched_snippet[:300]},
+                    action_taken="已触发全自动选号切号、退出旧窗口并拉起自愈启动器",
+                    recommended_action="系统正在进行无感智能切号与断点续接，无需手动干预。"
+                )
                 return True
     except Exception as e:
         logger.debug(f"检查 language_server 日志异常: {e}")
@@ -1081,6 +1224,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
         )
     
     loop_count = 0
+    _last_antigravity_running = is_antigravity_running()
     while True:
         try:
             # 1. 双星互保：每 2 轮 (约 60 秒) 检查一次 C# 守卫存活状态
@@ -1127,9 +1271,24 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         time.sleep(35)
                         loop_count = 0
                         continue
-            else:
-                if loop_count % 20 == 0:
-                    logger.debug("[巡检挂起] 未检测到 Antigravity 运行实例，处于低耗待命模式...")
+            now_running = is_antigravity_running()
+            if _last_antigravity_running and not now_running:
+                pending = read_pending_switch()
+                if not pending:
+                    logger.error("🚨 【异常崩溃感知】检测到 Antigravity.exe 进程意外终止/崩溃！")
+                    record_incident(
+                        incident_type="ANTIGRAVITY_PROCESS_CRASHED",
+                        severity="CRITICAL",
+                        summary="Antigravity 编辑器主进程意外退出或崩溃",
+                        root_cause="前台 Antigravity 进程在运行过程中突然消失，且未处于计划内的凭据切换事务中。",
+                        evidence={"timestamp": time.time(), "watcher_pid": os.getpid()},
+                        action_taken="已生成故障现场快照，处于待命状态",
+                        recommended_action="若窗口意外消失，可双击桌面启动器恢复，系统将保留会话并重新挂载专线。"
+                    )
+            _last_antigravity_running = now_running
+
+            if not now_running and loop_count % 20 == 0:
+                logger.debug("[巡检挂起] 未检测到 Antigravity 运行实例，处于低耗待命模式...")
         except Exception as e:
             logger.warning(f"巡检发生异常 (将在下一周期自动重试): {e}")
         
@@ -1144,6 +1303,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="演练模式，仅计算选号不实际执行")
     parser.add_argument("--force", action="store_true", help="忽略当前额度强制触发切号")
     parser.add_argument("--status", action="store_true", help="仅打印所有账号的当前配额状态与排期看板")
+    parser.add_argument("--incident", action="store_true", help="打印最近一次系统故障现场智能自诊快照")
     parser.add_argument("--watch", action="store_true", help="启动无人值守看门狗守护进程模式")
     parser.add_argument("--interval", type=int, default=30, help="守护巡检轮询间隔秒数 (默认: 30)")
     parser.add_argument("--stop-watch", action="store_true", help="停止正在运行的看门狗守护进程")
@@ -1159,6 +1319,8 @@ def main():
         run_watch_daemon(threshold=args.threshold, interval=args.interval)
     elif args.status:
         print_status_table()
+    elif args.incident:
+        print_incident_report()
     elif args.auto_resume:
         execute_auto_resume(max_windows=args.resume_count, text=args.resume_text, wait_timeout=5)
     else:
