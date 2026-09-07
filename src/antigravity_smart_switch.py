@@ -19,6 +19,7 @@ Cockpit Tools 智能切号规则 (Cockpit Rules):
 
 import os
 import sys
+import re
 import time
 import json
 import asyncio
@@ -28,7 +29,7 @@ import subprocess
 import base64
 import urllib.request
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 if sys.platform == "win32":
     try:
@@ -948,6 +949,7 @@ def get_all_accounts_and_quotas():
             "is_current": is_current,
             "gemini_5h": q_5h_val,
             "gemini_weekly": q_w_val,
+            "reset_time_5h": rt_5h,
             "reset_time_weekly": rt_weekly,
             "days_to_w_reset": days_to_w_reset,
             "sec_to_w_reset": sec_to_w_reset,
@@ -1371,7 +1373,7 @@ def ensure_account_watcher_running():
 
 
 def check_language_server_quota_error():
-    """穿透监听 language_server.log，毫秒级感知 429 / RESOURCE_EXHAUSTED / quota 耗尽报错"""
+    """穿透监听 language_server.log，毫秒级感知 429 / RESOURCE_EXHAUSTED / quota 耗尽报错，并进行账号重置时刻指纹归属识别"""
     global _last_language_log_pos, _last_switch_time
 
     # 保护冷却期：刚切号的 90 秒内不响应 429 报错，防止读取到旧会话未断开或旧进程的残余日志
@@ -1416,34 +1418,89 @@ def check_language_server_quota_error():
             if pat.lower() in new_content.lower():
                 matched_lines = [line.strip() for line in new_content.splitlines() if pat.lower() in line.lower()]
                 matched_snippet = matched_lines[0] if matched_lines else new_content[:200].strip()
-                logger.warning(f"🚨 [实时日志穿透感知] 在 language_server.log 捕获到模型额度耗尽特征: '{pat}'！")
-                logger.warning(f"   * 原始报错文本: {matched_snippet[:240]}")
 
-                # 动态提取重置倒计时并对触发 429 的账号施加临时关押
+                # 1. 提取重置倒计时与报错发生时间戳
                 duration = 9000
-                m = re.search(r'Resets in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?', matched_snippet)
-                if m:
-                    h = int(m.group(1) or 0)
-                    mi = int(m.group(2) or 0)
-                    s = int(m.group(3) or 0)
+                m_dur = re.search(r'Resets in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?', matched_snippet)
+                if m_dur:
+                    h = int(m_dur.group(1) or 0)
+                    mi = int(m_dur.group(2) or 0)
+                    s = int(m_dur.group(3) or 0)
                     calc_dur = h * 3600 + mi * 60 + s
                     if calc_dur > 0:
                         duration = calc_dur
 
+                # 从报错日志行中解析原始时间（例如 I0907 22:23:34）以获得精确的秒级基准
+                m_time = re.search(r'[IEW](\d{2})(\d{2})\s+(\d{2}):(\d{2}):(\d{2})', matched_snippet)
+                if m_time:
+                    try:
+                        now_loc = datetime.now()
+                        log_dt = now_loc.replace(
+                            month=int(m_time.group(1)),
+                            day=int(m_time.group(2)),
+                            hour=int(m_time.group(3)),
+                            minute=int(m_time.group(4)),
+                            second=int(m_time.group(5)),
+                            microsecond=0
+                        )
+                        log_utc = log_dt.astimezone(timezone.utc)
+                    except Exception:
+                        log_utc = datetime.now(timezone.utc)
+                else:
+                    log_utc = datetime.now(timezone.utc)
+
+                target_reset_utc = log_utc + timedelta(seconds=duration)
+
+                # 2. 读取当前所有账号信息与配额重置时刻指纹
+                current_id = None
+                accounts = []
                 try:
-                    with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
-                        curr_id = json.load(f).get("current_account_id")
-                    if curr_id:
-                        record_quarantine_account(curr_id, duration)
-                except Exception:
-                    pass
+                    current_id, accounts = get_all_accounts_and_quotas()
+                except Exception as e:
+                    logger.debug(f"读取账号配额指纹异常: {e}")
+
+                curr_acc = next((a for a in accounts if a["is_current"]), None)
+                curr_email = curr_acc["email"] if curr_acc else "未知账号"
+                curr_5h = curr_acc["gemini_5h"] if curr_acc else 0.0
+
+                # 3. 核心指纹比对：检查 target_reset_utc 是否与非当前账号的重置时刻吻合
+                matched_non_current = None
+                if accounts:
+                    for acc in accounts:
+                        if acc.get("is_current"):
+                            continue
+                        for rt_key in ("reset_time_5h", "reset_time_weekly"):
+                            rt = acc.get(rt_key)
+                            if rt and isinstance(rt, datetime):
+                                if abs((target_reset_utc - rt).total_seconds()) <= 180:
+                                    matched_non_current = (acc, rt_key, rt)
+                                    break
+                        if matched_non_current:
+                            break
+
+                # 4. 若报错指纹明确指向历史离线账号：安全降噪过滤并强化隔离
+                if matched_non_current:
+                    old_acc, rt_key, rt_val = matched_non_current
+                    logger.info(f"💡 [日志穿透降噪] 捕获到 429 报错重置时刻 ({target_reset_utc.strftime('%H:%M:%S UTC')}) 指向历史账号 {old_acc['email']} ({rt_key}: {rt_val.strftime('%H:%M:%S UTC')})")
+                    logger.info(f"   当前在用账号 ({curr_email}) 状态健康 (5h: {curr_5h}%)，判定为历史会话残留重试，已安全过滤忽略。")
+                    # 顺便关押该历史账号，确保关押期内绝不误切回该账号
+                    record_quarantine_account(old_acc["id"], duration)
+                    return False
+
+                # 5. 若未匹配到离线旧账号，确认为当前在用账号真实 429 耗尽
+                logger.warning(f"🚨 [实时日志穿透感知] 核心语言服务检测到当前账号真实 429 额度耗尽！")
+                logger.warning(f"   * 当前在用账号: {curr_email} (5h: {curr_5h}%)")
+                logger.warning(f"   * 原始报错文本: {matched_snippet[:240]}")
+
+                if current_id:
+                    record_quarantine_account(current_id, duration)
 
                 record_incident(
                     incident_type="MODEL_QUOTA_EXHAUSTED",
                     severity="WARNING",
-                    summary=f"检测到模型配额耗尽特征: '{pat}'",
+                    summary=f"检测到当前账号模型配额耗尽: '{pat}'",
                     root_cause=f"Language Server 捕获到 Gemini API 返回 429/RESOURCE_EXHAUSTED 错误: {matched_snippet[:240]}",
-                    evidence={"pattern": pat, "snippet": matched_snippet[:300]},
+                    evidence={"pattern": pat, "snippet": matched_snippet[:300], "target_reset_utc": target_reset_utc.isoformat()},
                     action_taken="已触发全自动选号切号、退出旧窗口并拉起自愈启动器",
                     recommended_action="系统正在进行无感智能切号与断点续接，无需手动干预。"
                 )

@@ -270,6 +270,8 @@ try {
 # 部署并拉起 Python 看门狗 (独立脱壳后台常驻)
 $installedPyHelper = Join-Path $installRoot 'Invoke-AntigravitySmartSwitch.ps1'
 if (Test-Path -LiteralPath $installedPyHelper) {
+    try { & $installedPyHelper -StopDaemon } catch { }
+    Start-Sleep -Milliseconds 500
     & $installedPyHelper -StartDaemon
 }
 
