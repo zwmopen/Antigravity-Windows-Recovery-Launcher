@@ -26,6 +26,7 @@ import logging
 import argparse
 import subprocess
 import base64
+import urllib.request
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone
 
@@ -55,6 +56,7 @@ logger = logging.getLogger("AntigravitySmartSwitch")
 
 USER_PROFILE = os.environ.get("USERPROFILE", os.path.expanduser("~"))
 LOCAL_APPDATA = os.environ.get("LOCALAPPDATA", os.path.join(USER_PROFILE, "AppData", "Local"))
+ROAMING_APPDATA = os.environ.get("APPDATA", os.path.join(USER_PROFILE, "AppData", "Roaming"))
 COCKPIT_DIR = os.path.join(USER_PROFILE, ".antigravity_cockpit")
 ACCOUNTS_FILE = os.path.join(COCKPIT_DIR, "accounts.json")
 SERVER_FILE = os.path.join(COCKPIT_DIR, "server.json")
@@ -63,7 +65,8 @@ DAEMON_LOG_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "s
 PENDING_SWITCH_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "pending-switch.json")
 PENDING_AUTO_RESUME_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "pending-auto-resume.json")
 SUBSCRIPTION_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "subscription-report.json")
-DEVTOOLS_PORT_FILE = os.path.join(os.environ.get("APPDATA", os.path.join(USER_PROFILE, "AppData", "Roaming")), "Antigravity", "DevToolsActivePort")
+DEVTOOLS_PORT_FILE = os.path.join(ROAMING_APPDATA, "Antigravity", "DevToolsActivePort")
+LANGUAGE_SERVER_LOG = os.path.join(ROAMING_APPDATA, "Antigravity", "logs", "language_server.log")
 WATCHER_CURRENT_ACCOUNT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "watcher-current-account.txt")
 INCIDENT_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "incident-report.json")
 INCIDENT_HISTORY_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "incident-history.json")
@@ -106,7 +109,7 @@ def record_incident(incident_type, severity, summary, root_cause, action_taken, 
         history = []
         if os.path.exists(INCIDENT_HISTORY_FILE):
             try:
-                with open(INCIDENT_HISTORY_FILE, "r", encoding="utf-8") as hf:
+                with open(INCIDENT_HISTORY_FILE, "r", encoding="utf-8-sig") as hf:
                     history = json.load(hf)
                 if not isinstance(history, list):
                     history = []
@@ -145,7 +148,7 @@ def print_incident_report():
         print("\n✅ 系统当前无任何已归档的故障快照 (未发生异常崩溃或配额熔断)。\n")
         return
     try:
-        with open(INCIDENT_REPORT_FILE, "r", encoding="utf-8") as f:
+        with open(INCIDENT_REPORT_FILE, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         print("\n" + "=" * 80)
         print("【Antigravity 故障现场智能自诊快照 (Incident Report)】")
@@ -524,6 +527,28 @@ def get_antigravity_main_pid():
         except Exception:
             pass
     return 0
+
+
+def send_windows_notification(title, message):
+    """发送 Windows 系统气泡通知（尽最大努力交付，不抛异常）"""
+    try:
+        clean_msg = message.replace('"', '\"').replace('\n', ' `n ')
+        clean_title = title.replace('"', '\"')
+        ps_cmd = (
+            f'[void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms"); '
+            f'$ni = New-Object System.Windows.Forms.NotifyIcon; '
+            f'$ni.Icon = [System.Drawing.SystemIcons]::Information; '
+            f'$ni.BalloonTipTitle = "{clean_title}"; '
+            f'$ni.BalloonTipText = "{clean_msg}"; '
+            f'$ni.Visible = $True; '
+            f'$ni.ShowBalloonTip(4000); '
+            f'Start-Sleep -Milliseconds 800; '
+            f'$ni.Dispose()'
+        )
+        flags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+        subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd], creationflags=flags)
+    except Exception:
+        pass
 
 
 def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=None):
@@ -1178,10 +1203,11 @@ def check_language_server_quota_error():
 
 
 def run_watch_daemon(threshold=5.0, interval=30):
-    os.makedirs(os.path.dirname(DAEMON_LOG_FILE), exist_ok=True)
-    file_handler = RotatingFileHandler(DAEMON_LOG_FILE, maxBytes=1024 * 1024, backupCount=2, encoding="utf-8")
-    file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
-    logger.addHandler(file_handler)
+    if not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
+        os.makedirs(os.path.dirname(DAEMON_LOG_FILE), exist_ok=True)
+        file_handler = RotatingFileHandler(DAEMON_LOG_FILE, maxBytes=1024 * 1024, backupCount=2, encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
+        logger.addHandler(file_handler)
     
     # 互斥锁防止多个 Watcher 重复运行 (显式指定 64 位指针类型并持久化持有句柄)
     if sys.platform == "win32":

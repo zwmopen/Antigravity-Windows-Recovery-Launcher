@@ -120,7 +120,7 @@ foreach ($processInfo in $runningTrays) {
 }
 # 停止旧版本常驻的 Python 智能看门狗守护进程，防止热更新时内存旧字节码屏蔽新修复
 $runningPyWatchers = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.CommandLine -like "*antigravity_smart_switch.py*" -and $_.CommandLine -like "*--watch*"
+    ($_.Name -match '^python(w)?\.exe$') -and ($_.CommandLine -like "*antigravity_smart_switch.py*")
 })
 foreach ($pyProc in $runningPyWatchers) {
     Stop-Process -Id ([int]$pyProc.ProcessId) -Force -ErrorAction SilentlyContinue

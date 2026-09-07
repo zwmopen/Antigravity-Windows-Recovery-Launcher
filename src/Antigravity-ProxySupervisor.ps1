@@ -882,7 +882,8 @@ function Get-OrderedCandidates {
         [Parameter(Mandatory = $true)][object[]]$Candidates,
         [Parameter(Mandatory = $true)]$State,
         [string[]]$CooldownIds = @(),
-        [switch]$IncludeCooldown
+        [switch]$IncludeCooldown,
+        [string]$RecoveryReason = 'Startup'
     )
 
     $retiredIds = @(Get-RetiredNodeIds -State $State)
@@ -916,6 +917,12 @@ function Get-OrderedCandidates {
         try { $priority = [int]$candidate.Priority } catch { }
         $regionRank = 100
         try { $regionRank = [int]$candidate.RegionRank } catch { }
+        if ($RecoveryReason -eq 'LocationFailure') {
+            # When recovering specifically from Google LocationFailure, elevate Japan
+            # because the active US candidate was rejected by Google location policy.
+            if ([string]$candidate.Region -eq 'JP') { $regionRank = 0 }
+            elseif ([string]$candidate.Region -eq 'US') { $regionRank = 1 }
+        }
 
         # Smart Pool: calculate SmartScore (0-1000)
         $smartScore = 0
@@ -1700,13 +1707,19 @@ function Test-GoogleConnectivity {
         $googleStatus = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204'
         $sw.Stop()
         $probeRttMs = [int]$sw.ElapsedMilliseconds
+        if ($googleStatus -le 0) {
+            if ($attempt -lt $ConnectivityAttemptCount) {
+                Start-Sleep -Milliseconds 600
+            }
+            continue
+        }
         $apiStatus = Get-HttpStatusThroughProxy -Uri 'https://generativelanguage.googleapis.com/'
         $oauthStatus = Get-HttpStatusThroughProxy -Uri 'https://oauth2.googleapis.com/'
         if ($googleStatus -gt 0 -and $apiStatus -gt 0 -and $oauthStatus -gt 0) {
             break
         }
         if ($attempt -lt $ConnectivityAttemptCount) {
-            Start-Sleep -Seconds 2
+            Start-Sleep -Milliseconds 800
         }
     }
     $script:LastGoogleStatus = $googleStatus
@@ -2253,7 +2266,7 @@ if ($RecoveryReason -in @('NetworkFailure', 'LocationFailure', 'UserRequestedRep
 }
 $cooldownIds = @(Get-ActiveCooldownEntries -State $failoverState | Select-Object -ExpandProperty node_id)
 $includeCooldown = $RecoveryReason -eq 'Startup'
-$orderedCandidates = @(Get-OrderedCandidates -Candidates $candidates -State $failoverState -CooldownIds $cooldownIds -IncludeCooldown:$includeCooldown)
+$orderedCandidates = @(Get-OrderedCandidates -Candidates $candidates -State $failoverState -CooldownIds $cooldownIds -IncludeCooldown:$includeCooldown -RecoveryReason $RecoveryReason)
 $script:EligibleCandidateCount = $orderedCandidates.Count
 Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
 if ($includeCooldown -and $cooldownIds.Count -gt 0) {
@@ -2271,9 +2284,15 @@ $egressCountry = ''
 $candidateIndex = 0
 $candidateTotal = $orderedCandidates.Count
 $script:CandidateTotal = $candidateTotal
+$sourceTransportFailures = @{}
 foreach ($candidate in $orderedCandidates) {
     $candidateIndex++
     $script:CandidateIndex = $candidateIndex
+    $sourceId = [string]$candidate.SourceId
+    if (-not [string]::IsNullOrWhiteSpace($sourceId) -and $sourceTransportFailures.ContainsKey($sourceId) -and [int]$sourceTransportFailures[$sourceId] -ge 2) {
+        Write-SafeLog -Event 'candidate_source_skipped_transport_outage' -Values @{ node_id = [string]$candidate.Id; source_id = $sourceId; reason = 'consecutive_transport_failures' }
+        continue
+    }
     $script:AttemptedCandidateIds[[string]$candidate.Id] = $true
     try {
         Write-SafeLog -Event 'candidate_preflight_started' -Values @{ node_id = [string]$candidate.Id; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
@@ -2306,6 +2325,10 @@ foreach ($candidate in $orderedCandidates) {
         $failureKind = Get-CandidateFailureKind -ErrorRecord $_
         $script:AttemptedCandidateFailureKinds[[string]$candidate.Id] = $failureKind
         $failureDisposition = Get-CandidateFailureDisposition -FailureKind $failureKind
+        if ($failureKind -eq 'transient_network' -and -not [string]::IsNullOrWhiteSpace($sourceId)) {
+            if (-not $sourceTransportFailures.ContainsKey($sourceId)) { $sourceTransportFailures[$sourceId] = 0 }
+            $sourceTransportFailures[$sourceId] = [int]$sourceTransportFailures[$sourceId] + 1
+        }
         if ($failureDisposition -eq 'retire') {
             Add-NodeRetirement -State $failoverState -NodeId ([string]$candidate.Id) -Reason $failureKind -Candidate $candidate
         } else {
