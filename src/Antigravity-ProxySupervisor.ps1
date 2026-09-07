@@ -540,12 +540,15 @@ function Get-FailoverState {
         }
         if (-not [string]::IsNullOrWhiteSpace($currentFingerprint) -and
             $storedFingerprint -ne $currentFingerprint) {
-            try {
-                $stamp = Get-Date -Format 'yyyyMMdd-HHmmssfff'
-                Copy-Item -LiteralPath $FailoverStatePath -Destination ($FailoverStatePath + '.before-account-' + $stamp + '.json') -Force
-            } catch { }
-            Write-SafeLog -Event 'failover_state_reset_for_account_change'
-            return New-EmptyFailoverState
+            Write-SafeLog -Event 'account_fingerprint_updated' -Values @{
+                previous = $storedFingerprint
+                current = $currentFingerprint
+            }
+            if ($null -eq $state.PSObject.Properties['account_fingerprint']) {
+                $state | Add-Member -NotePropertyName account_fingerprint -NotePropertyValue $currentFingerprint -Force
+            } else {
+                $state.account_fingerprint = $currentFingerprint
+            }
         }
         if ($null -eq $state.PSObject.Properties['account_fingerprint']) {
             $state | Add-Member -NotePropertyName account_fingerprint -NotePropertyValue $currentFingerprint -Force

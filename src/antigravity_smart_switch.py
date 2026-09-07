@@ -801,7 +801,7 @@ async def switch_account_via_websocket(server_info, target_account_id, timeout=1
     return False
 
 
-def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed"):
+def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed", background=False):
     target = None
     if os.path.exists(LAUNCHER_EXE):
         target = LAUNCHER_EXE
@@ -811,7 +811,7 @@ def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed"):
     if not target:
         raise FileNotFoundError(f"未找到启动器文件: {LAUNCHER_EXE}")
     
-    logger.info(f"正在以脱壳独立进程拉起桌面智能启动器: {target} (reason={recovery_reason}) ...")
+    logger.info(f"正在以脱壳独立进程拉起桌面智能启动器: {target} (reason={recovery_reason}, background={background}) ...")
     flags = 0
     if sys.platform == "win32":
         # 彻底脱壳：脱离当前控制台、父进程 Job Object 与进程树
@@ -822,8 +822,14 @@ def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed"):
     
     try:
         if target.endswith(".exe"):
+            args = [target]
+            if background:
+                args.append("--background")
+            else:
+                args.append("--force-launch")
+            args.append(f"--recovery-reason={recovery_reason}")
             subprocess.Popen(
-                [target, "--background", f"--recovery-reason={recovery_reason}"],
+                args,
                 creationflags=flags,
                 close_fds=True
             )
@@ -833,7 +839,7 @@ def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed"):
                 creationflags=flags,
                 close_fds=True
             )
-        logger.info("✅ 脱壳启动器已拉起，将无感平滑切换实例并挂载 17897 专线代理 + 模型自愈 + 汉化扩展！")
+        logger.info("✅ 脱壳启动器已拉起，将展示状态胶囊并挂载 17897 专线代理 + 模型自愈 + 汉化扩展！")
     except Exception as e:
         logger.warning(f"脱壳拉起启动器异常，执行备用方式: {e}")
         subprocess.Popen([target], shell=True)
@@ -896,12 +902,11 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     logger.info(f"✅ Cockpit Tools 账号凭证与 accounts.json 已更新成功！新账号: {best_acc['email']}")
 
-    # 3.5 无需提前杀死旧实例造成长达 90 秒的黑洞界面！
-    # 保持编辑器存活直到启动器完成专线健康探测与真实模型握手；
-    # 启动器内部会在拉起新实例的前 100ms 自动关闭旧实例，实现平滑瞬切 (界面中断仅约 2~3 秒)。
+    # 3.5 及时优雅退出已耗尽额度或报错的旧实例，释放 DevToolsActivePort 与凭据锁，避免假死僵尸窗口误导用户
+    gracefully_exit_antigravity(timeout_seconds=3.0)
 
-    # 4. 派发脱壳启动器进行平滑重启与专线恢复 (由启动器接管候选探测与新实例拉起)
-    launch_antigravity_via_launcher(recovery_reason="AccountChange")
+    # 4. 派发脱壳启动器进行平滑重启与专线恢复 (通过可视化胶囊进度卡片给予明确视觉反馈)
+    launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
     
     # 5. 等待新实例真正就绪 (排除旧 PID)，并自动续接前排 1/2/3 窗口 (扣 1)
     # 设置 180 秒超时，确保专线多节点健康探测与真实模型握手完整完成后再连接 CDP 续接
