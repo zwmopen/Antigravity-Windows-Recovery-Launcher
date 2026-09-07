@@ -917,12 +917,6 @@ function Get-OrderedCandidates {
         try { $priority = [int]$candidate.Priority } catch { }
         $regionRank = 100
         try { $regionRank = [int]$candidate.RegionRank } catch { }
-        if ($RecoveryReason -eq 'LocationFailure') {
-            # When recovering specifically from Google LocationFailure, elevate Japan
-            # because the active US candidate was rejected by Google location policy.
-            if ([string]$candidate.Region -eq 'JP') { $regionRank = 0 }
-            elseif ([string]$candidate.Region -eq 'US') { $regionRank = 1 }
-        }
 
         # Smart Pool: calculate SmartScore (0-1000)
         $smartScore = 0
@@ -1261,6 +1255,47 @@ function Get-CandidateNodeDefinitions {
         if (-not $added) { break }
     }
     return @($ordered)
+}
+
+function Update-ClashSubscriptionProfiles {
+    [CmdletBinding()]
+    param([int]$TimeoutSeconds = 12)
+
+    if (-not (Test-Path -LiteralPath $ProfilesIndex)) { return $false }
+    Write-SafeLog -Event 'subscription_update_started'
+    $updatedCount = 0
+    try {
+        $indexContent = Get-Content -LiteralPath $ProfilesIndex -Raw -Encoding UTF8
+        $matches = [regex]::Matches($indexContent, '(?ms)^\s*-\s*uid:\s*(?<uid>\S+).*?type:\s*remote.*?file:\s*(?<file>\S+).*?url:\s*(?<url>\S+)')
+        foreach ($m in $matches) {
+            $uid = $m.Groups['uid'].Value.Trim()
+            $file = $m.Groups['file'].Value.Trim()
+            $url = $m.Groups['url'].Value.Trim()
+            $targetFile = Join-Path $ProfilesRoot $file
+            try {
+                $req = [System.Net.HttpWebRequest]::Create($url)
+                $req.UserAgent = 'ClashVerge/v1.7.7'
+                $req.Timeout = $TimeoutSeconds * 1000
+                $req.ReadWriteTimeout = $TimeoutSeconds * 1000
+                $resp = $req.GetResponse()
+                $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+                $content = $reader.ReadToEnd()
+                $reader.Close()
+                $resp.Close()
+                if ($content.Length -gt 500) {
+                    Set-Content -LiteralPath $targetFile -Value $content -Encoding UTF8
+                    $updatedCount++
+                    Write-SafeLog -Event 'subscription_profile_updated' -Values @{ uid = $uid; file = $file; bytes = $content.Length }
+                }
+            } catch {
+                Write-SafeLog -Event 'subscription_profile_update_failed' -Values @{ uid = $uid; error = $_.Exception.Message }
+            }
+        }
+    } catch {
+        Write-SafeLog -Event 'subscription_update_error' -Values @{ error = $_.Exception.Message }
+    }
+    Write-SafeLog -Event 'subscription_update_finished' -Values @{ updated_count = $updatedCount }
+    return ($updatedCount -gt 0)
 }
 
 function Get-ReportDateString {
@@ -2273,6 +2308,16 @@ if ($includeCooldown -and $cooldownIds.Count -gt 0) {
     Write-SafeLog -Event 'manual_startup_cooldown_bypass' -Values @{ candidate_count = $orderedCandidates.Count }
 }
 if ($orderedCandidates.Count -eq 0) {
+    Write-SafeLog -Event 'all_candidates_exhausted_triggering_subscription_refresh'
+    $refreshed = Update-ClashSubscriptionProfiles
+    if ($refreshed) {
+        $candidates = @(Get-CandidateNodeDefinitions)
+        $script:DiscoveredCandidateCount = $candidates.Count
+        $orderedCandidates = @(Get-OrderedCandidates -Candidates $candidates -State $failoverState -CooldownIds $cooldownIds -IncludeCooldown:$true -RecoveryReason $RecoveryReason)
+        $script:EligibleCandidateCount = $orderedCandidates.Count
+    }
+}
+if ($orderedCandidates.Count -eq 0) {
     Save-FailoverState -State $failoverState
     Stop-WithMessage -Event 'all_candidates_in_cooldown'
 }
@@ -2284,15 +2329,10 @@ $egressCountry = ''
 $candidateIndex = 0
 $candidateTotal = $orderedCandidates.Count
 $script:CandidateTotal = $candidateTotal
-$sourceTransportFailures = @{}
 foreach ($candidate in $orderedCandidates) {
     $candidateIndex++
     $script:CandidateIndex = $candidateIndex
     $sourceId = [string]$candidate.SourceId
-    if (-not [string]::IsNullOrWhiteSpace($sourceId) -and $sourceTransportFailures.ContainsKey($sourceId) -and [int]$sourceTransportFailures[$sourceId] -ge 2) {
-        Write-SafeLog -Event 'candidate_source_skipped_transport_outage' -Values @{ node_id = [string]$candidate.Id; source_id = $sourceId; reason = 'consecutive_transport_failures' }
-        continue
-    }
     $script:AttemptedCandidateIds[[string]$candidate.Id] = $true
     try {
         Write-SafeLog -Event 'candidate_preflight_started' -Values @{ node_id = [string]$candidate.Id; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
@@ -2325,10 +2365,6 @@ foreach ($candidate in $orderedCandidates) {
         $failureKind = Get-CandidateFailureKind -ErrorRecord $_
         $script:AttemptedCandidateFailureKinds[[string]$candidate.Id] = $failureKind
         $failureDisposition = Get-CandidateFailureDisposition -FailureKind $failureKind
-        if ($failureKind -eq 'transient_network' -and -not [string]::IsNullOrWhiteSpace($sourceId)) {
-            if (-not $sourceTransportFailures.ContainsKey($sourceId)) { $sourceTransportFailures[$sourceId] = 0 }
-            $sourceTransportFailures[$sourceId] = [int]$sourceTransportFailures[$sourceId] + 1
-        }
         if ($failureDisposition -eq 'retire') {
             Add-NodeRetirement -State $failoverState -NodeId ([string]$candidate.Id) -Reason $failureKind -Candidate $candidate
         } else {

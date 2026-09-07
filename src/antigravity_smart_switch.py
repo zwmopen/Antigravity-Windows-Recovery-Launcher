@@ -301,8 +301,68 @@ def get_devtools_active_port(wait_timeout=0):
                 pass
         if time.time() - start_time >= wait_timeout:
             break
-        time.sleep(0.5)
     return None
+
+
+def update_clash_subscriptions(timeout_seconds=12):
+    """主动从机场订阅 URL 获取最新节点并刷新本地 Clash Verge 订阅配置"""
+    try:
+        import ssl
+        import yaml
+    except ImportError:
+        yaml = None
+
+    clash_dir = os.path.join(ROAMING_APPDATA, "io.github.clash-verge-rev.clash-verge-rev")
+    profiles_yaml_path = os.path.join(clash_dir, "profiles.yaml")
+    if not os.path.exists(profiles_yaml_path):
+        logger.warning(f"未找到 Clash Verge profiles.yaml: {profiles_yaml_path}")
+        return False
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    logger.info("正在主动从机场订阅源刷新全部 Clash 订阅...")
+    try:
+        with open(profiles_yaml_path, "r", encoding="utf-8") as f:
+            if yaml:
+                config = yaml.safe_load(f)
+            else:
+                logger.warning("未检测到 yaml 模块，跳过解析 profiles.yaml")
+                return False
+    except Exception as e:
+        logger.warning(f"读取 profiles.yaml 异常: {e}")
+        return False
+
+    items = config.get("items", [])
+    updated_count = 0
+    for item in items:
+        if item.get("type") == "remote" and item.get("url") and item.get("file"):
+            name = item.get("name") or item.get("uid")
+            url = item.get("url")
+            target_file = os.path.join(clash_dir, "profiles", item.get("file"))
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "ClashVerge/v1.7.7"})
+                res = urllib.request.urlopen(req, context=ctx, timeout=timeout_seconds)
+                content = res.read()
+                if len(content) > 500:
+                    with open(target_file, "wb") as out_f:
+                        out_f.write(content)
+                    item["updated"] = int(time.time())
+                    updated_count += 1
+                    logger.info(f"✅ 成功刷新订阅 [{name}]: 更新了 {len(content)} 字节最新节点数据")
+            except Exception as e:
+                logger.warning(f"⚠️ 刷新订阅 [{name}] 失败: {e}")
+
+    if updated_count > 0:
+        try:
+            with open(profiles_yaml_path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, allow_unicode=True)
+            logger.info(f"🎉 全部机场订阅刷新完毕！共更新 {updated_count} 个订阅配置。")
+            return True
+        except Exception as e:
+            logger.warning(f"保存更新后的 profiles.yaml 异常: {e}")
+    return False
 
 
 async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
@@ -1336,6 +1396,7 @@ def main():
     parser.add_argument("--auto-resume", action="store_true", help="立即执行前排窗口打标与扣1自动续接")
     parser.add_argument("--resume-text", type=str, default="1", help="自动续接发送的内容 (默认: 1)")
     parser.add_argument("--resume-count", type=int, default=3, help="自动续接前排窗口数 (默认: 3)")
+    parser.add_argument("--update-subscriptions", action="store_true", help="主动从机场提供商更新全部 Clash 订阅配置")
     
     args = parser.parse_args()
     
@@ -1349,6 +1410,8 @@ def main():
         print_incident_report()
     elif args.auto_resume:
         execute_auto_resume(max_windows=args.resume_count, text=args.resume_text, wait_timeout=5)
+    elif args.update_subscriptions:
+        update_clash_subscriptions()
     else:
         run_smart_switch(
             threshold=args.threshold,
