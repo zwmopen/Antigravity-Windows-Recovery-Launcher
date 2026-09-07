@@ -1225,7 +1225,7 @@ function Save-SubscriptionReport {
         $runPassedIds = @{}
         $runRetiredIds = @{}
         $runCoolingIds = @{}
-        $runFailureKindCounts = [ordered]@{}
+        $runFailureKindCounts = @{}
         foreach ($candidate in @($Candidates)) {
             $candidateId = [string]$candidate.Id
             if ([string]::IsNullOrWhiteSpace($candidateId) -or -not $script:AttemptedCandidateIds.ContainsKey($candidateId)) {

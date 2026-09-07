@@ -230,7 +230,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
             fetch_rows_js = """
             (async () => {
                 let rows = [];
-                for (let retry = 0; retry < 25; retry++) {
+                for (let retry = 0; retry < 120; retry++) {
                     rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                     if (rows.length > 0) break;
                     // 仅当侧边栏确实处于折叠状态 (aria-expanded === "false") 时，才点击展开
@@ -403,7 +403,7 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=
 
     # 1. 优先等待 Launcher 彻底完成并退出，确保 Antigravity 窗口稳定在前台且互斥锁已释放
     launcher_wait_start = time.time()
-    while time.time() - launcher_wait_start < 40:
+    while time.time() - launcher_wait_start < 150:
         launcher_active = False
         if psutil:
             for p in psutil.process_iter(["name"]):
