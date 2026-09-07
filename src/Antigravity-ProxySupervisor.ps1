@@ -1642,7 +1642,7 @@ function Start-OrReuseMihomo {
             $loadedHash = ''
         }
     }
-    $shouldForceRestartProxy = ($RecoveryReason -ne 'Startup')
+    $shouldForceRestartProxy = ($RecoveryReason -in @('NetworkFailure', 'LocationFailure', 'UserRequestedRepair', 'Force'))
     if ($null -ne $owned -and ($shouldForceRestartProxy -or $loadedHash -ne $ExpectedConfigHash)) {
         Stop-OwnedMihomo
         $owned = $null
@@ -2347,11 +2347,16 @@ foreach ($candidate in $orderedCandidates) {
         $expectedCountry = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedCountry } else { [string]$candidate.ExpectedEgressCountry }
         $expectedIp = if ($null -ne $script:FixedUpstream) { [string]$script:FixedUpstream.ExpectedIp } else { '' }
         $candidateCountry = Test-ProxyEgress -ExpectedCountry $expectedCountry -ExpectedIp $expectedIp
-        $script:LastEgressCountry = [string]$candidateCountry
-        Test-RealModelGeneration | Out-Null
-        for ($confirmationIndex = 2; $confirmationIndex -le $ModelProbeConfirmationCount; $confirmationIndex++) {
+        $skipModelProbe = ($RecoveryReason -in @('AccountChange', 'cockpit_account_changed')) -or ([string]$candidate.Id -eq [string]$failoverState.active_node_id)
+        if (-not $skipModelProbe) {
             Test-RealModelGeneration | Out-Null
-            Write-SafeLog -Event 'model_generation_probe_confirmation_passed' -Values @{ attempt = $confirmationIndex; total = $ModelProbeConfirmationCount }
+            for ($confirmationIndex = 2; $confirmationIndex -le $ModelProbeConfirmationCount; $confirmationIndex++) {
+                Test-RealModelGeneration | Out-Null
+                Write-SafeLog -Event 'model_generation_probe_confirmation_passed' -Values @{ attempt = $confirmationIndex; total = $ModelProbeConfirmationCount }
+            }
+        } else {
+            $script:LastModelProbeState = 'skipped_for_account_change'
+            Write-SafeLog -Event 'model_generation_probe_fast_skipped' -Values @{ reason = $RecoveryReason; node_id = [string]$candidate.Id }
         }
         $selectedCandidate = $candidate
         $configState = $candidateConfig

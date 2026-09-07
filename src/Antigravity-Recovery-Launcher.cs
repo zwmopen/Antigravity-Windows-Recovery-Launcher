@@ -133,7 +133,12 @@ namespace AntigravityLauncher
 
             // 4. 冷启动 / 重启修复：展示具备清晰通路与链路核验反馈的极简状态卡片
             TraceLog("Displaying AntigravityLaunchCapsuleForm...");
-            var capsule = new AntigravityLaunchCapsuleForm(forceLaunch ? "UserRequestedRepair" : GetRecoveryReason(args));
+            string resolvedReason = GetRecoveryReason(args);
+            if (string.IsNullOrEmpty(resolvedReason))
+            {
+                resolvedReason = forceLaunch ? "UserRequestedRepair" : "Startup";
+            }
+            var capsule = new AntigravityLaunchCapsuleForm(resolvedReason);
             Application.Run(capsule);
 
             if (capsule.ExitCode == 0)

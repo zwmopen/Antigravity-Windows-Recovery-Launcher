@@ -1107,7 +1107,10 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     old_pid = get_antigravity_main_pid()
 
-    # 3. 在线通过 WebSocket 写入 Cockpit Tools 凭据 (无损写入凭据并更新 accounts.json)
+    # 3. 先及时优雅退出已耗尽额度的旧实例，释放 DevToolsActivePort 与 state.vscdb 数据库锁，消除锁冲突
+    gracefully_exit_antigravity(timeout_seconds=3.0)
+
+    # 3.5 在线通过 WebSocket 写入 Cockpit Tools 凭据 (释放锁后无损写入凭据并更新 accounts.json 与 state.vscdb)
     server_info = load_cockpit_server_info()
     ok = asyncio.run(switch_account_via_websocket(server_info, best_acc["id"]))
     if not ok:
@@ -1117,9 +1120,6 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         return
     
     logger.info(f"✅ Cockpit Tools 账号凭证与 accounts.json 已更新成功！新账号: {best_acc['email']}")
-
-    # 3.5 及时优雅退出已耗尽额度或报错的旧实例，释放 DevToolsActivePort 与凭据锁，避免假死僵尸窗口误导用户
-    gracefully_exit_antigravity(timeout_seconds=3.0)
 
     # 4. 派发脱壳启动器进行平滑重启与专线恢复 (通过可视化胶囊进度卡片给予明确视觉反馈)
     launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
@@ -1329,8 +1329,45 @@ def run_watch_daemon(threshold=5.0, interval=30):
                 loop_count = 0
                 continue
 
+            # 2.5 人工手动切号感知与锚点对齐 (解决机制缺失2：避免二段误杀)
+            try:
+                current_id, accounts = get_all_accounts_and_quotas()
+                curr_acc = next((a for a in accounts if a["is_current"]), None)
+                if curr_acc:
+                    curr_email = curr_acc["email"]
+                    handled_acc_id = ""
+                    if os.path.exists(WATCHER_CURRENT_ACCOUNT_FILE):
+                        with open(WATCHER_CURRENT_ACCOUNT_FILE, "r", encoding="utf-8") as f:
+                            handled_acc_id = f.read().strip()
+                    pending = read_pending_switch()
+                    if handled_acc_id and current_id != handled_acc_id and not pending:
+                        logger.info(f"💡 [人工切号感知] 检测到用户在 Cockpit 手动切号至: {curr_email} (ID: {current_id})")
+                        logger.info("   正在平滑同步本地锚点 watcher-current-account.txt，彻底抑制二段误杀！")
+                        with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
+                            f.write(current_id.strip())
+            except Exception as e:
+                logger.debug(f"人工切号感知异常: {e}")
+
             # 3. 常规磁盘配额轮询
-            if is_antigravity_running():
+            now_running = is_antigravity_running()
+            if not _last_antigravity_running and now_running:
+                logger.info(f"✨ [实例启动感知] 检测到 Antigravity 实例已恢复运行 (PID: {get_antigravity_main_pid()})，专线保护正常挂载。")
+            elif _last_antigravity_running and not now_running:
+                pending = read_pending_switch()
+                if not pending:
+                    logger.warning("🚨 [窗口关闭感知] 检测到 Antigravity 窗口已退出 (用户手动退出或异常终止)")
+                    record_incident(
+                        incident_type="ANTIGRAVITY_PROCESS_CRASHED",
+                        severity="CRITICAL",
+                        summary="Antigravity 编辑器主进程意外退出或崩溃",
+                        root_cause="前台 Antigravity 进程在运行过程中突然消失，且未处于计划内的凭据切换事务中。",
+                        evidence={"timestamp": time.time(), "watcher_pid": os.getpid()},
+                        action_taken="已生成故障现场快照，处于待命状态",
+                        recommended_action="若窗口意外消失，可双击桌面启动器恢复，系统将保留会话并重新挂载专线。"
+                    )
+            _last_antigravity_running = now_running
+
+            if now_running:
                 current_id, accounts = get_all_accounts_and_quotas()
                 curr_acc = next((a for a in accounts if a["is_current"]), None)
                 if curr_acc:
@@ -1348,7 +1385,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         logger.warning(
                             f"⚠️ 【阈值触发】当前账号 {curr_email} 有效额度打至阈值 ({curr_effective:.1f}% <= {threshold}%)！"
                         )
-                        logger.warning("🚀 正在启动 Cockpit Tools 全自动无感自愈续航闭环：在线写凭据 -> 脱壳拉起启动器 -> 平滑置顶")
+                        logger.warning("🚀 正在启动 Cockpit Tools 全自动无感自愈续航闭环：优雅关窗 -> 在线写凭据 -> 脱壳启动器 -> 扣1续接")
                         logger.warning("!" * 65)
                         
                         run_smart_switch(threshold=threshold, force=True)
@@ -1357,21 +1394,6 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         time.sleep(35)
                         loop_count = 0
                         continue
-            now_running = is_antigravity_running()
-            if _last_antigravity_running and not now_running:
-                pending = read_pending_switch()
-                if not pending:
-                    logger.error("🚨 【异常崩溃感知】检测到 Antigravity.exe 进程意外终止/崩溃！")
-                    record_incident(
-                        incident_type="ANTIGRAVITY_PROCESS_CRASHED",
-                        severity="CRITICAL",
-                        summary="Antigravity 编辑器主进程意外退出或崩溃",
-                        root_cause="前台 Antigravity 进程在运行过程中突然消失，且未处于计划内的凭据切换事务中。",
-                        evidence={"timestamp": time.time(), "watcher_pid": os.getpid()},
-                        action_taken="已生成故障现场快照，处于待命状态",
-                        recommended_action="若窗口意外消失，可双击桌面启动器恢复，系统将保留会话并重新挂载专线。"
-                    )
-            _last_antigravity_running = now_running
 
             if not now_running and loop_count % 20 == 0:
                 logger.debug("[巡检挂起] 未检测到 Antigravity 运行实例，处于低耗待命模式...")
