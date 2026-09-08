@@ -54,7 +54,9 @@
 
 ## 测试和当前验收
 
-- 2026-09-08 (v1.4.12)：Cockpit 界面热重绘跟随、四合一磁盘状态原子对齐与飞书“双轨制”通知群物理隔离里程碑。
+- 2026-09-08 (v1.4.12 / v1.4.12-hotfix)：Cockpit 界面热重绘跟随、四合一磁盘状态原子对齐与飞书“双轨制”通知群物理隔离里程碑。
+  - **CDP 自动续接流式生成防闪退保护锁（根除会话撕裂）**：排查实机 16:31 自动扣“1”后偶发闪退的根因——CDP 在会话 2 刚刚发送“1”后仅等待 0.6s，此时后端 `streamGenerateContent` 处于流式握手期，脚本立即执行 `switch_back_js` 强行点击侧边栏链接切换路由，导致 React 单页应用组件卸载并抛出 `CORTEX_STEP_STATUS_CANCELED`，引发渲染进程异常崩溃或窗口关闭。已在 CDP 逻辑中加入生成状态检测：**若当前会话存在 `Stop generation`（生成中），绝对禁止切换路由，保持原地聚焦**，并将握手沉降防抖从 0.6s 提高至安全阈值；
+  - **Cockpit UI 热重绘补齐 `ctypes` 引用**：修复 `refresh_cockpit_tools_ui` 中漏引 `import ctypes` 导致的 `name 'ctypes' is not defined` 报错，实机实测向 10 个 Cockpit 窗口派发刷新通知 100% 成功；
   - **Cockpit 状态热跟随（杜绝视觉认知脱节）**：深入排查证实切号底层文件已成功写入，但由于 Cockpit 采用 Tauri 2.0 (Rust + WebView2) 架构，外部 WebSocket 切号不会向已打开的渲染窗口主动派发 UI 重绘事件，且历史遗留 `antigravity_legacy_instances.json` 残留旧账号。通过新增 `sync_all_cockpit_account_files` 强制对齐 4 个配置（`accounts.json`、`current_account.json`、`instances.json`、`antigravity_legacy_instances.json`），并新增 `refresh_cockpit_tools_ui` 定位 Tauri / WRY_WEBVIEW 窗口句柄派发 F5 静默刷新，使 Cockpit 界面在切号后瞬间将绿标挪至最新在用账号；
   - **飞书通知“双轨制”物理隔离（高信噪比体系）**：
     - **轨道 1：【AI 任务成果交付群】（`oc_6a5b6310fb73329b930002fa8b2f936b`）**：专属承载高价值业务启动、里程碑汇报、交付物直通下载链接，严格禁噪；

@@ -10,6 +10,11 @@
   - **轨道 1：【AI 任务成果交付群】（`oc_6a5b6310fb73329b930002fa8b2f936b`）**：专属承载高价值业务启动、阶段里程碑交付汇报、制品直通下载链接，严格禁噪；
   - **轨道 2：【AI 额度与系统运维群】（`oc_0bb71695ab63b056e1edcac80d31698e`）**：专收自动切号战报、Clash 节点自愈、429 限流熔断告警与每日配额排期看板，与业务群物理隔离；
   - 飞书 Bot 通过开放平台 OpenAPI 自动完成双群创建、用户拉群（`zzz`）与首发欢迎声明派发；`feishu_config.json` 与切号流水线完成路由绑定。
+- **CDP 自动续接流式生成防闪退保护锁 (Stream Generation Guard & Debounce)**：
+  - **根除会话并发撕裂**：排查实机 16:31 自动扣“1”后偶发闪退的根因——CDP 在会话 2 刚刚触发发送“1”后仅等待 0.6s，后端 `streamGenerateContent` 处于流式握手期，脚本随后立即执行 `switch_back_js` 强行点击侧边栏链接切换路由，导致 React 单页应用组件卸载并抛出 `CORTEX_STEP_STATUS_CANCELED`，引发渲染进程异常崩溃或窗口关闭；
+  - **流式状态保护锁**：在 CDP 续接逻辑中加入生成状态检测，**若当前会话存在 `Stop generation`（生成中），绝对禁止切换路由，锁定留在当前窗口**，并将握手沉降防抖从 0.6s 提高至安全阈值；
+- **Cockpit UI 热重绘补齐 `ctypes` 引用 (Fix Missing ctypes Import)**：
+  - 修复 `refresh_cockpit_tools_ui` 中漏引 `import ctypes` 导致的 `name 'ctypes' is not defined` 报错，实机实测向 10 个 Cockpit 窗口派发刷新通知 100% 成功。
 - **优雅退出宽限优化 (Graceful Exit Relaxation)**：
   - 将 `gracefully_exit_antigravity` 平滑关闭等待从 3.5s 提升至 5.0s，给 Electron/Antigravity 充分释放文件句柄并保存状态的时间，大幅降低强制 kill 突兀感。
 
