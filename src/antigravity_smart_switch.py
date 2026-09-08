@@ -1215,7 +1215,7 @@ def send_dual_notification(title, message, status="warning"):
     send_feishu_notification(title, message)
 
 
-def gracefully_exit_antigravity(timeout_seconds=3.5):
+def gracefully_exit_antigravity(timeout_seconds=5.0):
     logger.info("正在检测运行中的 Antigravity 实例...")
     if not psutil:
         logger.warning("未检测到 psutil，采用 taskkill 兜底")
@@ -1477,6 +1477,120 @@ async def switch_account_via_websocket(server_info, target_account_id, timeout=2
     return False
 
 
+def sync_all_cockpit_account_files(target_account_id, target_email):
+    """四合一物理原子对齐：确保 Cockpit 所有配置文件的当前账号物理一致"""
+    results = {}
+    now_ts = int(time.time())
+
+    # 1. accounts.json
+    acc_path = os.path.join(COCKPIT_DIR, "accounts.json")
+    if os.path.exists(acc_path):
+        try:
+            with open(acc_path, "r", encoding="utf-8-sig") as f:
+                d = json.load(f)
+            d["current_account_id"] = target_account_id
+            for a in d.get("accounts", []):
+                if a.get("id") == target_account_id:
+                    a["last_used"] = now_ts
+            with open(acc_path, "w", encoding="utf-8") as f:
+                json.dump(d, f, ensure_ascii=False, indent=2)
+            results["accounts.json"] = "OK"
+        except Exception as e:
+            results["accounts.json"] = f"ERROR: {e}"
+
+    # 2. current_account.json
+    curr_path = os.path.join(COCKPIT_DIR, "current_account.json")
+    try:
+        data = {"email": target_email, "updated_at": now_ts}
+        with open(curr_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        results["current_account.json"] = "OK"
+    except Exception as e:
+        results["current_account.json"] = f"ERROR: {e}"
+
+    # 3. instances.json
+    inst_path = os.path.join(COCKPIT_DIR, "instances.json")
+    if os.path.exists(inst_path):
+        try:
+            with open(inst_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if "defaultSettings" in d:
+                d["defaultSettings"]["bindAccountId"] = target_account_id
+            with open(inst_path, "w", encoding="utf-8") as f:
+                json.dump(d, f, indent=2)
+            results["instances.json"] = "OK"
+        except Exception as e:
+            results["instances.json"] = f"ERROR: {e}"
+
+    # 4. antigravity_legacy_instances.json
+    legacy_path = os.path.join(COCKPIT_DIR, "antigravity_legacy_instances.json")
+    if os.path.exists(legacy_path):
+        try:
+            with open(legacy_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if "defaultSettings" in d:
+                d["defaultSettings"]["bindAccountId"] = target_account_id
+            with open(legacy_path, "w", encoding="utf-8") as f:
+                json.dump(d, f, indent=2)
+            results["antigravity_legacy_instances.json"] = "OK"
+        except Exception as e:
+            results["antigravity_legacy_instances.json"] = f"ERROR: {e}"
+
+    return results
+
+
+def refresh_cockpit_tools_ui():
+    """向处于运行中的 Cockpit Tools 窗口发送安全静默刷新，促使 WebView2 立即重新加载最新账号列表并标绿高亮"""
+    try:
+        user32 = ctypes.windll.user32
+        hdesk = user32.OpenDesktopW('Default', 0, False, 0x01FF)
+        if not hdesk:
+            return False, "无法打开 Default 桌面"
+        user32.SetThreadDesktop(hdesk)
+
+        cockpit_hwnds = []
+        def enum_cb(hwnd, extra):
+            title_buff = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, title_buff, 256)
+            cls_buff = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, cls_buff, 256)
+            if "Cockpit Tools" in title_buff.value or cls_buff.value == "Tauri Window":
+                cockpit_hwnds.append(hwnd)
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+        user32.EnumDesktopWindows(hdesk, WNDENUMPROC(enum_cb), 0)
+
+        if not cockpit_hwnds:
+            return False, "未发现运行中的 Cockpit Tools 窗口"
+
+        refreshed_count = 0
+        WM_KEYDOWN = 0x0100
+        WM_KEYUP = 0x0101
+        VK_F5 = 0x74
+
+        for top_hwnd in cockpit_hwnds:
+            child_hwnds = []
+            def child_cb(chwnd, extra):
+                ccls_buff = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(chwnd, ccls_buff, 256)
+                if any(k in ccls_buff.value for k in ["RenderWidgetHostHWND", "Chrome_WidgetWin", "WRY_WEBVIEW"]):
+                    child_hwnds.append(chwnd)
+                return True
+
+            user32.EnumChildWindows(top_hwnd, WNDENUMPROC(child_cb), 0)
+            target_list = child_hwnds if child_hwnds else [top_hwnd]
+            for target_h in target_list:
+                user32.PostMessageW(target_h, WM_KEYDOWN, VK_F5, 0x003F0001)
+                time.sleep(0.03)
+                user32.PostMessageW(target_h, WM_KEYUP, VK_F5, 0xC03F0001)
+                refreshed_count += 1
+
+        return True, f"成功向 {refreshed_count} 个 Cockpit 窗口组件派发热刷新通知"
+    except Exception as e:
+        return False, f"刷新 Cockpit UI 异常: {e}"
+
+
 def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed", background=False):
     target = None
     if os.path.exists(LAUNCHER_EXE):
@@ -1605,6 +1719,12 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         clear_pending_auto_resume()
         return
 
+    # 【四合一状态同步与 UI 刷新对账】：确保 Cockpit 前端界面、实例配置与底层文件 100% 物理一致
+    cockpit_sync_res = sync_all_cockpit_account_files(best_acc["id"], best_acc["email"])
+    logger.info(f"📊 Cockpit 关联状态文件原子对齐完成: {cockpit_sync_res}")
+    ui_refreshed, ui_msg = refresh_cockpit_tools_ui()
+    logger.info(f"🖥️ Cockpit Tools 界面高亮实时热跟随: {ui_msg}")
+
     logger.info(f"✅ [步骤 1/5 完成] 目标账号 [{best_acc['email']}] 已成功注入 Windows 系统凭据 (gemini:antigravity) 与 Cockpit！")
 
     # =========================================================================
@@ -1620,7 +1740,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     # 【核心顺序 3】：退出反重力 (此时新账号凭据与订阅已全部就绪，优雅退出释放句柄与锁)
     # =========================================================================
     logger.info(f"🚪 [步骤 3/5] 退出反重力：切号与订阅已就绪，正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
-    gracefully_exit_antigravity(timeout_seconds=3.5)
+    gracefully_exit_antigravity(timeout_seconds=5.0)
 
     # =========================================================================
     # 【核心顺序 4】：启动启动器 (派发桌面智能启动器拉起新实例，挂载 17897 专线代理)
