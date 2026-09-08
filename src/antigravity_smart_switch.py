@@ -863,11 +863,7 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=
                 success_items = [r for r in result.get("results", []) if r.get("success")]
                 count_sent = len(success_items)
                 if count_sent > 0:
-                    send_dual_notification(
-                        "Antigravity 断点自动续接成功",
-                        f"已成功唤醒 {count_sent} 个任务窗口（优先续接活跃会话），任务恢复推进中！",
-                        status="info"
-                    )
+                    logger.info(f"✅ 已成功唤醒 {count_sent} 个任务窗口（优先续接活跃会话）")
                 return True
             except Exception as e:
                 logger.warning(f"执行自动续接尝试 {retry + 1} 发生异常: {e}")
@@ -1561,16 +1557,16 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     except Exception as e:
         logger.debug(f"提前同步 watcher-current-account.txt 异常: {e}")
     
-    # 2. 发送桌面技能弹窗与飞书双通道通知 (告知用户正在全自动接力无感换号，反重力保持开启中)
-    notif_title = "Antigravity 额度预警与智能切号"
+    # 2. 剩余 5% 触发切号：按规则【只发桌面通知，不发飞书】
+    notif_title = "Antigravity 额度预警 (剩余 <= 5%)"
     active_info = f"\n📌 保护中活动任务: {target_title}" if target_title else ""
     notif_msg = (
-        f"当前在用账号 [{curr_email}] 达到切号条件 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)\n"
+        f"当前在用账号 [{curr_email}] 额度剩余 <= 5% (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)\n"
         f"🎯 优选满血接力: {best_acc['email']} (5h: {best_acc['gemini_5h']}%, 周: {best_acc['gemini_weekly']}%){active_info}\n"
         f"📋 决策理由: {reason}\n"
         f"⚡ 正在后台先行切号 (反重力正常运行中，切号成功后执行订阅更新与接力重启)..."
     )
-    send_dual_notification(notif_title, notif_msg, status="warning")
+    send_windows_notification(notif_title, notif_msg, status="warning")
     
     old_pid = get_antigravity_main_pid()
 
@@ -1589,7 +1585,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     cred_ok = write_antigravity_windows_credential(best_acc["id"])
     if not ok and not cred_ok:
         logger.error("向 Cockpit Tools 发送切号指令且系统凭据直写均失败，取消本次切换！反重力未被终止，当前窗口保持完好。")
-        send_dual_notification(
+        send_windows_notification(
             "Antigravity 切号未完成",
             f"尝试切换至账号 [{best_acc['email']}] 失败，本次切号已取消，当前反重力保持运行。",
             status="error"
@@ -1635,10 +1631,10 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     clear_pending_switch()
     reset_language_server_log_pos()
 
-    # 6. 发送切号自愈完成双通道通知
-    succ_title = "Antigravity 切号自愈完成"
+    # 6. 切换并重启成功：按规则【发桌面也发飞书】
+    succ_title = "Antigravity 切换并重启成功"
     succ_msg = (
-        f"✅ 已成功切换至账号: {best_acc['email']}\n"
+        f"✅ 账号已成功切换至: {best_acc['email']}\n"
         f"🚀 17897 专线网络已重新挂载，前 3 个对话窗口已自动扣 1 续接完成！"
     )
     send_dual_notification(succ_title, succ_msg, status="info")
@@ -1869,8 +1865,9 @@ def check_language_server_quota_error():
                 if current_id:
                     record_quarantine_account(current_id, duration)
 
-                send_dual_notification(
-                    "Antigravity 模型 429 限流报警",
+                # 捕获到 429 报错触发切号预警：按规则【只发桌面通知，不发飞书】
+                send_windows_notification(
+                    "Antigravity 模型 429 限流预警",
                     f"当前账号 [{curr_email}] 遭遇 Gemini 模型 429 限流报错，系统正在自动换号接力...",
                     status="warning"
                 )
