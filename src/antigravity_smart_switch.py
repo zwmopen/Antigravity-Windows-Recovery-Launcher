@@ -1126,9 +1126,10 @@ def send_feishu_notification(title, message, chat_names=None, debounce_seconds=9
                 if cid and cid not in targets:
                     targets.append(cid)
         else:
-            default_targets = ["通用通知群", "飞书牛马 CLI 私聊"]
+            infra_chat = cfg.get("infra_ops_chat", "AI 额度与系统运维群")
+            default_targets = [infra_chat, "飞书牛马 CLI 私聊"]
             for dt in default_targets:
-                cid = group_map.get(dt)
+                cid = group_map.get(dt) or dt
                 if cid and cid not in targets:
                     targets.append(cid)
 
