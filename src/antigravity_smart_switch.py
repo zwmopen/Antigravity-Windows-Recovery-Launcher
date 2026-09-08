@@ -27,6 +27,7 @@ import logging
 import argparse
 import subprocess
 import base64
+import ctypes
 import urllib.request
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
@@ -743,21 +744,36 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                     logger.warning(f"⚠️ CDP 窗口 [{idx+1}] 发送未触发: 会话='{title}' (原因: {fail_reason})")
                     results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": fail_reason})
 
-                await asyncio.sleep(0.6)
+                await asyncio.sleep(1.0)
 
-            # 3. 切回首选窗口聚焦
+            # 3. 切回首选窗口聚焦 (带流式生成与防闪退安全保护)
+            # 优先保持在成功续接且正在生成的窗口，杜绝在 SSE 生成握手期强行 unmount 导致的渲染进程崩溃与请求中断
+            await asyncio.sleep(1.2)
             if target_convs:
-                first_idx = target_convs[0]["index"]
+                preferred_conv = next((item for item in results if item.get("success")), target_convs[0])
+                pref_idx = preferred_conv["index"] - 1 if "index" in preferred_conv and preferred_conv.get("index", 0) > 0 else preferred_conv.get("index", 0)
                 switch_back_js = f"""
                 (async () => {{
+                    // 若当前窗口处于流式生成中，保持聚焦，绝不切换路由
+                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                    if (isGen) return {{ status: "stay_generating" }};
+
                     const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                    if (rows.length > {first_idx}) {{
-                        const firstLink = rows[{first_idx}].querySelector('a');
-                        if (firstLink) firstLink.click();
+                    if (rows.length > {pref_idx}) {{
+                        const link = rows[{pref_idx}].querySelector('a');
+                        const targetHref = link ? link.getAttribute('href') : '';
+                        if (link && targetHref && !location.href.includes(targetHref)) {{
+                            link.click();
+                            await new Promise(r => setTimeout(r, 400));
+                        }}
                     }}
+                    return {{ status: "ok" }};
                 }})()
                 """
-                await cdp_call("Runtime.evaluate", {"expression": switch_back_js, "awaitPromise": True})
+                try:
+                    await cdp_call("Runtime.evaluate", {"expression": switch_back_js, "awaitPromise": True})
+                except Exception as e:
+                    logger.debug(f"切回聚焦窗口静默忽略: {e}")
 
             succ_cnt = sum(1 for item in results if item.get("success"))
             logger.info(f"CDP 自动续接处理完毕: 总共处理 {len(results)} 个会话窗口，成功续接发送: {succ_cnt} 个")
