@@ -1,5 +1,18 @@
 # 变更记录
 
+## 1.4.12 - 2026-09-08 (Cockpit 界面热重绘跟随、四合一状态物理原子对齐与飞书双轨制通知群物理隔离里程碑)
+
+- **Cockpit 驾驶舱状态热重绘跟随 (Cockpit UI Hot Reload & Visual Sync)**：
+  - **根因根除**：排查证实外部 WebSocket 切号修改了后端文件，但 Cockpit 的 Tauri 2.0 (Rust + WebView2) 架构未向打开的渲染进程广播 UI 重绘，且旧版 `antigravity_legacy_instances.json` 残留旧账号；
+  - **四合一配置原子对齐**：切号时强一致性原子写入 `accounts.json`、`current_account.json`、`instances.json` 与 `antigravity_legacy_instances.json`，彻底清理历史 Legacy 绑定残留；
+  - **静默热刷新通知**：切号完成后通过 Win32 API 定位 Cockpit 的 Tauri / WRY_WEBVIEW 窗口句柄，派发静默 F5 刷新通知，界面高亮瞬间跟随切换至新账号，彻底终结“后台切了、前台还显示旧号”的视觉脱节。
+- **飞书通知“双轨制”体系建设与路由物理隔离 (Dual-Track Feishu Notification Architecture)**：
+  - **轨道 1：【AI 任务成果交付群】（`oc_6a5b6310fb73329b930002fa8b2f936b`）**：专属承载高价值业务启动、阶段里程碑交付汇报、制品直通下载链接，严格禁噪；
+  - **轨道 2：【AI 额度与系统运维群】（`oc_0bb71695ab63b056e1edcac80d31698e`）**：专收自动切号战报、Clash 节点自愈、429 限流熔断告警与每日配额排期看板，与业务群物理隔离；
+  - 飞书 Bot 通过开放平台 OpenAPI 自动完成双群创建、用户拉群（`zzz`）与首发欢迎声明派发；`feishu_config.json` 与切号流水线完成路由绑定。
+- **优雅退出宽限优化 (Graceful Exit Relaxation)**：
+  - 将 `gracefully_exit_antigravity` 平滑关闭等待从 3.5s 提升至 5.0s，给 Electron/Antigravity 充分释放文件句柄并保存状态的时间，大幅降低强制 kill 突兀感。
+
 ## 1.4.11 - 2026-09-08 (主动对账自愈、账号池存量预测预警与飞书通知防抖保护)
 
 - **主动凭据一致性对账与隐患自愈 (Proactive Credential Consistency Audit)**：

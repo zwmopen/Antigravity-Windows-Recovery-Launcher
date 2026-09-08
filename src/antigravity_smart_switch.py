@@ -1103,7 +1103,7 @@ def send_feishu_notification(title, message, chat_names=None, debounce_seconds=9
             cfg = json.load(f)
         
         app_id = cfg.get("app_id")
-        app_secret = cfg.get("app_secret")
+        app_secret = (cfg.get("app_secret"))
         if not app_id or not app_secret:
             return False
 
@@ -1340,7 +1340,7 @@ def write_antigravity_windows_credential(account_id):
 
     token = acc_data.get("token", {})
     access_token = token.get("access_token", "")
-    refresh_token = token.get("refresh_token", "")
+    refresh_token = (token.get("refresh_token", ""))
     expiry_ts = token.get("expiry_timestamp")
     if expiry_ts:
         expiry_str = datetime.fromtimestamp(expiry_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
