@@ -1871,13 +1871,6 @@ function Test-RealModelGeneration {
         return $true
     }
 
-    # Fast-pass: If Google API and 204 pass and egress is US or JP, fast pass.
-    if ($script:LastGoogleStatus -gt 0 -and $script:LastApiStatus -gt 0 -and -not $locationFailure) {
-        $script:LastModelProbeState = 'passed'
-        Write-SafeLog -Event 'model_generation_fast_passed' -Values @{ duration_ms = $durationMs; egress = $script:LastEgressCountry }
-        return $true
-    }
-
     $transportFailure = [regex]::IsMatch(($probeDiagnosticText + ' ' + (($probeOutput | ForEach-Object { [string]$_ }) -join ' ')), '(?i)timed?\s*out|timeout|connection\s+(?:reset|closed|refused)|network|temporarily\s+unavailable|unreachable|eof|deadline')
     $failureKind = 'model_transport'
     if ($locationFailure) {
@@ -2308,16 +2301,6 @@ if ($includeCooldown -and $cooldownIds.Count -gt 0) {
     Write-SafeLog -Event 'manual_startup_cooldown_bypass' -Values @{ candidate_count = $orderedCandidates.Count }
 }
 if ($orderedCandidates.Count -eq 0) {
-    Write-SafeLog -Event 'all_candidates_exhausted_triggering_subscription_refresh'
-    $refreshed = Update-ClashSubscriptionProfiles
-    if ($refreshed) {
-        $candidates = @(Get-CandidateNodeDefinitions)
-        $script:DiscoveredCandidateCount = $candidates.Count
-        $orderedCandidates = @(Get-OrderedCandidates -Candidates $candidates -State $failoverState -CooldownIds $cooldownIds -IncludeCooldown:$true -RecoveryReason $RecoveryReason)
-        $script:EligibleCandidateCount = $orderedCandidates.Count
-    }
-}
-if ($orderedCandidates.Count -eq 0) {
     Save-FailoverState -State $failoverState
     Stop-WithMessage -Event 'all_candidates_in_cooldown'
 }
@@ -2339,6 +2322,7 @@ foreach ($candidate in $orderedCandidates) {
         $candidateConfig = Write-PrivateConfig -ProfileId 'active-clash-runtime' -Candidate $candidate
         $script:CurrentConfigHash = [string]$candidateConfig.ConfigHash
         Test-PrivateConfig
+        Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
         $isFastAccountChange = ($RecoveryReason -in @('AccountChange', 'cockpit_account_changed')) -and ([string]$candidate.Id -eq [string]$failoverState.active_node_id)
         if ($isFastAccountChange -and (Test-LocalPort -TestPort $Port)) {
             $candidateConnectivity = @{ GoogleStatus = 204; ApiStatus = 404; OAuthStatus = 404; RttMs = 0; Attempts = 1 }
@@ -2358,7 +2342,7 @@ foreach ($candidate in $orderedCandidates) {
             $candidateCountry = Test-ProxyEgress -ExpectedCountry $expectedCountry -ExpectedIp $expectedIp
             $script:LastEgressCountry = [string]$candidateCountry
         }
-        $skipModelProbe = ($RecoveryReason -in @('AccountChange', 'cockpit_account_changed')) -or ([string]$candidate.Id -eq [string]$failoverState.active_node_id)
+        $skipModelProbe = ($RecoveryReason -in @('AccountChange', 'cockpit_account_changed'))
         if (-not $skipModelProbe) {
             Test-RealModelGeneration | Out-Null
             for ($confirmationIndex = 2; $confirmationIndex -le $ModelProbeConfirmationCount; $confirmationIndex++) {

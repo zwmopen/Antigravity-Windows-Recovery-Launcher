@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
-[assembly: AssemblyInformationalVersion("1.0.0")]
+[assembly: AssemblyVersion("1.4.13.0")]
+[assembly: AssemblyFileVersion("1.4.13.0")]
+[assembly: AssemblyInformationalVersion("1.4.13")]
 
 namespace AntigravityLauncher
 {
@@ -1631,7 +1631,7 @@ namespace AntigravityLauncher
                     state.TargetProgress = Math.Max(state.TargetProgress, 75);
                     state.Ceiling = Math.Max(state.Ceiling, 82);
                 }
-                else if (line.Contains("model_generation_probe_passed") || line.Contains("model_generation_fast_passed"))
+                else if (line.Contains("model_generation_probe_passed"))
                 {
                     string countryDesc = egressCountry == "US" ? "美国 US" : (egressCountry == "JP" ? "日本 JP" : egressCountry);
                     state.ModelText = "Gemini 编程模型验证通过 [出口 " + countryDesc + "]";
@@ -1659,7 +1659,7 @@ namespace AntigravityLauncher
             {
                 int total = candidateTotal > 0 ? candidateTotal : discoveredTotal;
                 int current = candidateIndex > 0 ? candidateIndex : 1;
-                state.LineText = "已发现 " + total + " 条可用专线 · 正在验证 " + current + "/" + total + " [美国 · 低延迟]";
+                state.LineText = "发现 " + total + " 条候选 · 正在验证 " + current + "/" + total;
             }
 
             return state;
