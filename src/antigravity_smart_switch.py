@@ -73,6 +73,8 @@ INCIDENT_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy
 INCIDENT_HISTORY_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "incident-history.json")
 AUTO_RESUME_LOCK_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "auto-resume.lock")
 QUARANTINE_ACCOUNTS_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "quarantined-accounts.json")
+SHARED_NOTIFY_SCRIPT = r"D:\AICode\AI\skills\技能包\技能\shared-notification\scripts\shared_notify.py"
+FEISHU_CONFIG_FILE = r"D:\AICode\AI\secrets\平台服务\飞书\feishu_config.json"
 
 
 class AutoResumeLock:
@@ -325,8 +327,8 @@ def read_pending_switch():
         return None
 
 
-def write_pending_auto_resume(max_windows=3, text="1"):
-    """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌)"""
+def write_pending_auto_resume(max_windows=3, text="1", target_href=None, target_title=None):
+    """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌，支持活动会话精准锚定)"""
     try:
         os.makedirs(os.path.dirname(PENDING_AUTO_RESUME_FILE), exist_ok=True)
         with open(PENDING_AUTO_RESUME_FILE, "w", encoding="utf-8") as f:
@@ -334,12 +336,15 @@ def write_pending_auto_resume(max_windows=3, text="1"):
                 "action": "auto_resume",
                 "text": text,
                 "max_windows": max_windows,
+                "target_href": target_href,
+                "target_title": target_title,
                 "timestamp": time.time(),
                 "created_at": datetime.now().isoformat(),
                 "ttl_seconds": 300,
                 "status": "pending"
             }, f, indent=2)
-        logger.info(f"已写入大任务断点自动续接凭据 (前排 {max_windows} 个窗口，扣 '{text}')")
+        hint = f" (优先锚定会话: '{target_title or target_href}')" if (target_title or target_href) else ""
+        logger.info(f"已写入大任务断点自动续接凭据{hint} (前排 {max_windows} 个窗口，扣 '{text}')")
     except Exception as e:
         logger.warning(f"写入自动续接事务文件异常: {e}")
 
@@ -388,6 +393,47 @@ def get_devtools_active_port(wait_timeout=0):
         if time.time() - start_time >= wait_timeout:
             break
     return None
+
+
+def get_current_active_conversation():
+    """在退出旧实例前通过 CDP 抓取当前处于前台活跃状态的会话，用于切号后优先精准续接"""
+    port = get_devtools_active_port(wait_timeout=1)
+    if not port or not websockets:
+        return None
+    try:
+        req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
+        pages = json.loads(req.read().decode("utf-8"))
+        page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+        if not page:
+            return None
+        ws_url = page["webSocketDebuggerUrl"]
+
+        async def _query():
+            async with websockets.connect(ws_url, ping_interval=None, close_timeout=2) as ws:
+                js = """(() => {
+                    const url = window.location.href;
+                    const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                    const activeRow = rows.find(r => {
+                        const a = r.querySelector('a');
+                        return a && url.includes(a.getAttribute('href'));
+                    }) || rows.find(r => r.classList.contains('bg-sidebar-secondary'));
+                    const a = activeRow ? activeRow.querySelector('a') : null;
+                    const t = activeRow ? activeRow.querySelector('.truncate') : null;
+                    return {
+                        url: url,
+                        href: a ? a.getAttribute('href') : '',
+                        title: t ? t.textContent.trim() : (document.title || '')
+                    };
+                })()"""
+                payload = {"id": 1, "method": "Runtime.evaluate", "params": {"expression": js, "returnByValue": True}}
+                await ws.send(json.dumps(payload))
+                resp = json.loads(await ws.recv())
+                return resp.get("result", {}).get("result", {}).get("value", {})
+
+        return asyncio.run(_query())
+    except Exception as e:
+        logger.debug(f"抓取当前活动会话异常: {e}")
+        return None
 
 
 def update_clash_subscriptions(timeout_seconds=12):
@@ -451,8 +497,8 @@ def update_clash_subscriptions(timeout_seconds=12):
     return False
 
 
-async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
-    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (采用原生 CDP Input.insertText 保证 100% 触发 React/Lexical 事件流)"""
+async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=None):
+    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持活动会话精准锚定与草稿自愈提交)"""
     import websockets
     try:
         async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
@@ -498,11 +544,13 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                     return {
                         index: i,
                         title: titleDiv ? titleDiv.textContent.trim() : '未知会话',
-                        href: a ? a.getAttribute('href') : ''
+                        href: a ? a.getAttribute('href') : '',
+                        isSelected: r.classList.contains('bg-sidebar-secondary')
                     };
                 });
                 return {
                     convs: convs,
+                    currentUrl: window.location.href,
                     diagnostics: {
                         rows_found: rows.length,
                         toggle_found: toggleFound,
@@ -514,8 +562,9 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
             })()
             """
             r = await cdp_call("Runtime.evaluate", {"expression": fetch_rows_js, "awaitPromise": True, "returnByValue": True})
-            eval_val = r.get("result", {}).get("value", {})
+            eval_val = r.get("result", {}).get("result", {}).get("value", {}) or r.get("result", {}).get("value", {})
             all_convs = eval_val.get("convs", [])
+            current_url = eval_val.get("currentUrl", "")
             diag = eval_val.get("diagnostics", {})
             if not all_convs:
                 logger.warning(f"CDP 侧边栏会话列表检索结束 (发现 0 个会话)，DOM 现场: {diag}")
@@ -530,9 +579,33 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 )
                 return {"success": False, "reason": "no_conversations_found", "diagnostics": diag}
 
-            logger.info(f"CDP 成功检索到 {len(all_convs)} 个侧边栏会话，准备前排处理 (最多 {max_windows} 个)...")
+            logger.info(f"CDP 成功检索到 {len(all_convs)} 个侧边栏会话，准备智能优先续接 (最多 {max_windows} 个)...")
 
-            target_convs = all_convs[:int(max_windows)]
+            # 优先级重组：优先精准锚定切号前的活跃任务会话
+            prioritized = []
+            if target_href:
+                matched = next((c for c in all_convs if c.get("href") and (c["href"] in target_href or target_href in c["href"])), None)
+                if not matched:
+                    m_uuid = re.search(r'[0-9a-fA-F-]{36}', target_href)
+                    if m_uuid:
+                        matched = next((c for c in all_convs if m_uuid.group(0) in c.get("href", "")), None)
+                if matched:
+                    prioritized.append(matched)
+                    logger.info(f"🎯 [切号前活跃任务精准定位] 优先续接: '{matched['title']}' ({matched['href']})")
+
+            if not prioritized:
+                active_c = next((c for c in all_convs if c.get("href") and (c["href"] in current_url or c.get("isSelected"))), None)
+                if active_c:
+                    prioritized.append(active_c)
+                    logger.info(f"🎯 [当前聚焦窗口命中] 优先续接: '{active_c['title']}' ({active_c['href']})")
+
+            for c in all_convs:
+                if len(prioritized) >= int(max_windows):
+                    break
+                if c not in prioritized:
+                    prioritized.append(c)
+
+            target_convs = prioritized
             results = []
 
             for c in target_convs:
@@ -572,18 +645,17 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                     if (!editable) return {{ status: "editor_not_found" }};
 
                     // 检查是否正在生成中 (Stop/Cancel 按钮存在即视为生成中)
-                    const isGenerating = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"]');
+                    const isGenerating = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
                     if (isGenerating) return {{ status: "generating" }};
 
                     const currentText = (editable.innerText || '').trim();
-                    if (currentText.length > 0 && currentText !== {json.dumps(str(text))}) {{
-                        return {{ status: "draft_exists" }};
-                    }}
-
-                    // 聚焦并清空可能残留的历史草稿，避免字符重复拼接
                     editable.focus();
+
                     if (currentText === {json.dumps(str(text))}) {{
                         return {{ status: "ready_has_text" }};
+                    }} else if (currentText.length > 0) {{
+                        // 输入框已有残留内容或草稿：直接就绪发送现有内容，绝不因 draft_exists 轻易跳过！
+                        return {{ status: "ready_custom_draft", text: currentText }};
                     }} else {{
                         document.execCommand('selectAll', false, null);
                         document.execCommand('delete', false, null);
@@ -592,16 +664,14 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 }})()
                 """
                 prep_res = await cdp_call("Runtime.evaluate", {"expression": switch_and_prep_js, "awaitPromise": True, "returnByValue": True})
-                prep_val = prep_res.get("result", {}).get("value", {})
+                prep_val = prep_res.get("result", {}).get("result", {}).get("value", {}) or prep_res.get("result", {}).get("value", {})
                 prep_status = prep_val.get("status")
 
                 if prep_status == "generating":
-                    results.append({"index": idx + 1, "title": title, "href": href, "skipped": True, "reason": "generating"})
+                    logger.info(f"会话 [{title}] 正在模型生成中，无需打标，保持继续。")
+                    results.append({"index": idx + 1, "title": title, "href": href, "success": True, "reason": "already_generating"})
                     continue
-                elif prep_status == "draft_exists":
-                    results.append({"index": idx + 1, "title": title, "href": href, "skipped": True, "reason": "draft_exists"})
-                    continue
-                elif prep_status not in ("ready", "ready_has_text"):
+                elif prep_status not in ("ready", "ready_has_text", "ready_custom_draft"):
                     results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": prep_status})
                     continue
 
@@ -633,7 +703,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 })()
                 """
                 send_res = await cdp_call("Runtime.evaluate", {"expression": send_js, "awaitPromise": True, "returnByValue": True})
-                send_val = send_res.get("result", {}).get("value", {})
+                send_val = send_res.get("result", {}).get("result", {}).get("value", {}) or send_res.get("result", {}).get("value", {})
                 is_sent = send_val.get("success", False)
 
                 if not is_sent:
@@ -657,16 +727,17 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
                 (() => {
                     const editable = document.querySelector('[data-lexical-editor="true"]');
                     const currentText = editable ? (editable.innerText || '').trim() : '';
-                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"]');
+                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
                     return { cleared: currentText.length === 0, generating: isGen };
                 })()
                 """
                 verify_res = await cdp_call("Runtime.evaluate", {"expression": verify_js, "returnByValue": True})
-                verify_val = verify_res.get("result", {}).get("value", {})
+                verify_val = verify_res.get("result", {}).get("result", {}).get("value", {}) or verify_res.get("result", {}).get("value", {})
 
                 if is_sent or verify_val.get("cleared") or verify_val.get("generating"):
-                    logger.info(f"✅ CDP 窗口 [{idx+1}] 发送成功: 会话='{title}' 成功输入 '{text}' 并触发发送")
-                    results.append({"index": idx + 1, "title": title, "href": href, "success": True, "text": text})
+                    sent_content = prep_val.get("text") if prep_status == "ready_custom_draft" else text
+                    logger.info(f"✅ CDP 窗口 [{idx+1}] 发送成功: 会话='{title}' 成功触发发送 (内容: '{sent_content}')")
+                    results.append({"index": idx + 1, "title": title, "href": href, "success": True, "text": sent_content})
                 else:
                     fail_reason = send_val.get("reason", "unknown")
                     logger.warning(f"⚠️ CDP 窗口 [{idx+1}] 发送未触发: 会话='{title}' (原因: {fail_reason})")
@@ -674,16 +745,17 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1"):
 
                 await asyncio.sleep(0.6)
 
-            # 3. 切回第 1 个窗口聚焦
-            if all_convs:
-                switch_back_js = """
-                (async () => {
+            # 3. 切回首选窗口聚焦
+            if target_convs:
+                first_idx = target_convs[0]["index"]
+                switch_back_js = f"""
+                (async () => {{
                     const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                    if (rows.length > 0) {
-                        const firstLink = rows[0].querySelector('a');
+                    if (rows.length > {first_idx}) {{
+                        const firstLink = rows[{first_idx}].querySelector('a');
                         if (firstLink) firstLink.click();
-                    }
-                })()
+                    }}
+                }})()
                 """
                 await cdp_call("Runtime.evaluate", {"expression": switch_back_js, "awaitPromise": True})
 
@@ -716,30 +788,8 @@ def get_antigravity_main_pid():
     return 0
 
 
-def send_windows_notification(title, message):
-    """发送 Windows 系统气泡通知（尽最大努力交付，不抛异常）"""
-    try:
-        clean_msg = message.replace('"', '\"').replace('\n', ' `n ')
-        clean_title = title.replace('"', '\"')
-        ps_cmd = (
-            f'[void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms"); '
-            f'$ni = New-Object System.Windows.Forms.NotifyIcon; '
-            f'$ni.Icon = [System.Drawing.SystemIcons]::Information; '
-            f'$ni.BalloonTipTitle = "{clean_title}"; '
-            f'$ni.BalloonTipText = "{clean_msg}"; '
-            f'$ni.Visible = $True; '
-            f'$ni.ShowBalloonTip(4000); '
-            f'Start-Sleep -Milliseconds 800; '
-            f'$ni.Dispose()'
-        )
-        flags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
-        subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd], creationflags=flags)
-    except Exception:
-        pass
-
-
-def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=None):
-    """执行前排 1/2/3 窗口打标与自动扣 1 续接任务 (单飞互斥保护)"""
+def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=None, target_href=None):
+    """执行前排任务窗口打标与自动续接 (单飞互斥保护，支持活动会话精准锚定)"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
         return False
@@ -754,6 +804,8 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=
         if token:
             max_windows = token.get("max_windows", max_windows)
             text = token.get("text", text)
+            if not target_href:
+                target_href = token.get("target_href")
             # 立即消费令牌，防止后续重复调用
             clear_pending_auto_resume()
 
@@ -800,20 +852,22 @@ def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=
             logger.warning("未能获取到新 Antigravity 页面的 WebSocket 调试地址，跳过自动续接。")
             return False
 
-        logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排 {max_windows} 个窗口打标与扣 '{text}' 续接...")
+        logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排窗口打标与扣 '{text}' 续接...")
         for retry in range(2):
             try:
-                result = asyncio.run(_cdp_execute_auto_resume(ws_url, max_windows=max_windows, text=text))
+                result = asyncio.run(_cdp_execute_auto_resume(ws_url, max_windows=max_windows, text=text, target_href=target_href))
                 logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
 
                 clear_pending_auto_resume()
 
                 success_items = [r for r in result.get("results", []) if r.get("success")]
                 count_sent = len(success_items)
-                send_windows_notification(
-                    "Cockpit Tools · 断点自动续接",
-                    f"已定位前排最新 1/2/3 任务窗口！\n成功在 {count_sent} 个窗口自动扣 '{text}' 继续推进，已平滑切回主窗口！"
-                )
+                if count_sent > 0:
+                    send_dual_notification(
+                        "Antigravity 断点自动续接成功",
+                        f"已成功唤醒 {count_sent} 个任务窗口（优先续接活跃会话），任务恢复推进中！",
+                        status="info"
+                    )
                 return True
             except Exception as e:
                 logger.warning(f"执行自动续接尝试 {retry + 1} 发生异常: {e}")
@@ -906,8 +960,9 @@ def get_all_accounts_and_quotas():
         q_5h_val = q_5h if q_5h is not None else 0.0
         q_w_val = q_weekly if q_weekly is not None else 0.0
         
-        # 有效额度：取 5小时与周额度中较小值（周额度见底则整号瘫痪）
-        effective = min(q_5h_val, q_w_val)
+        # 有效额度：以 5 小时滚动额度为主导门禁！周额度仅在彻底见底 (<= 0.0%) 时才熔断切号
+        # 铁律：只要 5 小时额度充沛 (>5%) 且周额度未归零，严禁提前抢跑误杀会话！
+        effective = 0.0 if q_w_val <= 0.0 else q_5h_val
         
         # 周恢复重置时间计算（剩余天数与秒数）
         if rt_weekly:
@@ -1033,26 +1088,124 @@ def is_antigravity_running():
         return False
 
 
-def send_windows_notification(title, message):
-    if sys.platform != "win32":
-        return
+def send_feishu_notification(title, message, chat_names=None):
+    """通过飞书 OpenAPI 向指定群组和私聊推送通知（尽最大努力交付）"""
+    if not os.path.exists(FEISHU_CONFIG_FILE):
+        return False
     try:
-        ps_script = f"""
-Add-Type -AssemblyName System.Windows.Forms
-$n = New-Object System.Windows.Forms.NotifyIcon
-$n.Icon = [System.Drawing.SystemIcons]::Information
-$n.Visible = $True
-$n.ShowBalloonTip(6000, '{title}', '{message}', [System.Windows.Forms.ToolTipIcon]::Info)
-Start-Sleep -Seconds 6
-$n.Dispose()
-"""
-        encoded = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
-        subprocess.Popen(
-            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
-            creationflags=0x08000000 if sys.platform == "win32" else 0
-        )
+        with open(FEISHU_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        
+        app_id = cfg.get("app_id")
+        app_secret = cfg.get("app_secret")
+        if not app_id or not app_secret:
+            return False
+
+        # 换取 tenant_access_token
+        auth_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        auth_data = json.dumps({"app_id": app_id, "app_secret": app_secret}).encode("utf-8")
+        req = urllib.request.Request(auth_url, data=auth_data, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            token_info = json.loads(resp.read().decode("utf-8"))
+        token = token_info.get("tenant_access_token")
+        if not token:
+            return False
+
+        group_map = cfg.get("群列表", {})
+        # 默认发送给：通用通知群 和 飞书牛马 CLI 私聊
+        targets = []
+        if chat_names:
+            for name in chat_names:
+                cid = group_map.get(name) or name
+                if cid and cid not in targets:
+                    targets.append(cid)
+        else:
+            default_targets = ["通用通知群", "飞书牛马 CLI 私聊"]
+            for dt in default_targets:
+                cid = group_map.get(dt)
+                if cid and cid not in targets:
+                    targets.append(cid)
+
+        content_text = f"🔔 【{title}】\n{message}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        success_count = 0
+        for cid in targets:
+            try:
+                send_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+                payload = {
+                    "receive_id": cid,
+                    "msg_type": "text",
+                    "content": json.dumps({"text": content_text}, ensure_ascii=False)
+                }
+                send_req = urllib.request.Request(send_url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+                with urllib.request.urlopen(send_req, timeout=8) as s_resp:
+                    if s_resp.status == 200:
+                        success_count += 1
+            except Exception as e:
+                logger.debug(f"向飞书目标 {cid} 发送消息异常: {e}")
+        
+        if success_count > 0:
+            logger.info(f"✅ 飞书通知推送成功 ({success_count}/{len(targets)} 目标)")
+            return True
     except Exception as e:
-        logger.debug(f"发送系统通知异常: {e}")
+        logger.warning(f"飞书通知发送异常: {e}")
+    return False
+
+
+def send_windows_notification(title, message, status="warning", duration_ms=8000):
+    """发送桌面通知：优先使用 shared-notification 技能，失败降级为系统气泡"""
+    # 1. 优先调用本地 shared-notification 技能
+    if os.path.exists(SHARED_NOTIFY_SCRIPT):
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("shared_notify", SHARED_NOTIFY_SCRIPT)
+            if spec and spec.loader:
+                shared_notify = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(shared_notify)
+                res = shared_notify.notify(
+                    message=message,
+                    title=title,
+                    status=status,
+                    duration_ms=duration_ms,
+                    source="AntigravitySmartSwitch"
+                )
+                if res:
+                    return True
+        except Exception as e:
+            logger.debug(f"shared_notify 技能调用异常，降级到系统气泡: {e}")
+
+    # 2. 降级为 PowerShell NotifyIcon
+    if sys.platform != "win32":
+        return False
+    try:
+        clean_msg = message.replace('"', '\"').replace('\n', ' `n ')
+        clean_title = title.replace('"', '\"')
+        ps_cmd = (
+            f'[void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms"); '
+            f'$ni = New-Object System.Windows.Forms.NotifyIcon; '
+            f'$ni.Icon = [System.Drawing.SystemIcons]::Information; '
+            f'$ni.BalloonTipTitle = "{clean_title}"; '
+            f'$ni.BalloonTipText = "{clean_msg}"; '
+            f'$ni.Visible = $True; '
+            f'$ni.ShowBalloonTip(4000); '
+            f'Start-Sleep -Milliseconds 800; '
+            f'$ni.Dispose()'
+        )
+        flags = 0x08000000 if sys.platform == "win32" else 0
+        subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd], creationflags=flags)
+        return True
+    except Exception:
+        return False
+
+
+def send_dual_notification(title, message, status="warning"):
+    """同时发送桌面通知技能与飞书群/私聊通知"""
+    send_windows_notification(title, message, status=status)
+    send_feishu_notification(title, message)
 
 
 def gracefully_exit_antigravity(timeout_seconds=3.5):
@@ -1116,7 +1269,139 @@ def gracefully_exit_antigravity(timeout_seconds=3.5):
             pass
 
 
-async def switch_account_via_websocket(server_info, target_account_id, timeout=10.0):
+def decrypt_cockpit_account(account_id):
+    """从 Cockpit Tools 本地安全加密存储中无损解密指定账号的完整数据 (含 access_token, refresh_token)"""
+    key_path = os.path.join(COCKPIT_DIR, "secure-account-storage.key")
+    acc_path = os.path.join(COCKPIT_DIR, "accounts", f"{account_id}.json")
+    if not os.path.exists(key_path) or not os.path.exists(acc_path):
+        return None
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        with open(key_path, "r", encoding="utf-8") as f:
+            key = base64.b64decode(f.read().strip())
+        with open(acc_path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+        aesgcm = AESGCM(key)
+        dec = aesgcm.decrypt(base64.b64decode(doc["nonce"]), base64.b64decode(doc["ciphertext"]), None)
+        return json.loads(dec)
+    except Exception as e:
+        logger.warning(f"解密 Cockpit 账号 {account_id} 凭据异常: {e}")
+        return None
+
+
+def get_current_windows_credential_token():
+    """读取当前 Windows Credential Manager (gemini:antigravity) 中实际生效的 token"""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        advapi32 = ctypes.windll.advapi32
+        class CREDENTIAL(ctypes.Structure):
+            _fields_ = [
+                ('Flags', wintypes.DWORD), ('Type', wintypes.DWORD),
+                ('TargetName', wintypes.LPWSTR), ('Comment', wintypes.LPWSTR),
+                ('LastWritten', wintypes.FILETIME), ('CredentialBlobSize', wintypes.DWORD),
+                ('CredentialBlob', ctypes.POINTER(ctypes.c_byte)), ('Persist', wintypes.DWORD),
+                ('AttributeCount', wintypes.DWORD), ('Attributes', ctypes.c_void_p),
+                ('TargetAlias', wintypes.LPWSTR), ('UserName', wintypes.LPWSTR),
+            ]
+        pcred = ctypes.POINTER(CREDENTIAL)()
+        if advapi32.CredReadW('gemini:antigravity', 1, 0, ctypes.byref(pcred)):
+            raw = ctypes.string_at(pcred.contents.CredentialBlob, pcred.contents.CredentialBlobSize).decode('utf-8')
+            advapi32.CredFree(pcred)
+            d = json.loads(raw)
+            return d.get('token', {})
+    except Exception:
+        pass
+    return None
+
+
+def write_antigravity_windows_credential(account_id):
+    """
+    【核心突破】直接将目标账号 Token 写入 Windows Credential Manager (系统凭据管理器: gemini:antigravity)
+    Antigravity 2.0 (v2.12.2+) 完全依赖 Windows 系统凭据进行模型认证，绕过 state.vscdb 与 Cockpit 协议脱节
+    """
+    if sys.platform != "win32":
+        return False
+
+    acc_data = decrypt_cockpit_account(account_id)
+    if not acc_data:
+        logger.error(f"无法解密账号 {account_id}，无法写入 Windows 系统凭据！")
+        return False
+
+    token = acc_data.get("token", {})
+    access_token = token.get("access_token", "")
+    refresh_token = token.get("refresh_token", "")
+    expiry_ts = token.get("expiry_timestamp")
+    if expiry_ts:
+        expiry_str = datetime.fromtimestamp(expiry_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+    else:
+        expiry_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+
+    cred_payload = {
+        "token": {
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "refresh_token": refresh_token,
+            "expiry": expiry_str
+        },
+        "auth_method": "consumer"
+    }
+    raw_bytes = json.dumps(cred_payload, separators=(",", ":")).encode("utf-8")
+
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.windll.advapi32
+
+    class CREDENTIAL(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD),
+            ("Type", wintypes.DWORD),
+            ("TargetName", wintypes.LPWSTR),
+            ("Comment", wintypes.LPWSTR),
+            ("LastWritten", wintypes.FILETIME),
+            ("CredentialBlobSize", wintypes.DWORD),
+            ("CredentialBlob", ctypes.c_char_p),
+            ("Persist", wintypes.DWORD),
+            ("AttributeCount", wintypes.DWORD),
+            ("Attributes", ctypes.c_void_p),
+            ("TargetAlias", wintypes.LPWSTR),
+            ("UserName", wintypes.LPWSTR),
+        ]
+
+    cred = CREDENTIAL()
+    cred.Flags = 0
+    cred.Type = 1  # CRED_TYPE_GENERIC
+    cred.TargetName = "gemini:antigravity"
+    cred.Comment = None
+    cred.CredentialBlob = raw_bytes
+    cred.CredentialBlobSize = len(raw_bytes)
+    cred.Persist = 2  # CRED_PERSIST_LOCAL_MACHINE
+    cred.AttributeCount = 0
+    cred.Attributes = None
+    cred.TargetAlias = None
+    cred.UserName = "antigravity"
+
+    ok = advapi32.CredWriteW(ctypes.byref(cred), 0)
+    if ok:
+        logger.info(f"🔑 [系统凭据直写成功] 已直接将账号 [{acc_data.get('email')}] 真实写入 Windows 凭据管理器 (gemini:antigravity)")
+        # 同步更新 current_account.json 与 accounts.json
+        try:
+            curr_acc_file = os.path.join(COCKPIT_DIR, "current_account.json")
+            with open(curr_acc_file, "w", encoding="utf-8") as cf:
+                json.dump({"email": acc_data.get("email"), "updated_at": int(time.time())}, cf, indent=2)
+        except Exception:
+            pass
+        return True
+    else:
+        err = ctypes.GetLastError()
+        logger.error(f"写入 Windows 系统凭据失败，错误码: {err}")
+        return False
+
+
+async def switch_account_via_websocket(server_info, target_account_id, timeout=25.0):
     if not websockets:
         raise ImportError("未安装 websockets 库")
     
@@ -1145,8 +1430,20 @@ async def switch_account_via_websocket(server_info, target_account_id, timeout=1
         
         start_t = time.time()
         while time.time() - start_t < timeout:
+            # 1. 优先瞬时核验 accounts.json (Cockpit 通常在 1.5~2.5 秒内完成落盘)
             try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                if os.path.exists(ACCOUNTS_FILE):
+                    with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
+                        curr = json.load(f).get("current_account_id")
+                        if curr == target_account_id:
+                            logger.info("校验 accounts.json 确认当前账号已更新成功！")
+                            return True
+            except Exception:
+                pass
+
+            # 2. 接收 WebSocket 广播消息
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=1.5)
                 data = json.loads(raw)
                 msg_type = data.get("type", "")
                 if msg_type in ("event.account_switched", "response.plugin_switch_account", "response.success"):
@@ -1157,14 +1454,18 @@ async def switch_account_via_websocket(server_info, target_account_id, timeout=1
                     logger.error(f"Cockpit 切号报错: {err}")
                     return False
             except asyncio.TimeoutError:
-                break
+                pass
     
-    time.sleep(1.0)
-    with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
-        curr = json.load(f).get("current_account_id")
-        if curr == target_account_id:
-            logger.info("校验 accounts.json 确认当前账号已更新成功。")
-            return True
+    # 超时后最终兜底核验
+    try:
+        if os.path.exists(ACCOUNTS_FILE):
+            with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
+                curr = json.load(f).get("current_account_id")
+                if curr == target_account_id:
+                    logger.info("最终校验 accounts.json 确认当前账号已更新成功。")
+                    return True
+    except Exception:
+        pass
     
     return False
 
@@ -1217,11 +1518,13 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     current_id, accounts = get_all_accounts_and_quotas()
     curr_acc = next((a for a in accounts if a["is_current"]), None)
     curr_email = curr_acc["email"] if curr_acc else "未知"
+    curr_5h = curr_acc["gemini_5h"] if curr_acc else 0.0
+    curr_weekly = curr_acc["gemini_weekly"] if curr_acc else 0.0
     curr_effective = curr_acc["effective_quota"] if curr_acc else 0.0
     sub_summary = get_subscription_summary()
     
     logger.info("=" * 65)
-    logger.info(f"当前反重力账号: {curr_email} (有效额度: {curr_effective}%)")
+    logger.info(f"当前反重力账号: {curr_email} (5h: {curr_5h:.1f}%, 周额度: {curr_weekly:.1f}%, 有效: {curr_effective:.1f}%)")
     logger.info(f"专线网络订阅状态: {sub_summary}")
     logger.info("账号池实时 Cockpit Tools 智能健康度看板:")
     for acc in accounts:
@@ -1229,9 +1532,11 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         print(f"  * {acc['email']:28} | 有效: {acc['effective_quota']:5.1f}% | 5h: {acc['gemini_5h']:5.1f}% | 周额: {acc['gemini_weekly']:5.1f}% (剩{acc['days_to_w_reset']:3.1f}天) | Cockpit分: {acc['cockpit_score']:5.1f}{marker}")
     logger.info("=" * 65)
     
-    if not force and not target and curr_effective > threshold:
-        logger.info(f"当前账号有效配额 ({curr_effective}%) 高于阈值 ({threshold}%)，无需切号。使用 --force 可强制切换。")
-        return
+    if not force and not target:
+        is_exhausted = (curr_5h <= threshold) or (curr_weekly <= 0.0)
+        if not is_exhausted:
+            logger.info(f"当前账号配额充沛 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)，高于门禁阈值，无需切号。使用 --force 可强制切换。")
+            return
     
     best_acc, reason = select_best_account(accounts, current_id, threshold=threshold, target_email_or_id=target)
     logger.info(f"🎯 【优选目标】: {best_acc['email']} (ID: {best_acc['id']})")
@@ -1241,9 +1546,14 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         logger.info("[DryRun 演练模式] 未执行实际退出与切号操作。")
         return
     
-    # 1. 记录切号待办事务与大任务断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
+    # 0. 优先探测抓取切号前当前处于活跃前台的会话窗口，用于精准续接
+    active_conv = get_current_active_conversation()
+    target_href = active_conv.get("href") if active_conv else None
+    target_title = active_conv.get("title") if active_conv else None
+
+    # 1. 记录切号待办事务与断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
     write_pending_switch(best_acc)
-    write_pending_auto_resume(max_windows=3, text="1")
+    write_pending_auto_resume(max_windows=3, text="1", target_href=target_href, target_title=target_title)
     try:
         os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
         with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
@@ -1251,37 +1561,87 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     except Exception as e:
         logger.debug(f"提前同步 watcher-current-account.txt 异常: {e}")
     
-    # 2. 发送气泡通知 (告知用户正在全自动接力无感切号)
-    send_windows_notification(
-        "Cockpit Tools 自动续航守护神",
-        f"当前账号额度已降至 {curr_effective:.1f}%，已优选下一个满血账号: {best_acc['email']}\n正在全自动写入凭据并无感平滑重启..."
+    # 2. 发送桌面技能弹窗与飞书双通道通知 (告知用户正在全自动接力无感换号，反重力保持开启中)
+    notif_title = "Antigravity 额度预警与智能切号"
+    active_info = f"\n📌 保护中活动任务: {target_title}" if target_title else ""
+    notif_msg = (
+        f"当前在用账号 [{curr_email}] 达到切号条件 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)\n"
+        f"🎯 优选满血接力: {best_acc['email']} (5h: {best_acc['gemini_5h']}%, 周: {best_acc['gemini_weekly']}%){active_info}\n"
+        f"📋 决策理由: {reason}\n"
+        f"⚡ 正在后台先行切号 (反重力正常运行中，切号成功后执行订阅更新与接力重启)..."
     )
+    send_dual_notification(notif_title, notif_msg, status="warning")
     
     old_pid = get_antigravity_main_pid()
 
-    # 3. 先及时优雅退出已耗尽额度的旧实例，释放 DevToolsActivePort 与 state.vscdb 数据库锁，消除锁冲突
-    gracefully_exit_antigravity(timeout_seconds=3.0)
-
-    # 3.5 在线通过 WebSocket 写入 Cockpit Tools 凭据 (释放锁后无损写入凭据并更新 accounts.json 与 state.vscdb)
+    # =========================================================================
+    # 【核心顺序 1】：先切号，切成功后再操作其他的必须
+    # （反重力保持运行！绝不提前杀窗口。若切号失败，反重力完好无损）
+    # =========================================================================
+    logger.info(f"⚡ [步骤 1/5] 先切号：向 Cockpit Tools 发送切号指令至目标账号 [{best_acc['email']}] (反重力保持运行中)...")
     server_info = load_cockpit_server_info()
     ok = asyncio.run(switch_account_via_websocket(server_info, best_acc["id"]))
     if not ok:
-        logger.error("向 Cockpit Tools 发送切号指令失败，取消本次切换！")
+        logger.warning("Cockpit Tools WebSocket 未返回确认，正在执行 Windows 原生系统凭据原子直写兜底...")
+
+    # 【核心注入】：直接原子写入 Windows Credential Manager (gemini:antigravity)
+    # Antigravity 2.0 (v2.12.2+) 完全依赖 Windows 系统凭据进行模型认证！
+    cred_ok = write_antigravity_windows_credential(best_acc["id"])
+    if not ok and not cred_ok:
+        logger.error("向 Cockpit Tools 发送切号指令且系统凭据直写均失败，取消本次切换！反重力未被终止，当前窗口保持完好。")
+        send_dual_notification(
+            "Antigravity 切号未完成",
+            f"尝试切换至账号 [{best_acc['email']}] 失败，本次切号已取消，当前反重力保持运行。",
+            status="error"
+        )
         clear_pending_switch()
         clear_pending_auto_resume()
         return
-    
-    logger.info(f"✅ Cockpit Tools 账号凭证与 accounts.json 已更新成功！新账号: {best_acc['email']}")
 
-    # 4. 派发脱壳启动器进行平滑重启与专线恢复 (通过可视化胶囊进度卡片给予明确视觉反馈)
+    logger.info(f"✅ [步骤 1/5 完成] 目标账号 [{best_acc['email']}] 已成功注入 Windows 系统凭据 (gemini:antigravity) 与 Cockpit！")
+
+    # =========================================================================
+    # 【核心顺序 2】：订阅更新 (专线网络/Clash 机场节点刷新)
+    # =========================================================================
+    logger.info("🌐 [步骤 2/5] 订阅更新：正在更新并刷新专线网络与 Clash 机场节点...")
+    try:
+        update_clash_subscriptions(timeout_seconds=15)
+    except Exception as e:
+        logger.warning(f"刷新订阅异常 (继续执行后续流程): {e}")
+
+    # =========================================================================
+    # 【核心顺序 3】：退出反重力 (此时新账号凭据与订阅已全部就绪，优雅退出释放句柄与锁)
+    # =========================================================================
+    logger.info(f"🚪 [步骤 3/5] 退出反重力：切号与订阅已就绪，正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
+    gracefully_exit_antigravity(timeout_seconds=3.5)
+
+    # =========================================================================
+    # 【核心顺序 4】：启动启动器 (派发桌面智能启动器拉起新实例，挂载 17897 专线代理)
+    # =========================================================================
+    logger.info("🚀 [步骤 4/5] 启动启动器：正在派发桌面智能启动器拉起全新实例并挂载专线代理...")
     launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
-    
-    # 5. 等待新实例真正就绪 (排除旧 PID)，并自动续接前排 1/2/3 窗口 (扣 1)
-    # 设置 180 秒超时，确保专线多节点健康探测与真实模型握手完整完成后再连接 CDP 续接
-    logger.info("切号指令已派发，正在等待新实例就绪并自动续接前排窗口 (扣 1)...")
-    execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=[old_pid] if old_pid else None)
+
+    # =========================================================================
+    # 【核心顺序 5】：启动后在前 3 对话窗口扣 1 (优先切号前活跃任务)
+    # =========================================================================
+    logger.info("🎯 [步骤 5/5] 自动续接：正在等待新实例就绪，并在前 3 个对话窗口扣 1 (优先切号前活跃任务)...")
+    execute_auto_resume(
+        max_windows=3,
+        text="1",
+        wait_timeout=180,
+        exclude_pids=[old_pid] if old_pid else None,
+        target_href=target_href
+    )
     clear_pending_switch()
     reset_language_server_log_pos()
+
+    # 6. 发送切号自愈完成双通道通知
+    succ_title = "Antigravity 切号自愈完成"
+    succ_msg = (
+        f"✅ 已成功切换至账号: {best_acc['email']}\n"
+        f"🚀 17897 专线网络已重新挂载，前 3 个对话窗口已自动扣 1 续接完成！"
+    )
+    send_dual_notification(succ_title, succ_msg, status="info")
 
 
 def print_status_table():
@@ -1297,10 +1657,10 @@ def print_status_table():
     for i, acc in enumerate(accounts, 1):
         if acc["is_current"]:
             status = "★ 当前在用"
-        elif acc["gemini_weekly"] <= 5.0:
-            status = "✕ 周额度耗尽"
         elif acc["gemini_5h"] <= 5.0:
             status = "✕ 5h额度耗尽"
+        elif acc["gemini_weekly"] <= 0.0:
+            status = "✕ 周额度见底"
         else:
             status = "✔ 健康待命"
         print(f"{i:<3} {acc['email']:<28} {acc['effective_quota']:>5.1f}%   {acc['gemini_5h']:>6.1f}%    {acc['gemini_weekly']:>5.1f}%     剩 {acc['days_to_w_reset']:>4.1f} 天    {acc['cockpit_score']:>6.1f}   {status}")
@@ -1481,6 +1841,20 @@ def check_language_server_quota_error():
                 # 4. 若报错指纹明确指向历史离线账号：安全降噪过滤并强化隔离
                 if matched_non_current:
                     old_acc, rt_key, rt_val = matched_non_current
+
+                    # 【核心纠偏】：核验 Windows Credential Manager 中当前实际生效的 Token！
+                    # 如果 Windows 凭据实际就是这个 old_acc，说明底层根本没切过去，确认为凭据脱节裸奔，必须立即自愈切号！
+                    win_tok = get_current_windows_credential_token()
+                    win_rt = (win_tok.get("refresh_token") or "").strip() if win_tok else ""
+                    old_dec = decrypt_cockpit_account(old_acc["id"])
+                    old_rt = (old_dec.get("token", {}).get("refresh_token") or "").strip() if old_dec else ""
+
+                    if win_rt and old_rt and win_rt == old_rt:
+                        logger.warning(f"🚨 [凭据脱节确诊] 捕获到 429 报错指向 {old_acc['email']}，且核验发现 Windows 系统凭据实际仍为该账号！")
+                        logger.warning("   确认为底层未能完成真实切号，立即强制触发自愈切号与系统凭据注入！")
+                        record_quarantine_account(old_acc["id"], duration)
+                        return True
+
                     logger.info(f"💡 [日志穿透降噪] 捕获到 429 报错重置时刻 ({target_reset_utc.strftime('%H:%M:%S UTC')}) 指向历史账号 {old_acc['email']} ({rt_key}: {rt_val.strftime('%H:%M:%S UTC')})")
                     logger.info(f"   当前在用账号 ({curr_email}) 状态健康 (5h: {curr_5h}%)，判定为历史会话残留重试，已安全过滤忽略。")
                     # 顺便关押该历史账号，确保关押期内绝不误切回该账号
@@ -1494,6 +1868,12 @@ def check_language_server_quota_error():
 
                 if current_id:
                     record_quarantine_account(current_id, duration)
+
+                send_dual_notification(
+                    "Antigravity 模型 429 限流报警",
+                    f"当前账号 [{curr_email}] 遭遇 Gemini 模型 429 限流报错，系统正在自动换号接力...",
+                    status="warning"
+                )
 
                 record_incident(
                     incident_type="MODEL_QUOTA_EXHAUSTED",
@@ -1624,19 +2004,24 @@ def run_watch_daemon(threshold=5.0, interval=30):
                 if curr_acc:
                     curr_effective = curr_acc["effective_quota"]
                     curr_email = curr_acc["email"]
+                    curr_5h = curr_acc["gemini_5h"]
+                    curr_weekly = curr_acc["gemini_weekly"]
                     
                     if loop_count % 10 == 0:
                         logger.info(
                             f"[巡检心跳] Antigravity 运行中 | 当前在用: {curr_email} | "
-                            f"有效额度: {curr_effective:.1f}% (5h: {curr_acc['gemini_5h']:.1f}%, 周: {curr_acc['gemini_weekly']:.1f}%)"
+                            f"有效额度: {curr_effective:.1f}% (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)"
                         )
                     
-                    if curr_effective <= threshold:
+                    # 门禁触发条件：5小时额度耗尽 (<= threshold) 或 周额度彻底见底 (<= 0.0%)
+                    is_exhausted = (curr_5h <= threshold) or (curr_weekly <= 0.0)
+                    if is_exhausted:
+                        reason_str = f"5小时配额耗尽 ({curr_5h:.1f}% <= {threshold}%)" if curr_5h <= threshold else f"周配额彻底见底 ({curr_weekly:.1f}% <= 0.0%)"
                         logger.warning("!" * 65)
                         logger.warning(
-                            f"⚠️ 【阈值触发】当前账号 {curr_email} 有效额度打至阈值 ({curr_effective:.1f}% <= {threshold}%)！"
+                            f"⚠️ 【门禁触发】当前账号 {curr_email} {reason_str}！"
                         )
-                        logger.warning("🚀 正在启动 Cockpit Tools 全自动无感自愈续航闭环：优雅关窗 -> 在线写凭据 -> 脱壳启动器 -> 扣1续接")
+                        logger.warning("🚀 正在启动 Cockpit Tools 全自动无感自愈续航闭环：先切号 -> 订阅更新 -> 退出反重力 -> 启动启动器 -> 前3窗口扣1")
                         logger.warning("!" * 65)
                         
                         run_smart_switch(threshold=threshold, force=True)

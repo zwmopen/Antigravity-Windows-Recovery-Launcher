@@ -1,5 +1,40 @@
 # 变更记录
 
+## 1.4.9 - 2026-09-08 (Windows 系统凭据物理直写破局、5h 配额主导门禁、飞书双通道通知与严格接力流水线里程碑)
+
+- **Windows 系统凭据 (`gemini:antigravity`) 原生物理直写彻底根治“假切号” (Direct Windows Credential Injection)**：
+  - **核心技术破案**：深度对比 Cockpit Tools 手动切号与 WebSocket 自动切号的实机底层行为，破获为什么此前自动切号明明显示“切号成功”并重启，但 Antigravity 仍然无法对话（429 报错，用户被迫手动切号）的真相：
+    1. Cockpit 界面手动切号时，底层触发 `[Antigravity 2.0] 写入系统凭据: xxx`，调用 Win32 原生 API 写入 Windows 凭据管理器 (`gemini:antigravity`)；
+    2. Cockpit 的 WebSocket 接口 (`request.switch_account`) 在切号启动 IDE 关闭时，走 `[Switch][NoRestart] 本地切号完成` 分支，仅更新了 SQLite `state.vscdb`，**漏掉了 Windows 系统凭据写入**；
+    3. Antigravity 2.0 架构下，语言服务器 (Language Server) 的模型认证完全以 Windows Credential Manager (`gemini:antigravity`) 中的 OAuth Token 为准；漏写导致重启后的 Language Server 依然读取旧账号已耗尽的 Token，造成实质上的“假切号”；
+  - **AES-256-GCM 本地解密与 Win32 CredWriteW 物理接管**：
+    - 读取 `secure-account-storage.key`，对 Cockpit 账号池中任意账号直接无损解密得到完整 `access_token` 和 `refresh_token`；
+    - 通过 Win32 原生 `advapi32.dll CredWriteW` 直接原子写入通用凭据 `gemini:antigravity`，彻底终结对 Cockpit 外部接口漏洞的依赖；
+  - **429 凭据脱节自愈与指纹穿透修正**：
+    - 在 429 报错穿透检测中，增加与 Windows Credential Manager 实际生效 Token 的一致性核验；
+    - 若发现报错账号的 Refresh Token 与系统凭据一致（证实底层未能完成真实切号，出现凭据脱节），立即强制解除降噪，瞬发触发自愈切号与物理凭据注入。
+- **严格遵循用户指定的切号流水线顺序 (Strict Switch-First Pipeline Order)**：
+  - 将整套接力流程重塑为不可颠倒的标准流水线：
+    1. **【先切号】**：物理直写 Windows 系统凭据 + Cockpit 状态同步；
+    2. **【订阅更新】**：静默触发 Clash 节点订阅更新，确保代理节点健康可用；
+    3. **【退出反重力】**：优雅退出旧实例，安全释放进程句柄与互斥锁；
+    4. **【启动启动器】**：调用桌面智能启动器拉起新实例并挂载 17897 专线代理；
+    5. **【启动后在前 3 对话窗口扣 1】**：优先唤醒切号前活跃会话，前排 3 个窗口自动敲 1 续接。
+- **彻底根治周配额误判抢跑切号 (5h Primary Gate & Anti-Premature Switch)**：
+  - **故障定位与彻底根治**：深度排查 11:04:54 现场日志，破获账号 `orlandocardozo706` 5小时滚动配额尚存 **26.0%** 时会话被突然掐死重启的真相：
+    - 此前系统计算有效配额使用 `effective = min(gemini_5h, gemini_weekly)`；
+    - 当周配额降至 4.7% 时，系统误以为整号额度耗尽触发了强行切号；
+    - 确立反重力核心铁律：Antigravity 模型交互由 **5小时滚动配额 (`gemini-5h`)** 绝对主导；周额度仅在彻底归零 (`<= 0.0%`) 时才熔断切号；
+    - 重构有效额度算法与守护神门禁：只要 `gemini_5h > 5.0%` 且 `gemini_weekly > 0.0%`，坚决严禁提前切号，彻底保障长任务稳定推进。
+- **飞书群 + 桌面技能双通道告警通知 (Feishu Group + Desktop Skill Dual Notification)**：
+  - **集成桌面悬浮技能**：优先联动 `D:\AICode\AI\skills\技能包\技能\shared-notification\scripts\shared_notify.py`，触发原生优雅的桌面半透明悬浮弹窗（失败自动平滑降级系统气泡）；
+  - **集成飞书开放平台通知**：读取本地凭证 `D:\AICode\AI\secrets\平台服务\飞书\feishu_config.json`，自动换取 tenant token，同时向飞书 `通用通知群` (`oc_580fb30d4df9b135c0b63ac68a179c2f`) 与 `飞书牛马 CLI 私聊` 实时推送卡片通知；
+  - **全链路播报场景**：额度达到门禁、429 报错触发自愈、账号接力重启完成、断点续接成功等关键节点全自动化通知。
+- **切号前活跃会话精准锚定与断点智能续接 (Active Session Preservation & Draft Self-Healing)**：
+  - **故障定位与彻底根治**：定位 11:05 切号后前排窗口 1 与 2 因 `draft_exists` 被跳过，而在无关窗口 3 错发 '1' 的问题；
+  - **活跃会话优先锚定**：退出旧实例前通过 CDP 毫秒级探测并持久化记录当前聚焦的活跃会话（`active_href` 与 `title`）；重启后排在第一优先级精准唤醒；
+  - **草稿自愈提交**：消除死板跳过逻辑，当输入框已有残留文本或待发提示词且发送按钮有效时，直接触发提交并校验生成状态，确保用户当前任务 100% 连贯推进。
+
 ## 1.4.8 - 2026-09-07 (429 报错重置时刻指纹归属识别与守护神降噪热更里程碑)
 
 - **429 报错重置时刻指纹精准归属识别 (429 Fingerprint Attribution & Noise Filtering)**：
