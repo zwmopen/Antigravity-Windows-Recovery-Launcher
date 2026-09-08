@@ -1084,8 +1084,18 @@ def is_antigravity_running():
         return False
 
 
-def send_feishu_notification(title, message, chat_names=None):
-    """通过飞书 OpenAPI 向指定群组和私聊推送通知（尽最大努力交付）"""
+_LAST_FEISHU_NOTIFY_TIME = {}
+
+
+def send_feishu_notification(title, message, chat_names=None, debounce_seconds=90):
+    """通过飞书 OpenAPI 向指定群组和私聊推送通知（含 90s 防抖保护）"""
+    global _LAST_FEISHU_NOTIFY_TIME
+    now = time.time()
+    last_sent = _LAST_FEISHU_NOTIFY_TIME.get(title, 0)
+    if now - last_sent < debounce_seconds:
+        logger.info(f"💡 [飞书通知防抖保护] 距离上一条通知仅过去 {now - last_sent:.1f} 秒 (< {debounce_seconds}s)，已安全抑制避免刷屏。")
+        return False
+
     if not os.path.exists(FEISHU_CONFIG_FILE):
         return False
     try:
@@ -1145,6 +1155,7 @@ def send_feishu_notification(title, message, chat_names=None):
                 logger.debug(f"向飞书目标 {cid} 发送消息异常: {e}")
         
         if success_count > 0:
+            _LAST_FEISHU_NOTIFY_TIME[title] = now
             logger.info(f"✅ 飞书通知推送成功 ({success_count}/{len(targets)} 目标)")
             return True
     except Exception as e:
@@ -2009,6 +2020,31 @@ def run_watch_daemon(threshold=5.0, interval=30):
                             f"[巡检心跳] Antigravity 运行中 | 当前在用: {curr_email} | "
                             f"有效额度: {curr_effective:.1f}% (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)"
                         )
+                        # 【主动自检 1：系统凭据与账号池一致性主动对账】
+                        # 每 5 分钟主动核验 Windows Credential Manager 中生效的 Token 是否与当前在用账号完全一致
+                        # 若发生脱节（比如外部切号异常），无需等 429 报错，守护神主动发现并毫秒级自愈直写！
+                        try:
+                            win_tok = get_current_windows_credential_token()
+                            win_rt = (win_tok.get("refresh_token") or "").strip() if win_tok else ""
+                            curr_dec = decrypt_cockpit_account(curr_acc["id"])
+                            curr_rt = (curr_dec.get("token", {}).get("refresh_token") or "").strip() if curr_dec else ""
+                            if win_rt and curr_rt and win_rt != curr_rt:
+                                logger.warning(f"🔍 [主动对账发现脱节] 检测到 Windows 系统凭据与 Cockpit 当前账号 ({curr_email}) 不一致！")
+                                logger.info(f"   无需等待 429 报错，正在主动无感自愈注入 Windows 系统凭据...")
+                                if write_antigravity_windows_credential(curr_acc["id"]):
+                                    logger.info(f"   ✅ [主动自愈成功] Windows 系统凭据已自动对齐注入为 {curr_email}")
+                        except Exception as cred_err:
+                            logger.debug(f"主动凭据一致性自检跳过: {cred_err}")
+
+                        # 【主动自检 2：账号池健康存量预警】
+                        healthy_accounts = [
+                            a for a in accounts
+                            if a["gemini_5h"] > threshold and a["gemini_weekly"] > 0.0 and a["id"] != current_id
+                        ]
+                        if len(healthy_accounts) == 0:
+                            logger.warning("⚠️ [主动健康预警] 账号池中除当前在用账号外，已无其他 5h 配额充足的备用账号！")
+                        elif len(healthy_accounts) == 1:
+                            logger.info(f"💡 [账号池余量感知] 备用健康账号仅存 1 个 ({healthy_accounts[0]['email']})，请注意关注。")
                     
                     # 门禁触发条件：5小时额度耗尽 (<= threshold) 或 周额度彻底见底 (<= 0.0%)
                     is_exhausted = (curr_5h <= threshold) or (curr_weekly <= 0.0)

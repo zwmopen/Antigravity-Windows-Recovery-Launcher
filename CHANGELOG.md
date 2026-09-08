@@ -1,6 +1,14 @@
 # 变更记录
 
-## 1.4.10 - 2026-09-08 (通知降噪与分级告警规范：剩余 5% 仅弹桌面、切换重启成功发桌面与飞书)
+## 1.4.11 - 2026-09-08 (主动对账自愈、账号池存量预测预警与飞书通知防抖保护)
+
+- **主动凭据一致性对账与隐患自愈 (Proactive Credential Consistency Audit)**：
+  - 看门狗在心跳巡检中主动比对 Windows Credential Manager (`gemini:antigravity`) 生效凭据与 Cockpit 当前账号；
+  - 一旦发现脱节隐患，在 0 报错、0 用户感知前主动毫秒级自愈注入，绝不等用户报错或 429 发生才被动处理；
+- **账号池存量预测与枯竭预警 (Account Pool Exhaustion Early Warning)**：
+  - 心跳实时推算健康备用账号存量，当备用账号 <= 1 时主动提示水位，预防全员耗尽导致切号无号可用；
+- **飞书通知底层防抖熔断器 (Notification Debounce Circuit Breaker)**：
+  - 飞书消息发送函数引入 90 秒同名通知防抖机制，物理阻断重复刷屏风险。
 
 - **严格规范通知分级策略，彻底杜绝手机群刷屏打扰 (Tiered Notification Precision)**：
   - **剩余 5% 触发切号预警**：按用户严格指令，**仅发送桌面悬浮弹窗**（`send_windows_notification`），坚决不发飞书，不打扰手机端；
