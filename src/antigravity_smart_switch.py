@@ -74,6 +74,7 @@ INCIDENT_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy
 INCIDENT_HISTORY_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "incident-history.json")
 AUTO_RESUME_LOCK_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "auto-resume.lock")
 QUARANTINE_ACCOUNTS_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "quarantined-accounts.json")
+QUOTA_POOL_STATE_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "quota-pool-state.json")
 SHARED_NOTIFY_SCRIPT = r"D:\AICode\AI\skills\技能包\技能\shared-notification\scripts\shared_notify.py"
 FEISHU_CONFIG_FILE = r"D:\AICode\AI\secrets\平台服务\飞书\feishu_config.json"
 
@@ -1232,6 +1233,94 @@ def send_dual_notification(title, message, status="warning"):
     send_feishu_notification(title, message)
 
 
+def _load_quota_pool_state():
+    try:
+        if os.path.exists(QUOTA_POOL_STATE_FILE):
+            with open(QUOTA_POOL_STATE_FILE, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+    except Exception as e:
+        logger.debug(f"读取账号池额度状态异常: {e}")
+    return {}
+
+
+def _save_quota_pool_state(state):
+    try:
+        os.makedirs(os.path.dirname(QUOTA_POOL_STATE_FILE), exist_ok=True)
+        temp_path = QUOTA_POOL_STATE_FILE + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(temp_path, QUOTA_POOL_STATE_FILE)
+    except Exception as e:
+        logger.debug(f"保存账号池额度状态异常: {e}")
+
+
+def guard_quota_pool_exhaustion(accounts):
+    """全池周额度归零时停止自动切号，并仅在状态变化时通知一次。"""
+    enabled_accounts = [a for a in accounts if not a.get("disabled", False)]
+    if not enabled_accounts:
+        return False
+
+    all_weekly_exhausted = all(float(a.get("gemini_weekly", 0.0)) <= 0.0 for a in enabled_accounts)
+    previous = _load_quota_pool_state()
+
+    if not all_weekly_exhausted:
+        if previous.get("status") == "weekly_exhausted":
+            logger.info("✅ [账号池额度恢复] 检测到至少一个账号周额度已恢复，解除停止切号状态。")
+            _save_quota_pool_state({
+                "status": "available",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "enabled_account_count": len(enabled_accounts),
+            })
+        return False
+
+    reset_times = [
+        a.get("reset_time_weekly") for a in enabled_accounts
+        if isinstance(a.get("reset_time_weekly"), datetime) and a.get("reset_time_weekly") > datetime.now(timezone.utc)
+    ]
+    next_reset = min(reset_times).astimezone().strftime("%m-%d %H:%M") if reset_times else "等待 Cockpit 更新周额度"
+    is_new_exhaustion = previous.get("status") != "weekly_exhausted"
+    should_notify = is_new_exhaustion or not previous.get("notified", False)
+
+    if is_new_exhaustion:
+        logger.warning(
+            f"🛑 [账号池周额度耗尽] {len(enabled_accounts)} 个启用账号的周额度均为 0，"
+            "已停止自动切号、凭据写入、订阅刷新、窗口退出和启动器重启。"
+        )
+        record_incident(
+            incident_type="ACCOUNT_POOL_WEEKLY_QUOTA_EXHAUSTED",
+            severity="WARNING",
+            summary="所有启用账号的周额度均已耗尽",
+            root_cause=f"账号池中 {len(enabled_accounts)} 个启用账号的 Gemini 周额度均为 0。",
+            evidence={"enabled_account_count": len(enabled_accounts), "next_weekly_reset": next_reset},
+            action_taken="已停止自动切号和重启，保持当前客户端与网络状态不变",
+            recommended_action=f"无需继续切号；等待周额度恢复。最近预计恢复时间：{next_reset}。",
+        )
+    else:
+        logger.debug("账号池周额度仍全部为 0，继续静默等待，不重复切号或弹窗。")
+
+    notified = bool(previous.get("notified", False))
+    if should_notify:
+        notified = send_windows_notification(
+            "Antigravity 账号池额度已耗尽",
+            f"全部 {len(enabled_accounts)} 个可用账号的周额度都已为 0。\n"
+            "系统已停止自动切号和重启，不会再切到同样无额度的账号。\n"
+            f"下一步：{next_reset}。",
+            status="warning",
+            duration_ms=12000,
+        )
+
+    _save_quota_pool_state({
+        "status": "weekly_exhausted",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "enabled_account_count": len(enabled_accounts),
+        "next_weekly_reset": next_reset,
+        "notified": bool(notified),
+    })
+    return True
+
+
 def gracefully_exit_antigravity(timeout_seconds=5.0):
     logger.info("正在检测运行中的 Antigravity 实例...")
     if not psutil:
@@ -1662,6 +1751,11 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     sub_summary = get_subscription_summary()
     
     logger.info("=" * 65)
+
+    # 自动切换的最高优先级门禁：若所有启用账号周额度均归零，继续切号没有任何收益。
+    # 必须在选号、写凭据、刷新订阅、关窗口和启动器重启之前短路。
+    if not target and guard_quota_pool_exhaustion(accounts):
+        return "quota_pool_exhausted"
     logger.info(f"当前反重力账号: {curr_email} (5h: {curr_5h:.1f}%, 周额度: {curr_weekly:.1f}%, 有效: {curr_effective:.1f}%)")
     logger.info(f"专线网络订阅状态: {sub_summary}")
     logger.info("账号池实时 Cockpit Tools 智能健康度看板:")
@@ -1674,7 +1768,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         is_exhausted = (curr_5h <= threshold) or (curr_weekly <= 0.0)
         if not is_exhausted:
             logger.info(f"当前账号配额充沛 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)，高于门禁阈值，无需切号。使用 --force 可强制切换。")
-            return
+            return "not_needed"
     
     best_acc, reason = select_best_account(accounts, current_id, threshold=threshold, target_email_or_id=target)
     logger.info(f"🎯 【优选目标】: {best_acc['email']} (ID: {best_acc['id']})")
@@ -1682,7 +1776,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     if dry_run:
         logger.info("[DryRun 演练模式] 未执行实际退出与切号操作。")
-        return
+        return "dry_run"
     
     # 0. 优先探测抓取切号前当前处于活跃前台的会话窗口，用于精准续接
     active_conv = get_current_active_conversation()
@@ -1734,7 +1828,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         )
         clear_pending_switch()
         clear_pending_auto_resume()
-        return
+        return "switch_failed"
 
     # 【四合一状态同步与 UI 刷新对账】：确保 Cockpit 前端界面、实例配置与底层文件 100% 物理一致
     cockpit_sync_res = sync_all_cockpit_account_files(best_acc["id"], best_acc["email"])
@@ -1786,6 +1880,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         f"🚀 17897 专线网络已重新挂载，前 3 个对话窗口已自动扣 1 续接完成！"
     )
     send_dual_notification(succ_title, succ_msg, status="info")
+    return "switched"
 
 
 def print_status_table():
@@ -2013,21 +2108,14 @@ def check_language_server_quota_error():
                 if current_id:
                     record_quarantine_account(current_id, duration)
 
-                # 捕获到 429 报错触发切号预警：按规则【只发桌面通知，不发飞书】
-                send_windows_notification(
-                    "Antigravity 模型 429 限流预警",
-                    f"当前账号 [{curr_email}] 遭遇 Gemini 模型 429 限流报错，系统正在自动换号接力...",
-                    status="warning"
-                )
-
                 record_incident(
                     incident_type="MODEL_QUOTA_EXHAUSTED",
                     severity="WARNING",
                     summary=f"检测到当前账号模型配额耗尽: '{pat}'",
                     root_cause=f"Language Server 捕获到 Gemini API 返回 429/RESOURCE_EXHAUSTED 错误: {matched_snippet[:240]}",
                     evidence={"pattern": pat, "snippet": matched_snippet[:300], "target_reset_utc": target_reset_utc.isoformat()},
-                    action_taken="已触发全自动选号切号、退出旧窗口并拉起自愈启动器",
-                    recommended_action="系统正在进行无感智能切号与断点续接，无需手动干预。"
+                    action_taken="已触发账号池额度门禁；仅在存在可用账号时执行切换",
+                    recommended_action="系统会先核对全池周额度；若全部为 0，将停止切号并弹出明确通知。"
                 )
                 return True
     except Exception as e:
@@ -2097,9 +2185,12 @@ def run_watch_daemon(threshold=5.0, interval=30):
                 logger.warning("!" * 65)
                 logger.warning("🚀 【实时日志报错触发】捕获到模型 429/配额耗尽异常！立刻启动全自动无感自愈续航闭环！")
                 logger.warning("!" * 65)
-                run_smart_switch(threshold=threshold, force=True)
-                logger.info("自愈切换指令已下发，休眠 35 秒等待新实例完全就绪...")
-                time.sleep(35)
+                switch_result = run_smart_switch(threshold=threshold, force=True)
+                if switch_result == "switched":
+                    logger.info("自愈切换指令已下发，休眠 35 秒等待新实例完全就绪...")
+                    time.sleep(35)
+                elif switch_result == "quota_pool_exhausted":
+                    logger.warning("账号池周额度全部耗尽，本轮已停止，不执行切号、关窗口或重启。")
                 loop_count = 0
                 continue
 
@@ -2194,10 +2285,12 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         logger.warning("🚀 正在启动 Cockpit Tools 全自动无感自愈续航闭环：先切号 -> 订阅更新 -> 退出反重力 -> 启动启动器 -> 前3窗口扣1")
                         logger.warning("!" * 65)
                         
-                        run_smart_switch(threshold=threshold, force=True)
-                        
-                        logger.info("自愈切换指令已下发，休眠 35 秒等待新实例完全就绪...")
-                        time.sleep(35)
+                        switch_result = run_smart_switch(threshold=threshold, force=True)
+                        if switch_result == "switched":
+                            logger.info("自愈切换指令已下发，休眠 35 秒等待新实例完全就绪...")
+                            time.sleep(35)
+                        elif switch_result == "quota_pool_exhausted":
+                            logger.warning("账号池周额度全部耗尽，本轮已停止，不执行切号、关窗口或重启。")
                         loop_count = 0
                         continue
 

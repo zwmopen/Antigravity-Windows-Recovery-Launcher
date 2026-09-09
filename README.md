@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-1.3.0-blue.svg" alt="版本 1.3.0" />
+  <img src="https://img.shields.io/badge/版本-1.4.16-blue.svg" alt="版本 1.4.16" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线调度-内存级无感热漂移-orange.svg" alt="专线调度" />
   <img src="https://img.shields.io/badge/界面汉化-首帧微任务零闪直译-blueviolet.svg" alt="界面汉化" />
@@ -69,7 +69,7 @@
 ## 🚀 极简上手与分发指南
 
 ### 选项 A：绿色免安装版（推荐，解压即用）
-1. 从 [最新发布页 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest) 下载 [`Antigravity-Windows-Recovery-Launcher-1.0.0-windows-x64.zip`](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.0.0/Antigravity-Windows-Recovery-Launcher-1.0.0-windows-x64.zip)；
+1. 从 [最新发布页 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest) 下载 [`Antigravity-Windows-Recovery-Launcher-1.4.16-windows-x64.zip`](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.4.16/Antigravity-Windows-Recovery-Launcher-1.4.16-windows-x64.zip)；
 2. 解压到目标电脑的任意目录（如 `D:\Tools\Antigravity`）；
 3. 双击 `Antigravity-Recovery-Launcher.exe`（或 `Install.cmd`）：
    - 首次启动会自动在桌面创建 **`Antigravity 启动器.lnk`** 快捷方式；
@@ -77,7 +77,7 @@
 4. **之后每天只需双击桌面的 `Antigravity 启动器` 图标即可！**
 
 ### 选项 B：标准 Windows 安装向导版（适合小白用户）
-1. 从 [最新发布页 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest) 下载 [`Antigravity-Windows-Recovery-Setup-1.0.0-windows-x64.exe`](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.0.0/Antigravity-Windows-Recovery-Setup-1.0.0-windows-x64.exe)；
+1. 从 [最新发布页 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest) 下载 [`Antigravity-Windows-Recovery-Setup-1.4.16-windows-x64.exe`](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.4.16/Antigravity-Windows-Recovery-Setup-1.4.16-windows-x64.exe)；
 2. 双击后按照极简中文向导一路点击“下一步”，自动安装到 `%LOCALAPPDATA%\Antigravity\launcher` 并创建桌面快捷方式。
 
 > 💡 **跨电脑迁移提示**：
@@ -142,7 +142,7 @@
 * 🏛️ [系统架构与协同设计](docs/ARCHITECTURE.md)
 * 💡 [设计哲学与工程边界](docs/DESIGN.md)
 * 🛠️ [踩坑与故障排查手册](docs/TROUBLESHOOTING.md)
-* 📋 [1.0.0 正式版发布说明](docs/RELEASE-NOTES-1.0.0.md)
+* 📋 [1.4.16 正式版发布说明](docs/RELEASE-NOTES-1.4.16.md)
 * 📝 [完整版本演进记录](CHANGELOG.md)
 
 ---

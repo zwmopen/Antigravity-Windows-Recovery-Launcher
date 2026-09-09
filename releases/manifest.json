@@ -1,17 +1,17 @@
 {
   "project": "antigravity-recovery-launcher",
-  "version": "1.4.15",
-  "source_commit": "v1.4.15",
-  "tag": "v1.4.15",
-  "built_at": "2026-09-09T12:52:00+08:00",
+  "version": "1.4.16",
+  "source_commit": "v1.4.16",
+  "tag": "v1.4.16",
+  "built_at": "2026-09-09T16:13:00+08:00",
   "ci_run": null,
   "artifacts": [
     {
-      "file": "Antigravity-Windows-Recovery-Launcher-1.4.15-windows-x64.zip",
+      "file": "Antigravity-Windows-Recovery-Launcher-1.4.16-windows-x64.zip",
       "platform": "windows-x64",
-      "size": 183908,
-      "sha256": "9317378BA6875EB3ED6141E5A3855A0A82E22E87F3C67F3B88BE84CBD179C25D",
-      "url": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.4.15/Antigravity-Windows-Recovery-Launcher-1.4.15-windows-x64.zip",
+      "size": 186644,
+      "sha256": "445DFCA1CC26F895E3150D32019D309DE5A7BE3FFA132FFC861B6E6871235301",
+      "url": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.4.16/Antigravity-Windows-Recovery-Launcher-1.4.16-windows-x64.zip",
       "installer": false,
       "contains_official_agy_binary": false,
       "contains_user_configuration": false
