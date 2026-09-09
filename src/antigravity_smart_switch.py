@@ -973,9 +973,10 @@ def get_all_accounts_and_quotas():
         q_5h_val = q_5h if q_5h is not None else 0.0
         q_w_val = q_weekly if q_weekly is not None else 0.0
         
-        # 有效额度：以 5 小时滚动额度为主导门禁！周额度仅在彻底见底 (<= 0.0%) 时才熔断切号
-        # 铁律：只要 5 小时额度充沛 (>5%) 且周额度未归零，严禁提前抢跑误杀会话！
-        effective = 0.0 if q_w_val <= 0.0 else q_5h_val
+        # 有效额度：以 5 小时滚动额度与周额度作为并行门禁！
+        # 铁律：只要周额度 <= 1.0% (见底) 或 5小时额度 <= 5.0%，该账号有效额度即为 0.0%
+        # 只有在 5小时 > 5% 且 周额度 > 1.0% 时，才具备实际可用生产力
+        effective = 0.0 if (q_w_val <= 1.0 or q_5h_val <= 5.0) else q_5h_val
         
         # 周恢复重置时间计算（剩余天数与秒数）
         if rt_weekly:
@@ -1040,48 +1041,36 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
                 return acc, "用户指定目标账号"
         raise ValueError(f"未找到指定的账号: {target_email_or_id}")
     
-    # 门禁过滤（注意事项3）：
+    # 门禁过滤（并行条件）：
     # 1. 排除当前在用与已禁用账号；
     # 2. 排除处于 429 临时关押冷却期的账号；
-    # 3. 周额度 <= 5% 必须一票否决淘汰（周额度耗尽则无法工作）；
-    # 4. 5小时额度 <= 5% 必须一票否决淘汰。
+    # 3. 周额度 <= 1.0% 必须一票否决淘汰（周额度耗尽在 Google 端会直接 429）；
+    # 4. 5小时额度 <= threshold (5%) 必须一票否决淘汰；
+    # 铁律：候选账号必须同时满足 [周额度 > 1.0%] 且 [5小时额度 > threshold]！
     quarantined = load_quarantined_accounts()
     candidates = [
         acc for acc in accounts
-        if not acc["disabled"]
-        and not acc["is_current"]
-        and acc["id"] not in quarantined
-        and acc["gemini_weekly"] > threshold
-        and acc["gemini_5h"] > threshold
+        if not acc.get("disabled", False)
+        and not acc.get("is_current", False)
+        and acc.get("id") != current_id
+        and acc.get("id") not in quarantined
+        and float(acc.get("gemini_weekly", 0.0)) > 1.0
+        and float(acc.get("gemini_5h", 0.0)) > threshold
     ]
     
     if candidates:
         # 按 Cockpit Tools 综合评分降序排列
-        candidates.sort(key=lambda x: x["cockpit_score"], reverse=True)
+        candidates.sort(key=lambda x: x.get("cockpit_score", 0.0), reverse=True)
         best = candidates[0]
         reason = (
-            f"Cockpit Tools 智能优选 [得分: {best['cockpit_score']}]：5小时满血({best['gemini_5h']}%)，"
-            f"周恢复时间仅剩 {best['days_to_w_reset']}天 (优先消化即将到期额度)，周额度剩余 {best['gemini_weekly']}%"
+            f"Cockpit Tools 智能优选 [得分: {best.get('cockpit_score', 0.0)}]：5小时满血({best.get('gemini_5h', 0.0)}%)，"
+            f"周恢复时间仅剩 {best.get('days_to_w_reset', 7.0)}天 (优先消化即将到期额度)，周额度剩余 {best.get('gemini_weekly', 0.0)}%"
         )
         return best, reason
     
-    # 兜底选择非零可用账号 (优先非关押)
-    fallback = [
-        acc for acc in accounts
-        if not acc["disabled"] and not acc["is_current"] and acc["id"] not in quarantined and acc["effective_quota"] > 0
-    ]
-    if not fallback:
-        # 若所有非关押账号均耗尽，才允许从关押账号中最后兜底
-        fallback = [
-            acc for acc in accounts
-            if not acc["disabled"] and not acc["is_current"] and acc["effective_quota"] > 0
-        ]
-    if fallback:
-        fallback.sort(key=lambda x: x["cockpit_score"], reverse=True)
-        best = fallback[0]
-        return best, f"兜底选择非零剩余额度账号 ({best['effective_quota']}%)"
-    
-    raise RuntimeError("当前所有备选账号的 5小时或周额度均已耗尽，无法自动切换！")
+    # 彻底废除旧代码的盲目 fallback 兜底！
+    # 严格遵从用户铁律：若没有真正可用账号，坚决不切号、不重启、不杀窗口！
+    raise RuntimeError("当前所有备选账号的 5小时或周额度均已耗尽 (周额度 <= 1% 或 5h <= 5%)，无法自动切换！")
 
 
 def is_antigravity_running():
@@ -1256,18 +1245,49 @@ def _save_quota_pool_state(state):
         logger.debug(f"保存账号池额度状态异常: {e}")
 
 
-def guard_quota_pool_exhaustion(accounts):
-    """全池周额度归零时停止自动切号，并仅在状态变化时通知一次。"""
+def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, force_exhausted=False):
+    """全池无可用备选账号 (周额度 <= 1.0% 或 5h <= 5.0%) 时停止自动切号，并仅在状态变化时通知一次。"""
     enabled_accounts = [a for a in accounts if not a.get("disabled", False)]
     if not enabled_accounts:
         return False
 
-    all_weekly_exhausted = all(float(a.get("gemini_weekly", 0.0)) <= 0.0 for a in enabled_accounts)
+    if not current_id:
+        curr = next((a for a in enabled_accounts if a.get("is_current")), None)
+        if curr:
+            current_id = curr.get("id")
+
+    # 1. 全池所有启用账号周额度均见底 (<= 1.0%)
+    all_weekly_exhausted = all(float(a.get("gemini_weekly", 0.0)) <= 1.0 for a in enabled_accounts)
+
+    # 2. 检查除当前账号外是否存在合资格候选账号 (周额度 > 1.0% 且 5h > threshold)
+    quarantined = load_quarantined_accounts()
+    candidates = [
+        a for a in enabled_accounts
+        if a.get("id") != current_id
+        and not a.get("is_current", False)
+        and a.get("id") not in quarantined
+        and float(a.get("gemini_weekly", 0.0)) > 1.0
+        and float(a.get("gemini_5h", 0.0)) > threshold
+    ]
+
+    curr_acc = next((a for a in enabled_accounts if a.get("id") == current_id or a.get("is_current")), None)
+    curr_is_exhausted = (
+        curr_acc is None
+        or float(curr_acc.get("gemini_weekly", 0.0)) <= 1.0
+        or float(curr_acc.get("gemini_5h", 0.0)) <= threshold
+    )
+
+    is_pool_exhausted = (
+        force_exhausted
+        or all_weekly_exhausted
+        or (curr_is_exhausted and len(candidates) == 0)
+    )
+
     previous = _load_quota_pool_state()
 
-    if not all_weekly_exhausted:
-        if previous.get("status") == "weekly_exhausted":
-            logger.info("✅ [账号池额度恢复] 检测到至少一个账号周额度已恢复，解除停止切号状态。")
+    if not is_pool_exhausted:
+        if previous.get("status") in ("weekly_exhausted", "exhausted"):
+            logger.info("✅ [账号池额度恢复] 检测到备选账号周额度与5h额度已恢复，解除停止切号状态。")
             _save_quota_pool_state({
                 "status": "available",
                 "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -1280,33 +1300,33 @@ def guard_quota_pool_exhaustion(accounts):
         if isinstance(a.get("reset_time_weekly"), datetime) and a.get("reset_time_weekly") > datetime.now(timezone.utc)
     ]
     next_reset = min(reset_times).astimezone().strftime("%m-%d %H:%M") if reset_times else "等待 Cockpit 更新周额度"
-    is_new_exhaustion = previous.get("status") != "weekly_exhausted"
+    is_new_exhaustion = previous.get("status") not in ("weekly_exhausted", "exhausted")
     should_notify = is_new_exhaustion or not previous.get("notified", False)
 
     if is_new_exhaustion:
         logger.warning(
-            f"🛑 [账号池周额度耗尽] {len(enabled_accounts)} 个启用账号的周额度均为 0，"
+            f"🛑 [账号池额度耗尽] {len(enabled_accounts)} 个启用账号已无可用备选额度 (周额度 <= 1% 或 5h <= {threshold}%)，"
             "已停止自动切号、凭据写入、订阅刷新、窗口退出和启动器重启。"
         )
         record_incident(
             incident_type="ACCOUNT_POOL_WEEKLY_QUOTA_EXHAUSTED",
             severity="WARNING",
-            summary="所有启用账号的周额度均已耗尽",
-            root_cause=f"账号池中 {len(enabled_accounts)} 个启用账号的 Gemini 周额度均为 0。",
+            summary="所有启用账号/备选账号额度均已耗尽",
+            root_cause=f"账号池中所有备选账号均满足淘汰条件 (周额度 <= 1.0% 或 5h <= {threshold}%)，无可用候选账号。",
             evidence={"enabled_account_count": len(enabled_accounts), "next_weekly_reset": next_reset},
             action_taken="已停止自动切号和重启，保持当前客户端与网络状态不变",
-            recommended_action=f"无需继续切号；等待周额度恢复。最近预计恢复时间：{next_reset}。",
+            recommended_action=f"无需继续切号；请在 Antigravity 界面切换至其他模型。最近预计恢复时间：{next_reset}。",
         )
     else:
-        logger.debug("账号池周额度仍全部为 0，继续静默等待，不重复切号或弹窗。")
+        logger.debug("账号池仍无可用备选账号，继续静默等待，不重复切号或弹窗。")
 
     notified = bool(previous.get("notified", False))
     if should_notify:
         notified = send_windows_notification(
             "Antigravity 账号池额度已耗尽",
-            f"全部 {len(enabled_accounts)} 个可用账号的周额度都已为 0。\n"
-            "系统已停止自动切号和重启，不会再切到同样无额度的账号。\n"
-            f"下一步：{next_reset}。",
+            f"全部 {len(enabled_accounts)} 个可用账号已无可用备选额度 (周额度 <= 1% 或 5h <= {threshold}%)。\n"
+            "系统已停止自动切号和重启，保持当前窗口完好运行。\n"
+            f"请在当前界面手动切换至其他模型。预计周额度恢复时间：{next_reset}。",
             status="warning",
             duration_ms=12000,
         )
@@ -1752,9 +1772,9 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     logger.info("=" * 65)
 
-    # 自动切换的最高优先级门禁：若所有启用账号周额度均归零，继续切号没有任何收益。
+    # 自动切换的最高优先级门禁：若所有启用账号周额度均归零或无可用候选账号，继续切号没有任何收益。
     # 必须在选号、写凭据、刷新订阅、关窗口和启动器重启之前短路。
-    if not target and guard_quota_pool_exhaustion(accounts):
+    if not target and guard_quota_pool_exhaustion(accounts, current_id=current_id, threshold=threshold):
         return "quota_pool_exhausted"
     logger.info(f"当前反重力账号: {curr_email} (5h: {curr_5h:.1f}%, 周额度: {curr_weekly:.1f}%, 有效: {curr_effective:.1f}%)")
     logger.info(f"专线网络订阅状态: {sub_summary}")
@@ -1765,12 +1785,16 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     logger.info("=" * 65)
     
     if not force and not target:
-        is_exhausted = (curr_5h <= threshold) or (curr_weekly <= 0.0)
+        is_exhausted = (curr_5h <= threshold) or (curr_weekly <= 1.0)
         if not is_exhausted:
             logger.info(f"当前账号配额充沛 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)，高于门禁阈值，无需切号。使用 --force 可强制切换。")
             return "not_needed"
     
-    best_acc, reason = select_best_account(accounts, current_id, threshold=threshold, target_email_or_id=target)
+    try:
+        best_acc, reason = select_best_account(accounts, current_id, threshold=threshold, target_email_or_id=target)
+    except RuntimeError as e:
+        logger.warning(f"🛑 选号门禁阻断: {e}。保持当前反重力窗口运行，严禁杀窗口与重启！")
+        return "quota_pool_exhausted"
     logger.info(f"🎯 【优选目标】: {best_acc['email']} (ID: {best_acc['id']})")
     logger.info(f"📋 【决策理由】: {reason}")
     
@@ -2182,15 +2206,20 @@ def run_watch_daemon(threshold=5.0, interval=30):
             # 2. 穿透监听：只要 language_server 出现配额耗尽/429 报错，无需等待磁盘缓存，立刻触发无感切号与续接！
             log_quota_hit = check_language_server_quota_error()
             if log_quota_hit and is_antigravity_running():
-                logger.warning("!" * 65)
-                logger.warning("🚀 【实时日志报错触发】捕获到模型 429/配额耗尽异常！立刻启动全自动无感自愈续航闭环！")
-                logger.warning("!" * 65)
-                switch_result = run_smart_switch(threshold=threshold, force=True)
-                if switch_result == "switched":
-                    logger.info("自愈切换指令已下发，休眠 35 秒等待新实例完全就绪...")
-                    time.sleep(35)
-                elif switch_result == "quota_pool_exhausted":
-                    logger.warning("账号池周额度全部耗尽，本轮已停止，不执行切号、关窗口或重启。")
+                current_id_tmp, accounts_tmp = get_all_accounts_and_quotas()
+                if guard_quota_pool_exhaustion(accounts_tmp, current_id=current_id_tmp, threshold=threshold, force_exhausted=True):
+                    logger.warning("🛑 [429 触发但账号池耗尽] 检测到当前账号 429 报错，但全池已无可用备选账号 (周额度 <= 1% 或 5h <= 5%)！")
+                    logger.warning("   严格执行 No-Kill 铁律：保持当前反重力窗口打开，严禁关窗口或重启！等待用户手动切换模型。")
+                else:
+                    logger.warning("!" * 65)
+                    logger.warning("🚀 【实时日志报错触发】捕获到模型 429/配额耗尽异常！立刻启动全自动无感自愈续航闭环！")
+                    logger.warning("!" * 65)
+                    switch_result = run_smart_switch(threshold=threshold, force=True)
+                    if switch_result == "switched":
+                        logger.info("自愈切换指令已下发，休眠 35 秒等待新实例完全就绪...")
+                        time.sleep(35)
+                    elif switch_result == "quota_pool_exhausted":
+                        logger.warning("账号池周额度全部耗尽，本轮已停止，不执行切号、关窗口或重启。")
                 loop_count = 0
                 continue
 
@@ -2267,17 +2296,26 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         # 【主动自检 2：账号池健康存量预警】
                         healthy_accounts = [
                             a for a in accounts
-                            if a["gemini_5h"] > threshold and a["gemini_weekly"] > 0.0 and a["id"] != current_id
+                            if float(a.get("gemini_5h", 0.0)) > threshold and float(a.get("gemini_weekly", 0.0)) > 1.0 and a.get("id") != current_id
                         ]
                         if len(healthy_accounts) == 0:
-                            logger.warning("⚠️ [主动健康预警] 账号池中除当前在用账号外，已无其他 5h 配额充足的备用账号！")
+                            logger.warning("⚠️ [主动健康预警] 账号池中除当前在用账号外，已无其他 5h 配额充足且周额度 > 1% 的备用账号！")
                         elif len(healthy_accounts) == 1:
                             logger.info(f"💡 [账号池余量感知] 备用健康账号仅存 1 个 ({healthy_accounts[0]['email']})，请注意关注。")
                     
-                    # 门禁触发条件：5小时额度耗尽 (<= threshold) 或 周额度彻底见底 (<= 0.0%)
-                    is_exhausted = (curr_5h <= threshold) or (curr_weekly <= 0.0)
+                    # 门禁触发条件：5小时额度耗尽 (<= threshold) 或 周额度见底 (<= 1.0%)
+                    is_exhausted = (curr_5h <= threshold) or (curr_weekly <= 1.0)
                     if is_exhausted:
-                        reason_str = f"5小时配额耗尽 ({curr_5h:.1f}% <= {threshold}%)" if curr_5h <= threshold else f"周配额彻底见底 ({curr_weekly:.1f}% <= 0.0%)"
+                        # 检查账号池是否已无可用候选账号
+                        if guard_quota_pool_exhaustion(accounts, current_id=current_id, threshold=threshold):
+                            if loop_count % 10 == 0:
+                                logger.warning(
+                                    f"🛑 [账号池耗尽待命] 当前账号 {curr_email} 额度不足 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)，"
+                                    "且池中已无其他可用备选账号。已停止切号和重启，保持当前窗口运行。"
+                                )
+                            continue
+
+                        reason_str = f"5小时配额耗尽 ({curr_5h:.1f}% <= {threshold}%)" if curr_5h <= threshold else f"周配额见底 ({curr_weekly:.1f}% <= 1.0%)"
                         logger.warning("!" * 65)
                         logger.warning(
                             f"⚠️ 【门禁触发】当前账号 {curr_email} {reason_str}！"
