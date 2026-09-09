@@ -1,7 +1,7 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：1.4.14  
+> 对应版本：1.4.15  
 > 最后核对：2026-09-09。
 
 ## 项目定位和范围
@@ -54,6 +54,12 @@
 
 ## 测试和当前验收
 
+- 2026-09-09 (v1.4.15)：1.4.13 声称修复落空事故收口、三处修复真正合入唯一真源、全链路原子对齐与旧版本残留清零里程碑。
+  - **文档与代码脱节事故彻底定界**：深度排查证实 1.4.13 提交时声称的三处修复（8000ms 超时、TLS 预热、`Get-MihomoPidSafe`）因 git 遗漏未合入 `src/`，导致构建物反复覆盖实机热修复。现已在唯一真源 `src/Antigravity-ProxySupervisor.ps1` 正式落地；
+  - **全链路哈希字节级一致自证**：`src`、`releases/current`、实机 `launcher`、实机黄金备份 4 处副本 SHA-256 哈希全部对齐为 `E59FE43B1F5609436F8846DAD7E2349E32DE7D1A3DAFA595DFEBE9E1EE1E95C6`，彻底杜绝回退；
+  - **C# 启动器版本同步提升**：`Antigravity-Recovery-Launcher.cs` 升级至 `1.4.15.0`，`build.ps1` 重新编译验证；
+  - **全套 7 大自动化测试 100% PASS**：涵盖无感故障转移、代理启动时序、33 节点调度策略、14 项守护神状态机全绿；
+  - **历史残留彻底清零**：清理本地过时 zip 归档与中间测试产物，远程 GitHub Release 保持完整历史追溯。
 - 2026-09-09 (v1.4.14)：Google 400 地区受限（LocationFailure）美国优先调度与无感代理热切换（防杀窗口）里程碑。
   - **地区受限（LocationFailure 400）美国纯净节点最高优先级**：针对日本节点偶发 Google Gemini Geo-IP 地区阻断（`LocationFailure` / `proxy_location_failure_observed`），重构 `Get-OrderedCandidates` 故障敏感排序策略。遭遇地区受限时将 `RegionRank`（US=0, JP=1）置于首位，瞬间切换至美国原生纯净节点脱困，打破局部死循环；
   - **无感代理平滑热切换（告别杀窗口/会话撕裂）**：彻底移除 `LocationFailure` 触发强杀 Antigravity GUI 窗口的历史遗留逻辑。由于 17897 本地代理核心热重启会自动重置底层 TCP 连接，`language_server.exe` 会无缝重连新节点，实现真正的 `antigravity_live_seamless_attached`，保护用户编辑状态、会话与子 Agent 运行 100% 不中断；

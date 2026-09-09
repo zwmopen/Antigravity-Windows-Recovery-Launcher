@@ -1,5 +1,13 @@
 # 变更记录
 
+## 1.4.15 - 2026-09-09 (1.4.13 声称修复落空事故收口：修复真源、全链路同步与旧版本残留清零)
+
+- **文档与代码脱节事故定界**：实机排查证实 1.4.13 CHANGELOG/HANDOFF 声称的三项修复（握手超时 8000ms、TLS 预热、`Get-MihomoPidSafe`）**实际未进入 `src/` 与 `releases/current/`**，导致 2026-09-09 06:28 部署仍携带 3000ms 超时旧脚本，覆盖掉实机热修复后再次出现全候选 `transient_network` 误杀（RTT 稳定 ~3020ms 卡死边界）；
+- **修复真实落入唯一真源**：三项修复现已在 `src/Antigravity-ProxySupervisor.ps1` 落地并与实机运行副本字节级一致（SHA256 `E59FE43B1F5609436F8846DAD7E2349E32DE7D1A3DAFA595DFEBE9E1EE1E95C6`），`releases/current/` 与其 manifest 同步更新，后续构建发布不再回退旧 bug；
+- **防回归验证**：`supervisor-state-contract` / `proxy-start-order` / `seamless-failover` 三套测试全部 PASS；实机看门狗（`private-proxy\watchdog-restore-fix.ps1` + 计划任务 `Antigravity-Fix-Watchdog`，每 2 小时）保留，检测到 bug 特征自动还原并同步 manifest；
+- **旧版本残留清零**：删除 Codex 沙箱缓存与备份目录中的旧版监督器脚本残留，本地不再存在可被误推送的旧版副本（历史版本仍可从 git 与 `releases/public` ZIP 追溯）；
+- **流程教训入库**：变更必须"真源落地 + 字节级比对自证"后才可声称修复，禁止仅凭 CHANGELOG 描述判定已生效。
+
 ## 1.4.14 - 2026-09-09 (US 美区专线优先调度与代理无感热切不杀窗口里程碑)
 
 - **LocationFailure 优先锁定 US 美区原生专线 (US Region Priority on Regional Block)**：

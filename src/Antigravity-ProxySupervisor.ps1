@@ -54,7 +54,7 @@ $MaxSuccessHistory = 128
 # Bound the live preflight after retired/cooldown state has been applied.
 $MaxCandidateCount = 96
 $StopProcessTimeoutSeconds = 20
-$ProbeTimeoutMs = 3000
+$ProbeTimeoutMs = 8000
 $ModelProbeTimeoutSeconds = 30
 $ModelProbePrompt = 'Reply with exactly OK. Do not call tools or modify files.'
 $ModelProbeConfirmationCount = 1
@@ -1059,6 +1059,27 @@ function Get-MihomoProcessForPort {
     return $processInfo
 }
 
+function Get-MihomoPidSafe {
+    try {
+        if (Test-Path -LiteralPath $PidPath) {
+            $pidText = (Get-Content -LiteralPath $PidPath -Raw).Trim()
+            $ownedPid = 0
+            if ([int]::TryParse($pidText, [ref]$ownedPid) -and (Get-Process -Id $ownedPid -ErrorAction SilentlyContinue)) {
+                return $ownedPid
+            }
+        }
+    } catch { }
+    # The pid file can go missing when a watcher or a previous failed run
+    # restarted mihomo without writing it. Recover ownership from the port
+    # so final state serialization never crashes on a missing file.
+    $portOwner = Get-MihomoProcessForPort -ListenPort $Port
+    if ($null -ne $portOwner) {
+        try { Set-Content -LiteralPath $PidPath -Value ([string]$portOwner.ProcessId) -Encoding ASCII } catch { }
+        return [int]$portOwner.ProcessId
+    }
+    return 0
+}
+
 function Stop-OwnedMihomo {
     $owned = Get-OwnedMihomoProcess
     if ($null -ne $owned) {
@@ -1743,6 +1764,8 @@ function Test-GoogleConnectivity {
     $apiStatus = 0
     $oauthStatus = 0
     $probeRttMs = 0
+    # Warmup: prime the proxy TLS connection pool to avoid cold-start timeout.
+    $null = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204'
     for ($attempt = 1; $attempt -le $ConnectivityAttemptCount; $attempt++) {
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $googleStatus = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204'
@@ -2568,7 +2591,7 @@ $state = [ordered]@{
     verified_candidate_count = @(Get-SuccessfulNodeEntries -State $failoverState).Count
     recovery_reason = $RecoveryReason
     private_port = $Port
-    mihomo_pid = [int](Get-Content -LiteralPath $PidPath -Raw).Trim()
+    mihomo_pid = Get-MihomoPidSafe
     google_status = $connectivity.GoogleStatus
     generativelanguage_status = $connectivity.ApiStatus
     oauth_status = $connectivity.OAuthStatus
