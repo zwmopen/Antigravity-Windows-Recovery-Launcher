@@ -961,7 +961,13 @@ function Get-OrderedCandidates {
     # its country label. Keep verified/sticky history first; among equally
     # proven or unproven candidates, prefer United States and use Japan as the
     # fallback. SmartScore refines ordering with latency and recency.
-    $ordered = @($decorated | Sort-Object @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
+    # EXCEPTION: When recovering from LocationFailure, the active region was blocked by Google Geo-IP.
+    # Prioritize United States (RegionRank=0) over VerifiedRank to break out of regional restrictions immediately.
+    $ordered = if ($RecoveryReason -eq 'LocationFailure') {
+        @($decorated | Sort-Object @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
+    } else {
+        @($decorated | Sort-Object @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
+    }
     if ($ordered.Count -gt $MaxCandidateCount) {
         # United States remains the primary region. If the pool is larger than
         # the bounded probe budget, reserve up to 16 slots for the Japan
@@ -2454,7 +2460,7 @@ $existingAntigravity = @(Get-CimInstance Win32_Process -ErrorAction SilentlyCont
     [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedAntigravityPath
 })
 $hasExistingAntigravity = $existingAntigravity.Count -gt 0
-$forceRestartRequested = ($RecoveryReason -in @('Force', 'UserRequestedRepair', 'LocationFailure', 'AccountChange', 'cockpit_account_changed'))
+$forceRestartRequested = ($RecoveryReason -in @('Force', 'UserRequestedRepair', 'AccountChange', 'cockpit_account_changed'))
 
 $antigravityPid = 0
 $readiness = @{ LanguageServerPid = 0; ProxyConnections = 0 }

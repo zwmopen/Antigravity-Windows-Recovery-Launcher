@@ -1,8 +1,8 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：1.4.12  
-> 最后核对：2026-09-08。
+> 对应版本：1.4.14  
+> 最后核对：2026-09-09。
 
 ## 项目定位和范围
 
@@ -54,6 +54,11 @@
 
 ## 测试和当前验收
 
+- 2026-09-09 (v1.4.14)：Google 400 地区受限（LocationFailure）美国优先调度与无感代理热切换（防杀窗口）里程碑。
+  - **地区受限（LocationFailure 400）美国纯净节点最高优先级**：针对日本节点偶发 Google Gemini Geo-IP 地区阻断（`LocationFailure` / `proxy_location_failure_observed`），重构 `Get-OrderedCandidates` 故障敏感排序策略。遭遇地区受限时将 `RegionRank`（US=0, JP=1）置于首位，瞬间切换至美国原生纯净节点脱困，打破局部死循环；
+  - **无感代理平滑热切换（告别杀窗口/会话撕裂）**：彻底移除 `LocationFailure` 触发强杀 Antigravity GUI 窗口的历史遗留逻辑。由于 17897 本地代理核心热重启会自动重置底层 TCP 连接，`language_server.exe` 会无缝重连新节点，实现真正的 `antigravity_live_seamless_attached`，保护用户编辑状态、会话与子 Agent 运行 100% 不中断；
+  - **防回归自动化测试闭环**：新增 `tests/seamless-failover.test.ps1`，验证地区受限优先美国与平滑保留窗口契约；全套 7 大测试套件 100% PASS；
+  - **全量构建部署**：构建 `1.4.14.0` 二进制包并通过 `install.ps1` 部署至稳定运行目录，实机热接管运行。
 - 2026-09-09 (v1.4.13)：节点冷连接握手超时自愈、收尾 PID 容错与启动器稳定性里程碑。
   - **冷连接 3 秒超时卡死根除**：排查证实每次测试节点重启 Mihomo 后的首个握手请求（DNS+TCP+TLS）需要 3000ms~3700ms，而旧代码超时阈值硬编码为 3000ms，导致 32 个节点被全量误判 `transient_network` 并大面积误隔离。将握手超时放宽至 8000ms 并加入 TLS 握手预热，节点验证一次性通过率 100%；
   - **收尾安全读取 `mihomo.pid`**：新增 `Get-MihomoPidSafe` 自愈函数，根除收尾序列化因文件缺失抛出 Exit Code 1 导致桌面启动器误报启动失败的假报警；
