@@ -50,8 +50,11 @@ if ($resLocation[0].Id -ne 'us-unverified') {
 Write-Output 'location_failure_us_priority_ok'
 
 $resStartup = Get-OrderedCandidates -Candidates $candidates -State $state -RecoveryReason 'Startup'
-if ($resStartup[0].Id -ne 'jp-historically-verified') {
-    throw 'regression: Startup must prioritize verified JP candidate over unverified US candidate'
+if ($resStartup[0].Id -ne 'us-unverified') {
+    throw 'regression: fresh Startup must prefer US before JP fallback'
 }
-Write-Output 'startup_verified_priority_preserved_ok'
+Write-Output 'startup_us_priority_ok'
+$resAccount = Get-OrderedCandidates -Candidates $candidates -State $state -RecoveryReason 'AccountChange'
+if ($resAccount[0].Id -ne 'jp-historically-verified') { throw 'account change must preserve verified route' }
+Write-Output 'account_change_verified_priority_preserved_ok'
 Write-Output 'ALL_SEAMLESS_FAILOVER_TESTS_PASS'

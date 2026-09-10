@@ -7,7 +7,7 @@ param(
 )
 
 # Antigravity private proxy supervisor
-# Version: 2.7.0
+# Version: 2.7.1
 # Purpose: run one private Mihomo listener for Antigravity only.
 # The executable core is ASCII-only for Windows PowerShell 5.1 compatibility.
 
@@ -251,7 +251,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.7.0'
+            version = '2.7.1'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -961,9 +961,9 @@ function Get-OrderedCandidates {
     # its country label. Keep verified/sticky history first; among equally
     # proven or unproven candidates, prefer United States and use Japan as the
     # fallback. SmartScore refines ordering with latency and recency.
-    # EXCEPTION: When recovering from LocationFailure, the active region was blocked by Google Geo-IP.
-    # Prioritize United States (RegionRank=0) over VerifiedRank to break out of regional restrictions immediately.
-    $ordered = if ($RecoveryReason -eq 'LocationFailure') {
+    # Fresh startup and region-failure recovery prefer US candidates, then JP.
+    # Account changes retain a proven route; do not interrupt a working JP fallback.
+    $ordered = if ($RecoveryReason -in @('Startup', 'LocationFailure')) {
         @($decorated | Sort-Object @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
     } else {
         @($decorated | Sort-Object @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
@@ -2232,7 +2232,7 @@ if ($PolicyTest) {
     $verifiedCrossRegionOrder = @(Get-OrderedCandidates -Candidates @(
         [pscustomobject]@{ Id = 'us-unverified'; SourceId = 'source-us'; Priority = 0; Region = 'US'; RegionRank = 0; Name = 'us-unverified' },
         [pscustomobject]@{ Id = 'jp-verified'; SourceId = 'source-jp'; Priority = 0; Region = 'JP'; RegionRank = 1; Name = 'jp-verified' }
-    ) -State $verifiedCrossRegionState -IncludeCooldown)
+    ) -State $verifiedCrossRegionState -IncludeCooldown -RecoveryReason 'AccountChange')
     $historyPreservationState = New-EmptyFailoverState
     $historyPreservationState.successful_nodes = @([pscustomobject]@{
         node_id = 'historically-good'
@@ -2423,7 +2423,7 @@ if ($null -eq $selectedCandidate) {
             $fallbackPid = 0
             try { $fallbackPid = [int](Get-Content -LiteralPath $PidPath -Raw).Trim() } catch { }
             $degradedState = [ordered]@{
-                version = '2.7.0'
+                version = '2.7.1'
                 status = 'degraded'
                 started_at = $script:RunStartedAt.ToString('o')
                 finished_at = (Get-Date).ToString('o')
@@ -2574,7 +2574,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.7.0'
+    version = '2.7.1'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId

@@ -54,6 +54,10 @@
 
 ## 测试和当前验收
 
+- 2026-09-10 本地网络修复：监督器 2.7.1 已安装；Startup/LocationFailure 美国优先，AccountChange 保留已验证线路。`run-failover-policy-tests`、`seamless-failover`、`proxy-start-order`、`supervisor-state-contract` 全部通过。
+- Clash 真源为 `config/clash-purpose-groups.js`，安装至 Clash Verge `profiles/Script.js`。不含硬编码节点，订阅变动模拟测试通过；真实批量订阅刷新尚未验收。日常主组接入日本日常高速，规则模式、7897、TUN 关闭保留。
+- 本机回滚文件：`C:\Users\z\AppData\Local\Antigravity\network-backups\20260910-jp-us-groups`。包含私有配置，不得提交或上传。
+
 - 2026-09-09 (v1.4.16)：账号池周额度全部归零时停止切号与重启。
   - 自动切换前先检查所有启用账号；若周额度均为 0，直接进入 `quota_pool_exhausted`，不会选号、写凭据、刷新订阅、退出 Antigravity 或重启启动器；
   - 首次耗尽弹出桌面通知并记录 `ACCOUNT_POOL_WEEKLY_QUOTA_EXHAUSTED`，持续耗尽时静默等待；任一账号额度恢复后自动解除；
