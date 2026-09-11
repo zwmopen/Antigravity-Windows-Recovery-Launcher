@@ -919,10 +919,12 @@ function Get-OrderedCandidates {
         try { $regionRank = [int]$candidate.RegionRank } catch { }
 
         # Smart Pool: calculate SmartScore (0-1000)
+        # Latency-first and verified stability:
         $smartScore = 0
         if ($isVerified) { $smartScore += 500 }
         if ($isActive) { $smartScore += 200 }
-        if ($regionRank -eq 0) { $smartScore += 150 } else { $smartScore += 80 }
+        # Valid supported regions (JP / US) receive equal baseline, allowing RTT speed to decide:
+        $smartScore += 120
         $smartScore += [Math]::Min(150, ($successCount * 25))
         if ($lastPassedTicks -gt 0) {
             try {
@@ -934,7 +936,8 @@ function Get-OrderedCandidates {
         }
         if ($null -ne $history -and $history.PSObject.Properties['last_rtt_ms']) {
             $histRtt = [int]$history.last_rtt_ms
-            if ($histRtt -gt 0 -and $histRtt -le 350) { $smartScore += 50 }
+            if ($histRtt -gt 0 -and $histRtt -le 150) { $smartScore += 100 }
+            elseif ($histRtt -gt 150 -and $histRtt -le 350) { $smartScore += 50 }
             elseif ($histRtt -gt 1500) { $smartScore -= 50 }
         }
         $smartScore = [Math]::Max(0, [Math]::Min(1000, $smartScore))
@@ -958,15 +961,14 @@ function Get-OrderedCandidates {
     }
 
     # A node that already passed the real model gate is stronger evidence than
-    # its country label. Keep verified/sticky history first; among equally
-    # proven or unproven candidates, prefer United States and use Japan as the
-    # fallback. SmartScore refines ordering with latency and recency.
-    # Fresh startup and region-failure recovery prefer US candidates, then JP.
-    # Account changes retain a proven route; do not interrupt a working JP fallback.
-    $ordered = if ($RecoveryReason -in @('Startup', 'LocationFailure')) {
+    # its country label. Keep verified/sticky history first.
+    # Speed-first policy: Startup and regular recoveries prioritize verified low-latency routes
+    # (SmartScore with RTT and recency).
+    # Only LocationFailure recovery temporarily prioritizes the alternate region to break geo-blocks.
+    $ordered = if ($RecoveryReason -eq 'LocationFailure') {
         @($decorated | Sort-Object @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
     } else {
-        @($decorated | Sort-Object @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
+        @($decorated | Sort-Object @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
     }
     if ($ordered.Count -gt $MaxCandidateCount) {
         # United States remains the primary region. If the pool is larger than

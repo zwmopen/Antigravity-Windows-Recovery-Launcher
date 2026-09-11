@@ -9,8 +9,8 @@
     {
       "file": "Antigravity-Windows-Recovery-Launcher-1.5.0-windows-x64.zip",
       "platform": "windows-x64",
-      "size": 186759,
-      "sha256": "D2F80D993FF0F331B75E7E13D6095C34A235CA8B4FB735D74B7FFBE0EBEE2F09",
+      "size": 187121,
+      "sha256": "88CAE11A223063324AF5D544A17C93052E834EDCA339A975F3C1DEF27D287D76",
       "url": "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.5.0/Antigravity-Windows-Recovery-Launcher-1.5.0-windows-x64.zip",
       "installer": false,
       "contains_official_agy_binary": false,

@@ -793,7 +793,7 @@ namespace AntigravityLauncher
         private HotLaunchButton btnRepair;
         private CapsuleCloseButton closeButton;
         private Image appIcon = null;
-        private string egressBadgeText = "美国专线就绪";
+        private string egressBadgeText = "高速专线就绪";
         private string statusBadgeText = "● 运行中";
         private string subtitleText = "当前专线连接畅通 · 可秒切代码窗口，或一键重启自愈";
 
@@ -1165,9 +1165,9 @@ namespace AntigravityLauncher
                 TextRenderer.DrawText(e.Graphics, "Antigravity", fontTitle, new Point(64, 16), Color.FromArgb(16, 43, 69));
             }
 
-            // 4. 拟态策略徽标 (直观体现底层：美国优先、延迟优选、记忆好用)
-            DrawPillBadge(e.Graphics, "🇺🇸 美国优先", 170, 19, Color.FromArgb(219, 234, 254), Color.FromArgb(147, 197, 253), Color.FromArgb(29, 78, 216));
-            DrawPillBadge(e.Graphics, "⚡ 延迟优选", 260, 19, Color.FromArgb(224, 231, 255), Color.FromArgb(165, 180, 252), Color.FromArgb(67, 56, 202));
+            // 4. 拟态策略徽标 (直观体现底层：网速优先、同区低延、记忆好用)
+            DrawPillBadge(e.Graphics, "⚡ 网速优先", 170, 19, Color.FromArgb(219, 234, 254), Color.FromArgb(147, 197, 253), Color.FromArgb(29, 78, 216));
+            DrawPillBadge(e.Graphics, "🌐 同区低延", 260, 19, Color.FromArgb(224, 231, 255), Color.FromArgb(165, 180, 252), Color.FromArgb(67, 56, 202));
             DrawPillBadge(e.Graphics, "⭐ 记忆好用", 348, 19, Color.FromArgb(220, 252, 231), Color.FromArgb(134, 239, 172), Color.FromArgb(21, 128, 61));
 
             // 5. 三行直观、清晰的通路状态步骤 (无白边缝隙，融入背景)
@@ -1579,7 +1579,7 @@ namespace AntigravityLauncher
             int discoveredTotal = 0;
             int candidateIndex = 0;
             int candidateTotal = 0;
-            string egressCountry = "US";
+            string egressCountry = "";
             string rttStr = "";
 
             foreach (string line in logText.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
@@ -1633,7 +1633,7 @@ namespace AntigravityLauncher
                 }
                 else if (line.Contains("model_generation_probe_passed"))
                 {
-                    string countryDesc = egressCountry == "US" ? "美国 US" : (egressCountry == "JP" ? "日本 JP" : egressCountry);
+                    string countryDesc = egressCountry == "JP" ? "日本 JP" : (egressCountry == "US" ? "美国 US" : (!string.IsNullOrEmpty(egressCountry) ? egressCountry : "高速专线"));
                     state.ModelText = "Gemini 编程模型验证通过 [出口 " + countryDesc + "]";
                     state.ModelPassed = true;
                     state.FooterText = "🚀 通路已全部通过，正在拉起 Antigravity…";
@@ -1673,7 +1673,7 @@ namespace AntigravityLauncher
             if (all.Contains("antigravity_missing"))
                 return "💡 未找到 Antigravity 程序\n\n请确认 Antigravity 已安装在默认应用路径。";
             if (all.Contains("target_node_not_found"))
-                return "💡 未发现可用专线\n\n请在你的 Clash 代理软件中更新一次订阅节点，确保包含美国或日本专线。";
+                return "💡 未发现可用专线\n\n请在你的 Clash 代理软件中更新一次订阅节点，确保包含日本或美国高速专线。";
             if (all.Contains("google_connectivity_failed") || all.Contains("proxy_egress_network_failure"))
                 return "💡 无法连接 Google 服务\n\n当前网络暂无法连通 Google，请检查网络或在 Clash 中切换其他可用节点。";
             if (all.Contains("model_generation_probe_failed") || all.Contains("model_location"))
