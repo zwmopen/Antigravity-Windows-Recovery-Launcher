@@ -54,6 +54,10 @@
 
 ## 测试和当前验收
 
+- 同晚后续：22:44:24 旧恢复轮次第 15 个日本候选通过真实模型探针；22:44:40 客户端 PID 30512 / language PID 37512 建立 9 条专线连接。网络与候选同时变更，不能归因于热点单独改善；客户端新回复仍需独立确认。
+
+- 2026-09-11 22:44：监督器 2.7.2 已部署到 launcher/current/黄金备份并同步 manifest。AccountChange 不再伪造 HTTP 成功或跳过真实生成。新增回归及四套相关契约通过；正在执行的旧监督器不会因磁盘替换自动升级，热点模型恢复尚未通过。切号脚本的直接订阅写盘、续接结果误报与承载端口逐节点试探问题仍未修复，不得宣称全链完成。
+
 - 2026-09-10 本地网络修复：监督器 2.7.1 已安装；Startup/LocationFailure 美国优先，AccountChange 保留已验证线路。`run-failover-policy-tests`、`seamless-failover`、`proxy-start-order`、`supervisor-state-contract` 全部通过。
 - Clash 真源为 `config/clash-purpose-groups.js`，安装至 Clash Verge `profiles/Script.js`。不含硬编码节点，订阅变动模拟测试通过；真实批量订阅刷新尚未验收。日常主组接入日本日常高速，规则模式、7897、TUN 关闭保留。
 - 本机回滚文件：`C:\Users\z\AppData\Local\Antigravity\network-backups\20260910-jp-us-groups`。包含私有配置，不得提交或上传。
