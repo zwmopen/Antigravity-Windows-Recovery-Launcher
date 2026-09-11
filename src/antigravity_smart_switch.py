@@ -646,8 +646,8 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
 
                     if (!editable) return {{ status: "editor_not_found" }};
 
-                    // 检查是否正在生成中 (Stop/Cancel 按钮存在即视为生成中)
-                    const isGenerating = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                    // 检查是否正在生成中 (Stop/Cancel 按钮存在即视为生成中，支持 Agent 模式下的 Stop execution)
+                    const isGenerating = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="Stop execution" i], button[aria-label*="停止生成" i], button[aria-label*="停止执行" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
                     if (isGenerating) return {{ status: "generating" }};
 
                     const currentText = (editable.innerText || '').trim();
@@ -686,14 +686,20 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                 send_js = """
                 (async () => {
                     const editable = document.querySelector('[data-lexical-editor="true"]');
+                    if (editable) {
+                        try { editable.dispatchEvent(new Event('input', { bubbles: true })); } catch(e) {}
+                    }
+                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="Stop execution" i], button[aria-label*="停止生成" i], button[aria-label*="停止执行" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                    if (isGen) return { success: true, method: "already_generating" };
+
                     let container = editable ? editable.parentElement : null;
                     for (let step = 0; step < 6; step++) {
-                        if (container && container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]')) break;
+                        if (container && container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button[aria-label*="提交" i]')) break;
                         if (container && container.parentElement) container = container.parentElement;
                     }
                     let sendBtn = null;
                     for (let retry = 0; retry < 15; retry++) {
-                        sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]') : document.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i]');
+                        sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button[aria-label*="提交" i]') : document.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button[aria-label*="提交" i]');
                         if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
                         await new Promise(r => setTimeout(r, 100));
                     }
@@ -729,7 +735,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                 (() => {
                     const editable = document.querySelector('[data-lexical-editor="true"]');
                     const currentText = editable ? (editable.innerText || '').trim() : '';
-                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="Stop execution" i], button[aria-label*="停止生成" i], button[aria-label*="停止执行" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
                     return { cleared: currentText.length === 0, generating: isGen };
                 })()
                 """
@@ -756,7 +762,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                 switch_back_js = f"""
                 (async () => {{
                     // 若当前窗口处于流式生成中，保持聚焦，绝不切换路由
-                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="停止生成" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="Stop execution" i], button[aria-label*="停止生成" i], button[aria-label*="停止执行" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
                     if (isGen) return {{ status: "stay_generating" }};
 
                     const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
