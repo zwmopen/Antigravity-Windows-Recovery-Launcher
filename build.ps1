@@ -51,11 +51,29 @@ if (Test-Path -LiteralPath $traySource) {
     & $csc /nologo /target:winexe /optimize+ /codepage:65001 $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $trayOutput) $traySource
     if ($LASTEXITCODE -ne 0) { throw 'nodetray_build_failed' }
 }
-Copy-Item -LiteralPath (Join-Path $source 'Antigravity-ProxySupervisor.ps1') -Destination (Join-Path $release 'Antigravity-ProxySupervisor.ps1') -Force
+$utf8Bom = New-Object System.Text.UTF8Encoding($true)
+function Copy-WithUtf8BomAndValidate {
+    param([string]$SourcePath, [string]$DestPath)
+    $errs = @()
+    $null = [System.Management.Automation.Language.Parser]::ParseFile($SourcePath, [ref]$null, [ref]$errs)
+    if ($errs.Count -gt 0) {
+        $msg = ($errs | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }) -join "; "
+        throw "PowerShell syntax validation failed in $SourcePath : $msg"
+    }
+    $text = [System.IO.File]::ReadAllText($SourcePath, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($DestPath, $text, $utf8Bom)
+}
+
+Copy-WithUtf8BomAndValidate (Join-Path $source 'Antigravity-ProxySupervisor.ps1') (Join-Path $release 'Antigravity-ProxySupervisor.ps1')
 foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd', 'antigravity_smart_switch.py', 'Invoke-AntigravitySmartSwitch.ps1', 'Antigravity-QuickSwitch.cmd')) {
     $helperPath = Join-Path $source $helper
     if (Test-Path -LiteralPath $helperPath) {
-        Copy-Item -LiteralPath $helperPath -Destination (Join-Path $release $helper) -Force
+        $destPath = Join-Path $release $helper
+        if ($helper.EndsWith('.ps1')) {
+            Copy-WithUtf8BomAndValidate $helperPath $destPath
+        } else {
+            Copy-Item -LiteralPath $helperPath -Destination $destPath -Force
+        }
     }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $extensionSource 'manifest.json'))) { throw 'localization_extension_missing' }

@@ -734,8 +734,11 @@ namespace AntigravityLauncher
             Color tc = isHovered ? Color.FromArgb(37, 99, 235) : Color.FromArgb(148, 163, 184);
             using (var pen = new Pen(tc, 2f))
             {
-                int y = Height / 2 + 3;
-                e.Graphics.DrawLine(pen, 6, y, Width - 7, y);
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+                int y = Height / 2;
+                int pad = 6;
+                e.Graphics.DrawLine(pen, pad, y, Width - pad - 1, y);
             }
         }
 
@@ -902,7 +905,7 @@ namespace AntigravityLauncher
 
             closeButton = new CapsuleCloseButton
             {
-                Location = new Point(ClientSize.Width - 32, 12),
+                Location = new Point(ClientSize.Width - 34, 11),
                 Size = new Size(22, 22)
             };
             closeButton.Click += delegate
@@ -914,7 +917,7 @@ namespace AntigravityLauncher
 
             var minimizeButton = new CapsuleMinimizeButton
             {
-                Location = new Point(ClientSize.Width - 58, 12),
+                Location = new Point(ClientSize.Width - 64, 11),
                 Size = new Size(22, 22)
             };
             minimizeButton.Click += delegate
@@ -1312,7 +1315,8 @@ namespace AntigravityLauncher
 
             var btnClose = new CapsuleCloseButton
             {
-                Location = new Point(Width - 32, 10)
+                Location = new Point(Width - 34, 11),
+                Size = new Size(22, 22)
             };
             btnClose.Click += delegate
             {
@@ -1330,7 +1334,8 @@ namespace AntigravityLauncher
 
             var btnMinimize = new CapsuleMinimizeButton
             {
-                Location = new Point(Width - 58, 10)
+                Location = new Point(Width - 64, 11),
+                Size = new Size(22, 22)
             };
             btnMinimize.Click += delegate
             {
