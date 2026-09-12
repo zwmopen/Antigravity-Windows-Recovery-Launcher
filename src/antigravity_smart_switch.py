@@ -582,9 +582,9 @@ def _reload_clash_core(clash_dir, profiles_config):
 async def _cdp_execute_auto_resume(ws_url, max_windows=4, text="1", target_href=None, force_send=None):
     """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持活动会话精准锚定与草稿自愈提交)"""
     if force_send is None:
-        force_send = is_beta_mode()
+        force_send = True
     if force_send:
-        logger.info("⚡ [测试版模式] 已启用强制扣 1 续接策略：忽略窗口生成/加载状态，一律强制键入 '1' 并等待 5 秒回车！")
+        logger.info("⚡ [全版本标准特性] 已启用强制扣 1 续接策略：键入 '1' 并沉淀 5 秒后回车提交，彻底杜绝回车吞噬！")
     import websockets
     try:
         async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
@@ -2041,29 +2041,23 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
 
     # =========================================================================
     # 【核心顺序 3/4】：退出反重力并重启
-    #   - Beta 模式（无缝热重启）：只杀 language_server，让 Electron 原地重拉，编辑器窗口不关闭
-    #   - 普通模式 / 热重启失败降级：优雅退出整个 Antigravity + 启动器重拉新实例
+    #   - 核心首选（无缝热重启）：仅 Kill language_server，Electron 原地重拉，编辑器窗口不关闭
+    #   - 兜底降级方案：若热重启超时/未就绪，优雅退出整个 Antigravity + 启动器重拉新实例
     # =========================================================================
-    hot_restart_success = False
-    if is_beta_mode():
-        logger.info(f"🔥 [步骤 3/5] 无缝热重启（Beta 模式）：仅 Kill language_server，Electron 原地重新拉起新服务，编辑器窗口保持完好...")
-        hot_restart_success = hot_restart_language_server(wait_timeout=25.0)
-        if hot_restart_success:
-            logger.info("✅ [步骤 3/5 完成] 语言服务热重启成功，编辑器窗口完好，跳过步骤 4（无需拉起启动器）")
-        else:
-            logger.warning("⚠️ [步骤 3/5] 热重启失败，降级为完整重启方案...")
-
-    if not hot_restart_success:
-        logger.info(f"🚪 [步骤 3/5] 退出反重力：切号与订阅已就绪，正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
+    logger.info("🔥 [步骤 3/5] 无缝热重启：优先仅 Kill language_server，Electron 原地重新拉起新服务，编辑器窗口保持完好...")
+    hot_restart_success = hot_restart_language_server(wait_timeout=25.0)
+    if hot_restart_success:
+        logger.info("✅ [步骤 3/5 完成] 语言服务热重启成功，编辑器窗口完好，跳过步骤 4（无需重新拉起启动器）")
+    else:
+        logger.warning("⚠️ [步骤 3/5] 热重启未就绪，自动降级为完整重启方案...")
+        logger.info(f"🚪 [步骤 3/5 降级] 退出反重力：正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
         gracefully_exit_antigravity(timeout_seconds=5.0)
 
         # =====================================================================
         # 【核心顺序 4】：启动启动器 (派发桌面智能启动器拉起新实例，挂载 17897 专线代理)
         # =====================================================================
-        logger.info("🚀 [步骤 4/5] 启动启动器：正在派发桌面智能启动器拉起全新实例并挂载专线代理...")
+        logger.info("🚀 [步骤 4/5 降级] 启动启动器：正在派发桌面智能启动器拉起全新实例并挂载专线代理...")
         launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
-    else:
-        logger.info("⏭️  [步骤 4/5] 已跳过（热重启成功，无需重新拉起启动器）")
 
     # =========================================================================
     # 【核心顺序 5】：启动后在前 4 对话窗口扣 1 (优先切号前活跃任务)
