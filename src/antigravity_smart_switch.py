@@ -603,6 +603,13 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=4, text="1", target_href=
                     if data.get("id") == cur_id:
                         return data
 
+            # 0. 确保中文汉化语言包已通过 CDP 注入到界面中
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, ensure_chinese_localization_injected)
+            except Exception:
+                pass
+
             # 1. 抓取侧边栏所有会话列表
             fetch_rows_js = """
             (async () => {
@@ -1574,6 +1581,42 @@ def hot_restart_language_server(wait_timeout=25.0):
     return False
 
 
+def ensure_chinese_localization_injected():
+    """
+    确保 Antigravity 的中文汉化翻译语言包通过 CDP 注入到界面中。
+    解决痛点：在无缝热重启或会话切换后，前端界面可能缺失翻译脚本导致回退英文。
+    在无缝热重启完成后、CDP 自动续接前及巡检守护中主动触发，确保界面中文化始终生效。
+    """
+    try:
+        disabled_flag = os.path.join(LOCAL_APPDATA, "Antigravity", "localization-extension-disabled.flag")
+        if os.path.exists(disabled_flag):
+            logger.debug("[汉化语言包] 检测到用户已禁用中文汉化，跳过注入。")
+            return False
+
+        loader_candidates = [
+            os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-CdpLocalizationLoader.exe"),
+            os.path.join(os.path.dirname(__file__), "Antigravity-CdpLocalizationLoader.exe"),
+            os.path.join(os.path.dirname(__file__), "..", "releases", "current", "Antigravity-CdpLocalizationLoader.exe")
+        ]
+        loader_exe = next((p for p in loader_candidates if os.path.exists(p)), None)
+        if not loader_exe:
+            logger.debug("[汉化语言包] 未找到 Antigravity-CdpLocalizationLoader.exe，跳过注入。")
+            return False
+
+        work_dir = os.path.dirname(loader_exe)
+        flags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+        res = subprocess.run([loader_exe], cwd=work_dir, capture_output=True, timeout=8, creationflags=flags)
+        if res.returncode == 0:
+            logger.info("🌐 [汉化语言包] 已成功向 Antigravity 界面注入/重载中文语言包！")
+            return True
+        else:
+            logger.debug(f"[汉化语言包] 注入返回码: {res.returncode}")
+            return False
+    except Exception as e:
+        logger.debug(f"[汉化语言包] 注入过程异常: {e}")
+        return False
+
+
 def decrypt_cockpit_account(account_id):
     """从 Cockpit Tools 本地安全加密存储中无损解密指定账号的完整数据 (含 access_token, refresh_token)"""
     key_path = os.path.join(COCKPIT_DIR, "secure-account-storage.key")
@@ -2060,6 +2103,11 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
 
     # =========================================================================
+    # 【语言包保障】：在热重启或拉起后，主动确保 Antigravity 中文汉化包已注入生效
+    # =========================================================================
+    ensure_chinese_localization_injected()
+
+    # =========================================================================
     # 【核心顺序 5】：启动后在前 4 对话窗口扣 1 (优先切号前活跃任务)
     # =========================================================================
     logger.info("🎯 [步骤 5/5] 自动续接：正在等待语言服务就绪，并在前 4 个对话窗口扣 1 (优先切号前活跃任务)...")
@@ -2377,13 +2425,19 @@ def run_watch_daemon(threshold=5.0, interval=30):
             wait_timeout=15
         )
     
+    # 启动时若 Antigravity 正在运行，主动确保中文汉化包就绪
+    if is_antigravity_running():
+        ensure_chinese_localization_injected()
+
     loop_count = 0
     _last_antigravity_running = is_antigravity_running()
     while True:
         try:
-            # 1. 双星互保：每 2 轮 (约 60 秒) 检查一次 C# 守卫存活状态
+            # 1. 双星互保与汉化巡检：每 2 轮检查 C# 守卫，每 10 轮确保一次汉化语言包注入
             if loop_count % 2 == 0:
                 ensure_account_watcher_running()
+            if loop_count % 10 == 0 and is_antigravity_running():
+                ensure_chinese_localization_injected()
 
             # 2. 穿透监听：只要 language_server 出现配额耗尽/429 报错，无需等待磁盘缓存，立刻触发无感切号与续接！
             log_quota_hit = check_language_server_quota_error()
