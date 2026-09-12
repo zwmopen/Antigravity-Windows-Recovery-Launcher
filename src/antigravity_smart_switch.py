@@ -1335,8 +1335,13 @@ def _save_quota_pool_state(state):
         logger.debug(f"保存账号池额度状态异常: {e}")
 
 
-def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, force_exhausted=False):
-    """全池无可用备选账号 (周额度 <= 1.0% 或 5h <= 5.0%) 时停止自动切号，并仅在状态变化时通知一次。"""
+def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, curr_force_exhausted=False, force_exhausted=False):
+    """
+    全池无可用备选账号 (周额度 <= 1.0% 或 5h <= 5.0%) 时停止自动切号，并仅在状态变化时通知一次。
+    参数:
+        curr_force_exhausted: 强制判定【当前在用账号】已耗尽 (如捕获到 429 报错时)，仍会正常核验池中是否有备选候选账号。
+        force_exhausted: 强制判定【整个账号池】全部耗尽 (仅用于极限测试与强制封锁)。
+    """
     enabled_accounts = [a for a in accounts if not a.get("disabled", False)]
     if not enabled_accounts:
         return False
@@ -1362,7 +1367,8 @@ def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, force_
 
     curr_acc = next((a for a in enabled_accounts if a.get("id") == current_id or a.get("is_current")), None)
     curr_is_exhausted = (
-        curr_acc is None
+        curr_force_exhausted
+        or curr_acc is None
         or float(curr_acc.get("gemini_weekly", 0.0)) <= 1.0
         or float(curr_acc.get("gemini_5h", 0.0)) <= threshold
     )
@@ -2379,7 +2385,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
             log_quota_hit = check_language_server_quota_error()
             if log_quota_hit and is_antigravity_running():
                 current_id_tmp, accounts_tmp = get_all_accounts_and_quotas()
-                if guard_quota_pool_exhaustion(accounts_tmp, current_id=current_id_tmp, threshold=threshold, force_exhausted=True):
+                if guard_quota_pool_exhaustion(accounts_tmp, current_id=current_id_tmp, threshold=threshold, curr_force_exhausted=True):
                     logger.warning("🛑 [429 触发但账号池耗尽] 检测到当前账号 429 报错，但全池已无可用备选账号 (周额度 <= 1% 或 5h <= 5%)！")
                     logger.warning("   严格执行 No-Kill 铁律：保持当前反重力窗口打开，严禁关窗口或重启！等待用户手动切换模型。")
                 else:
