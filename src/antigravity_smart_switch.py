@@ -493,10 +493,84 @@ def update_clash_subscriptions(timeout_seconds=12):
             with open(profiles_yaml_path, "w", encoding="utf-8") as f:
                 yaml.dump(config, f, allow_unicode=True)
             logger.info(f"🎉 全部机场订阅刷新完毕！共更新 {updated_count} 个订阅配置。")
-            return True
         except Exception as e:
             logger.warning(f"保存更新后的 profiles.yaml 异常: {e}")
+            return False
+
+        # 通知 mihomo 核心重载当前配置，使新节点立即生效（避免文件写了但内存未更新）
+        _reload_clash_core(clash_dir, config)
+        return True
     return False
+
+
+def _reload_clash_core(clash_dir, profiles_config):
+    """通知 Clash Verge (mihomo) 核心重载当前 Profile，使刚写入的订阅节点立即生效。
+    策略：从当前激活 Profile 的 yaml 中读取 external-controller 端口，
+    然后调用 PUT /configs?force=true 触发热重载。"""
+    try:
+        import yaml
+    except ImportError:
+        logger.debug("yaml 模块不可用，跳过 Clash 核心重载通知")
+        return
+
+    try:
+        current_uid = profiles_config.get("current", "")
+        items = profiles_config.get("items", [])
+        # 找到当前激活的 profile 文件名
+        active_file = None
+        for item in items:
+            if item.get("uid") == current_uid:
+                active_file = item.get("file")
+                break
+
+        # 从主 config.yaml 读取 external-controller（Clash Verge merge 后的配置）
+        main_config_path = os.path.join(clash_dir, "config.yaml")
+        controller = None
+        secret = ""
+        if os.path.exists(main_config_path):
+            with open(main_config_path, "r", encoding="utf-8") as f:
+                main_cfg = yaml.safe_load(f) or {}
+            controller = main_cfg.get("external-controller", "")
+            secret = main_cfg.get("secret", "")
+
+        # 若 main config 没有，尝试从激活 profile 本身读取
+        if not controller and active_file:
+            profile_path = os.path.join(clash_dir, "profiles", active_file)
+            if os.path.exists(profile_path):
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    prof_cfg = yaml.safe_load(f) or {}
+                controller = prof_cfg.get("external-controller", "")
+                secret = prof_cfg.get("secret", secret)
+
+        # 候选端口列表（fallback）
+        candidates = []
+        if controller:
+            candidates.append(controller)
+        candidates += ["127.0.0.1:9090", "127.0.0.1:9097", "127.0.0.1:9093"]
+
+        for ctrl in candidates:
+            host = ctrl if ctrl.startswith("http") else f"http://{ctrl}"
+            try:
+                headers = {"Content-Type": "application/json"}
+                if secret:
+                    headers["Authorization"] = f"Bearer {secret}"
+                data = json.dumps({"path": "", "payload": ""}).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{host}/configs?force=true",
+                    data=data,
+                    headers=headers,
+                    method="PUT"
+                )
+                resp = urllib.request.urlopen(req, timeout=3)
+                if resp.status in (200, 204):
+                    logger.info(f"✅ Clash 核心重载成功 (controller={ctrl})，新节点已即时生效")
+                    return
+            except Exception as e:
+                logger.debug(f"Clash 重载尝试 {ctrl} 失败: {e}")
+
+        logger.warning("⚠️ Clash 核心重载未成功（订阅文件已更新，请在 Clash Verge 界面手动点击更新以使节点立即生效）")
+    except Exception as e:
+        logger.warning(f"Clash 核心重载过程异常: {e}")
 
 
 async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=None):
