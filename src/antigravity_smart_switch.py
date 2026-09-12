@@ -603,13 +603,6 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=4, text="1", target_href=
                     if data.get("id") == cur_id:
                         return data
 
-            # 0. 确保中文汉化语言包已通过 CDP 注入到界面中
-            try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, ensure_chinese_localization_injected)
-            except Exception:
-                pass
-
             # 1. 抓取侧边栏所有会话列表
             fetch_rows_js = """
             (async () => {
@@ -975,6 +968,10 @@ def execute_auto_resume(max_windows=4, text="1", wait_timeout=180, exclude_pids=
         if not ws_url:
             logger.warning("未能获取到新 Antigravity 页面的 WebSocket 调试地址，跳过自动续接。")
             return False
+
+        # 在连接 CDP 执行窗口切换与扣 1 前，先确保中文语言包已注入生效
+        ensure_chinese_localization_injected()
+        time.sleep(0.5)
 
         logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排窗口打标与扣 '{text}' 续接...")
         for retry in range(2):
@@ -2106,6 +2103,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     # 【语言包保障】：在热重启或拉起后，主动确保 Antigravity 中文汉化包已注入生效
     # =========================================================================
     ensure_chinese_localization_injected()
+    time.sleep(1.0)  # 留出 1 秒让中文语言包 MutationObserver 遍历并翻译当前界面
 
     # =========================================================================
     # 【核心顺序 5】：启动后在前 4 对话窗口扣 1 (优先切号前活跃任务)
