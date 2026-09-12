@@ -1492,6 +1492,72 @@ def gracefully_exit_antigravity(timeout_seconds=5.0):
             pass
 
 
+def hot_restart_language_server(wait_timeout=25.0):
+    """
+    无缝切号核心：只杀 language_server.exe，等待 Electron 前端自动重新拉起。
+    编辑器窗口、布局、对话历史完全不关闭。
+    新语言服务启动时从 Windows Credential Manager 读取最新写入的新账号 Token。
+
+    返回值:
+        True  - 热重启成功（新进程已出现）
+        False - 超时失败（Electron 未自动重拉，需降级到完整重启）
+    """
+    if not psutil:
+        logger.warning("[热重启] psutil 不可用，无法执行无缝热重启，将降级到完整重启")
+        return False
+
+    # 1. 找到当前 language_server 进程
+    def _find_ls():
+        result = []
+        for p in psutil.process_iter(["pid", "name", "exe"]):
+            try:
+                n = (p.info["name"] or "").lower()
+                e = (p.info["exe"] or "").lower()
+                if "language_server" in n and "antigravity" in e:
+                    result.append(p)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return result
+
+    procs = _find_ls()
+    if not procs:
+        logger.info("[热重启] 未发现运行中的 language_server 进程，跳过热重启步骤")
+        return True  # 没有进程也算"成功"——无需额外操作
+
+    old_pids = {p.pid for p in procs}
+    logger.info(f"[热重启] 发现 language_server 进程 PID={old_pids}，即将执行无损 Kill...")
+
+    # 2. Kill 语言服务（不动 Antigravity.exe 主进程）
+    for p in procs:
+        try:
+            p.kill()
+            logger.info(f"[热重启] Kill PID={p.pid} OK")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+        except Exception as e:
+            logger.warning(f"[热重启] Kill PID={p.pid} 异常: {e}")
+
+    # 3. 轮询等待 Electron 自动重新拉起新语言服务（新 PID 出现）
+    logger.info(f"[热重启] 等待 Electron 自动重启语言服务（最多 {int(wait_timeout)}s）...")
+    deadline = time.time() + wait_timeout
+    while time.time() < deadline:
+        time.sleep(1.0)
+        new_procs = _find_ls()
+        new_pids = {p.pid for p in new_procs}
+        # 新进程出现且 PID 与旧进程完全不同 → 热重启成功
+        if new_pids and not (new_pids & old_pids):
+            elapsed = int(time.time() - (deadline - wait_timeout))
+            logger.info(f"[热重启] 成功！{elapsed}s 后新 language_server 进程已就绪: PID={new_pids}")
+            return True
+        # 旧进程"复活"（Electron 复用原 PID，极罕见）：也视为成功
+        if new_pids and (new_pids & old_pids):
+            logger.info(f"[热重启] 旧进程 PID={new_pids & old_pids} 复活，视为成功")
+            return True
+
+    logger.warning(f"[热重启] 超过 {int(wait_timeout)}s，Electron 未自动重启 language_server，降级到完整重启")
+    return False
+
+
 def decrypt_cockpit_account(account_id):
     """从 Cockpit Tools 本地安全加密存储中无损解密指定账号的完整数据 (含 access_token, refresh_token)"""
     key_path = os.path.join(COCKPIT_DIR, "secure-account-storage.key")
@@ -1958,36 +2024,56 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     logger.info("⚡ [步骤 2/5] 专线网络保持：当前 17897 专线与节点已在上一轮验证通畅，直接复用原有专线（跳过订阅刷新与节点重选）...")
 
     # =========================================================================
-    # 【核心顺序 3】：退出反重力 (此时新账号凭据与订阅已全部就绪，优雅退出释放句柄与锁)
+    # 【核心顺序 3/4】：退出反重力并重启
+    #   - Beta 模式（无缝热重启）：只杀 language_server，让 Electron 原地重拉，编辑器窗口不关闭
+    #   - 普通模式 / 热重启失败降级：优雅退出整个 Antigravity + 启动器重拉新实例
     # =========================================================================
-    logger.info(f"🚪 [步骤 3/5] 退出反重力：切号与订阅已就绪，正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
-    gracefully_exit_antigravity(timeout_seconds=5.0)
+    hot_restart_success = False
+    if is_beta_mode():
+        logger.info(f"🔥 [步骤 3/5] 无缝热重启（Beta 模式）：仅 Kill language_server，Electron 原地重新拉起新服务，编辑器窗口保持完好...")
+        hot_restart_success = hot_restart_language_server(wait_timeout=25.0)
+        if hot_restart_success:
+            logger.info("✅ [步骤 3/5 完成] 语言服务热重启成功，编辑器窗口完好，跳过步骤 4（无需拉起启动器）")
+        else:
+            logger.warning("⚠️ [步骤 3/5] 热重启失败，降级为完整重启方案...")
 
-    # =========================================================================
-    # 【核心顺序 4】：启动启动器 (派发桌面智能启动器拉起新实例，挂载 17897 专线代理)
-    # =========================================================================
-    logger.info("🚀 [步骤 4/5] 启动启动器：正在派发桌面智能启动器拉起全新实例并挂载专线代理...")
-    launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
+    if not hot_restart_success:
+        logger.info(f"🚪 [步骤 3/5] 退出反重力：切号与订阅已就绪，正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
+        gracefully_exit_antigravity(timeout_seconds=5.0)
+
+        # =====================================================================
+        # 【核心顺序 4】：启动启动器 (派发桌面智能启动器拉起新实例，挂载 17897 专线代理)
+        # =====================================================================
+        logger.info("🚀 [步骤 4/5] 启动启动器：正在派发桌面智能启动器拉起全新实例并挂载专线代理...")
+        launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
+    else:
+        logger.info("⏭️  [步骤 4/5] 已跳过（热重启成功，无需重新拉起启动器）")
 
     # =========================================================================
     # 【核心顺序 5】：启动后在前 3 对话窗口扣 1 (优先切号前活跃任务)
     # =========================================================================
-    logger.info("🎯 [步骤 5/5] 自动续接：正在等待新实例就绪，并在前 3 个对话窗口扣 1 (优先切号前活跃任务)...")
+    logger.info("🎯 [步骤 5/5] 自动续接：正在等待语言服务就绪，并在前 3 个对话窗口扣 1 (优先切号前活跃任务)...")
+    # 热重启成功时 Antigravity 主进程未变，不需要 exclude_pids 排除旧进程
+    resume_exclude_pids = None if hot_restart_success else ([old_pid] if old_pid else None)
+    # 热重启成功时语言服务已就绪，等待时间可大幅缩短
+    resume_wait_timeout = 45 if hot_restart_success else 180
     execute_auto_resume(
         max_windows=3,
         text="1",
-        wait_timeout=180,
-        exclude_pids=[old_pid] if old_pid else None,
+        wait_timeout=resume_wait_timeout,
+        exclude_pids=resume_exclude_pids,
         target_href=target_href
     )
     clear_pending_switch()
     reset_language_server_log_pos()
 
-    # 6. 切换并重启成功：按规则【发桌面也发飞书】
-    succ_title = "Antigravity 切换并重启成功"
+    # 6. 切换成功：按规则【发桌面也发飞书】
+    mode_desc = "无缝热重启（编辑器窗口未关闭）" if hot_restart_success else "完整重启"
+    succ_title = "Antigravity 切换成功"
     succ_msg = (
         f"✅ 账号已成功切换至: {best_acc['email']}\n"
-        f"🚀 17897 专线网络已重新挂载，前 3 个对话窗口已自动扣 1 续接完成！"
+        f"🔥 切换模式: {mode_desc}\n"
+        f"🚀 17897 专线复用，前 3 个对话窗口已自动扣 1 续接完成！"
     )
     send_dual_notification(succ_title, succ_msg, status="info")
     return "switched"
