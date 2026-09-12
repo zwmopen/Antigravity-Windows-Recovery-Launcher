@@ -335,7 +335,7 @@ def read_pending_switch():
         return None
 
 
-def write_pending_auto_resume(max_windows=3, text="1", target_href=None, target_title=None):
+def write_pending_auto_resume(max_windows=4, text="1", target_href=None, target_title=None):
     """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌，支持活动会话精准锚定)"""
     try:
         os.makedirs(os.path.dirname(PENDING_AUTO_RESUME_FILE), exist_ok=True)
@@ -579,12 +579,12 @@ def _reload_clash_core(clash_dir, profiles_config):
         logger.warning(f"Clash 核心重载过程异常: {e}")
 
 
-async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=None, force_send=None):
+async def _cdp_execute_auto_resume(ws_url, max_windows=4, text="1", target_href=None, force_send=None):
     """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持活动会话精准锚定与草稿自愈提交)"""
     if force_send is None:
         force_send = is_beta_mode()
     if force_send:
-        logger.info("⚡ [测试版模式] 已启用强制扣 1 续接策略：忽略窗口生成/加载状态，一律强制键入 '1' 并回车！")
+        logger.info("⚡ [测试版模式] 已启用强制扣 1 续接策略：忽略窗口生成/加载状态，一律强制键入 '1' 并等待 5 秒回车！")
     import websockets
     try:
         async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
@@ -598,20 +598,20 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                     payload["params"] = params
                 await ws.send(json.dumps(payload))
                 while True:
-                    resp = json.loads(await ws.recv())
-                    if resp.get("id") == cur_id:
-                        return resp.get("result", {})
+                    msg = await ws.recv()
+                    data = json.loads(msg)
+                    if data.get("id") == cur_id:
+                        return data
 
+            # 1. 抓取侧边栏所有会话列表
             fetch_rows_js = """
             (async () => {
-                let rows = [];
+                let rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                 let toggleFound = false;
                 let toggleAria = null;
-                for (let retry = 0; retry < 120; retry++) {
-                    rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                for (let retry = 0; retry < 40; retry++) {
                     if (rows.length > 0) break;
-                    // 仅当侧边栏确实处于折叠状态 (aria-expanded === "false") 时，才点击展开
-                    const toggleBtn = document.querySelector('[data-testid="sidebar-toggle"], button[aria-label*="sidebar" i], button[aria-label*="Sidebar" i], button[aria-label*="侧边栏" i]');
+                    const toggleBtn = document.querySelector('button[aria-label*="toggle" i], button[aria-label*="sidebar" i], button[aria-label*="历史" i], button[data-testid="sidebar-toggle"]');
                     if (toggleBtn) {
                         toggleFound = true;
                         toggleAria = toggleBtn.getAttribute('aria-expanded');
@@ -627,9 +627,14 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                 const convs = rows.map((r, i) => {
                     const titleDiv = r.querySelector('.truncate');
                     const a = r.querySelector('a');
+                    let t = titleDiv ? titleDiv.textContent.trim() : '';
+                    if (!t && r.innerText) {
+                        t = r.innerText.split('\n')[0].trim();
+                    }
+                    if (!t) t = `会话-${i + 1}`;
                     return {
                         index: i,
-                        title: titleDiv ? titleDiv.textContent.trim() : '未知会话',
+                        title: t,
                         href: a ? a.getAttribute('href') : '',
                         isSelected: r.classList.contains('bg-sidebar-secondary')
                     };
@@ -761,10 +766,15 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                     results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": prep_status})
                     continue
 
+                wait_enter_sec = 5.0 if (force_send or is_beta_mode()) else 0.5
                 if prep_status == "ready":
                     # b. 采用原生 CDP Input.insertText 模拟真实按键输入 (触发 Lexical 状态模型绑定)
                     await cdp_call("Input.insertText", {"text": str(text)})
-                    await asyncio.sleep(0.3)
+                    logger.info(f"已向会话 [{title}] 键入 '{text}'，等待 {wait_enter_sec:.1f} 秒待界面组件彻底加载沉降后再敲击回车提交...")
+                    await asyncio.sleep(wait_enter_sec)
+                elif prep_status in ("ready_has_text", "ready_custom_draft"):
+                    logger.info(f"会话 [{title}] 检测到已有内容/草稿，等待 {wait_enter_sec:.1f} 秒待界面完全加载后再敲击回车提交...")
+                    await asyncio.sleep(wait_enter_sec)
 
                 # c. 检测发送按钮并触发点击 (双重提交机制：按钮点击 + 原生 Enter 保底)
                 send_js = f"""
@@ -895,7 +905,7 @@ def get_antigravity_main_pid():
     return 0
 
 
-def execute_auto_resume(max_windows=3, text="1", wait_timeout=180, exclude_pids=None, target_href=None):
+def execute_auto_resume(max_windows=4, text="1", wait_timeout=180, exclude_pids=None, target_href=None):
     """执行前排任务窗口打标与自动续接 (单飞互斥保护，支持活动会话精准锚定)"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
@@ -1971,7 +1981,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
 
     # 1. 记录切号待办事务与断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
     write_pending_switch(best_acc)
-    write_pending_auto_resume(max_windows=3, text="1", target_href=target_href, target_title=target_title)
+    write_pending_auto_resume(max_windows=4, text="1", target_href=target_href, target_title=target_title)
     try:
         os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
         with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
@@ -2056,15 +2066,15 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         logger.info("⏭️  [步骤 4/5] 已跳过（热重启成功，无需重新拉起启动器）")
 
     # =========================================================================
-    # 【核心顺序 5】：启动后在前 3 对话窗口扣 1 (优先切号前活跃任务)
+    # 【核心顺序 5】：启动后在前 4 对话窗口扣 1 (优先切号前活跃任务)
     # =========================================================================
-    logger.info("🎯 [步骤 5/5] 自动续接：正在等待语言服务就绪，并在前 3 个对话窗口扣 1 (优先切号前活跃任务)...")
+    logger.info("🎯 [步骤 5/5] 自动续接：正在等待语言服务就绪，并在前 4 个对话窗口扣 1 (优先切号前活跃任务)...")
     # 热重启成功时 Antigravity 主进程未变，不需要 exclude_pids 排除旧进程
     resume_exclude_pids = None if hot_restart_success else ([old_pid] if old_pid else None)
     # 热重启成功时语言服务已就绪，等待时间可大幅缩短
     resume_wait_timeout = 45 if hot_restart_success else 180
     execute_auto_resume(
-        max_windows=3,
+        max_windows=4,
         text="1",
         wait_timeout=resume_wait_timeout,
         exclude_pids=resume_exclude_pids,
@@ -2079,7 +2089,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     succ_msg = (
         f"✅ 账号已成功切换至: {best_acc['email']}\n"
         f"🔥 切换模式: {mode_desc}\n"
-        f"🚀 17897 专线复用，前 3 个对话窗口已自动扣 1 续接完成！"
+        f"🚀 17897 专线复用，前 4 个对话窗口已自动扣 1 续接完成！"
     )
     send_dual_notification(succ_title, succ_msg, status="info")
     return "switched"
@@ -2368,7 +2378,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
     if pending_resume and is_antigravity_running():
         logger.info("发现切号后待自动续接的事务凭据，正在执行前排窗口自动扣 1 续接...")
         execute_auto_resume(
-            max_windows=pending_resume.get("max_windows", 3),
+            max_windows=pending_resume.get("max_windows", 4),
             text=pending_resume.get("text", "1"),
             wait_timeout=15
         )
