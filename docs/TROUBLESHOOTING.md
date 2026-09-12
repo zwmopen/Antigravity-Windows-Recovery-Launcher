@@ -77,3 +77,28 @@
   2. **全链路哈希一致性自证**：交付必须验证 `src/`、`releases/current/` 与 `%LOCALAPPDATA%` 实机文件的 SHA-256 哈希 100% 字节级对齐；
   3. **历史版本归档清零**：历史发布物统一由 GitHub Releases 托管归档，本地 `releases/public` 严格只保留当前唯一最新包，杜绝旧版本残留。
 - **适用版本**：1.4.15+。
+
+---
+
+## 7. Windows PowerShell 5.1 编码吞噬：无 BOM UTF-8 在中文系统引发 ParserError 导致所有入口全灭
+
+- **现象**：
+  1. 自动切号时旧 Antigravity 正常关闭后，新实例迟迟无法启动，守护神日志持续报 `未能获取到新 Antigravity 页面的 WebSocket 调试地址`；
+  2. 用户双击桌面的“Antigravity 稳”或“Antigravity 测”，启动器界面闪退或弹出报错，均无法启动应用；
+  3. `launcher-error.log` 连续记录语法解析致命错误：
+     ```text
+     所在位置 ...\Antigravity-ProxySupervisor.ps1:2376 字符: 1
+     + }
+     + ~
+     表达式中缺少紧跟在“}”后的操作数。
+     CategoryInfo : ParserError: (:) [], ParentContainsErrorRecordException
+     ```
+- **根因分析**：
+  1. **双入口同一核心架构**：桌面的“Antigravity 稳.lnk”与“Antigravity 测.lnk”底层调用的都是同一个二进制启动器 `Antigravity-Recovery-Launcher.exe`，该启动器在后台通过 Windows 系统自带的 `powershell.exe`（Windows PowerShell 5.1）去执行核心自愈脚本 `Antigravity-ProxySupervisor.ps1`。一旦该脚本发生语法或编码损坏，所有桌面入口连同后台自动切号全军覆没；
+  2. **PowerShell 5.1 致命编码陷阱**：在简体中文 Windows（系统默认 ANSI 代码页为 936 / GBK）下，Windows PowerShell 5.1 读取脚本时，如果文件是**无 BOM 的普通 UTF-8**，它**不会**将其识别为 UTF-8，而是强制按系统的 **GBK** 编码进行解码！
+  3. **多字节字符吞噬语法符号**：UTF-8 编码下每个中文字符占 3 个字节，而 GBK 每个字符占 2 个字节。当脚本中添加了包含中文的注释或字符串时，由于字节流错位，中文注释末尾的字节与后续代码中的英文冒号、花括号、换行符等发生字节粘连吞噬，导致 PowerShell 5.1 语法解析器把花括号 `{` 或 `}` 吞掉或破坏，最终在随后的某行抛出莫名其妙的 `ParserError: 缺少紧跟在“}”后的操作数` 并在脚本第一行解析阶段就立即暴毙（`exit=1`）。
+- **治理与防回归铁律**：
+  1. **构建链路强制 BOM 注入与 AST 语法预检**：在 `build.ps1` 中新增 `Copy-WithUtf8BomAndValidate` 门禁。所有 `.ps1` 脚本在构建时必须先通过 PowerShell 官方抽象语法树解析器（`[System.Management.Automation.Language.Parser]::ParseFile`）进行语法预检；预检通过后，一律使用 `New-Object System.Text.UTF8Encoding($true)`（强制带 BOM 的 UTF-8）输出；
+  2. **严禁无 BOM 格式入库**：在 Windows PowerShell 5.1 运行环境中，带 BOM 是唯一能够免疫全球各种本地 ANSI 编码吞噬的工业级规范。
+- **适用版本**：1.5.1+。
+
