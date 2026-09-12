@@ -1,6 +1,19 @@
 # 变更记录
 
+## 1.5.1 稳定版 (Stable Release) — 2026-09-12
+
+- **Clash 订阅热重载 (Clash Core Hot-Reload after Subscription Refresh)**：
+  - 新增 `_reload_clash_core()` 函数，订阅文件写入后通过 mihomo external-controller API (`PUT /configs?force=true`) 触发热重载；
+  - 修复旧行为：订阅内容虽已下载覆写到磁盘，但 Clash Verge UI 和内存中的节点不刷新，需手动点界面更新的问题；
+  - 优先读取 `config.yaml` 中的 `external-controller`，读不到则 fallback 至激活 Profile 本身，最终 fallback 至常见端口候选列表；
+  - 重载失败时降级为 WARNING 日志，不阻断切号主流程。
+- **节点调度策略升级 (Speed-First & Geo-Locality)**：
+  - 抛弃旧版"美国优先"标签偏好，全面改为**网速优先（延迟低优先）**；
+  - 顺应 Google 账号的"同地区一致性原则"：用户日常挂日本节点（30ms~80ms），Antigravity 账号登录地点与反重力代理出口保持同一国家/地区，降低异地登录触发 400 异常的概率；
+  - 动态将日本节点全面标注为 `🌟 高速`、`🔥 同地` 及 `✅ 优先`；默认专线状态为"高速专线就绪"。
+
 ## 1.5.0 正式稳定版 (Stable Release) — 2026-09-12
+
 
 - **并行门禁淘汰机制 (Parallel Disqualification Gate)**：
   - 针对备选账号设立一票否决并行门禁：只要账号满足 `gemini_weekly <= 1.0%`（周额度见底）或 `gemini_5h <= 5.0%`（5小时滚动额度耗尽），立即一票否决淘汰，坚决不作为候选切号目标；

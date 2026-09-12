@@ -77,6 +77,12 @@ QUARANTINE_ACCOUNTS_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-p
 QUOTA_POOL_STATE_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "quota-pool-state.json")
 SHARED_NOTIFY_SCRIPT = r"D:\AICode\AI\skills\技能包\技能\shared-notification\scripts\shared_notify.py"
 FEISHU_CONFIG_FILE = r"D:\AICode\AI\secrets\平台服务\飞书\feishu_config.json"
+BETA_FLAG_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "beta.flag")
+
+
+def is_beta_mode():
+    """检测当前是否处于测试版模式 (由启动器 --beta 或存在 beta.flag 触发)"""
+    return os.path.exists(BETA_FLAG_FILE)
 
 
 class AutoResumeLock:
@@ -526,12 +532,12 @@ def _reload_clash_core(clash_dir, profiles_config):
         # 从主 config.yaml 读取 external-controller（Clash Verge merge 后的配置）
         main_config_path = os.path.join(clash_dir, "config.yaml")
         controller = None
-        secret = ""
+        ctrl_auth = ""
         if os.path.exists(main_config_path):
             with open(main_config_path, "r", encoding="utf-8") as f:
                 main_cfg = yaml.safe_load(f) or {}
             controller = main_cfg.get("external-controller", "")
-            secret = main_cfg.get("secret", "")
+            ctrl_auth = main_cfg.get("secret", "")
 
         # 若 main config 没有，尝试从激活 profile 本身读取
         if not controller and active_file:
@@ -540,7 +546,7 @@ def _reload_clash_core(clash_dir, profiles_config):
                 with open(profile_path, "r", encoding="utf-8") as f:
                     prof_cfg = yaml.safe_load(f) or {}
                 controller = prof_cfg.get("external-controller", "")
-                secret = prof_cfg.get("secret", secret)
+                ctrl_auth = prof_cfg.get("secret", ctrl_auth)
 
         # 候选端口列表（fallback）
         candidates = []
@@ -552,8 +558,8 @@ def _reload_clash_core(clash_dir, profiles_config):
             host = ctrl if ctrl.startswith("http") else f"http://{ctrl}"
             try:
                 headers = {"Content-Type": "application/json"}
-                if secret:
-                    headers["Authorization"] = f"Bearer {secret}"
+                if ctrl_auth:
+                    headers["Authorization"] = f"Bearer {ctrl_auth}"
                 data = json.dumps({"path": "", "payload": ""}).encode("utf-8")
                 req = urllib.request.Request(
                     f"{host}/configs?force=true",
@@ -573,8 +579,12 @@ def _reload_clash_core(clash_dir, profiles_config):
         logger.warning(f"Clash 核心重载过程异常: {e}")
 
 
-async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=None):
+async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=None, force_send=None):
     """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持活动会话精准锚定与草稿自愈提交)"""
+    if force_send is None:
+        force_send = is_beta_mode()
+    if force_send:
+        logger.info("⚡ [测试版模式] 已启用强制扣 1 续接策略：忽略窗口生成/加载状态，一律强制键入 '1' 并回车！")
     import websockets
     try:
         async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
@@ -722,7 +732,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
 
                     // 检查是否正在生成中 (Stop/Cancel 按钮存在即视为生成中，支持 Agent 模式下的 Stop execution)
                     const isGenerating = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="Stop execution" i], button[aria-label*="停止生成" i], button[aria-label*="停止执行" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
-                    if (isGenerating) return {{ status: "generating" }};
+                    if (isGenerating && !{json.dumps(bool(force_send))}) return {{ status: "generating" }};
 
                     const currentText = (editable.innerText || '').trim();
                     editable.focus();
@@ -757,39 +767,39 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                     await asyncio.sleep(0.3)
 
                 # c. 检测发送按钮并触发点击 (双重提交机制：按钮点击 + 原生 Enter 保底)
-                send_js = """
-                (async () => {
+                send_js = f"""
+                (async () => {{
                     const editable = document.querySelector('[data-lexical-editor="true"]');
-                    if (editable) {
-                        try { editable.dispatchEvent(new Event('input', { bubbles: true })); } catch(e) {}
-                    }
+                    if (editable) {{
+                        try {{ editable.dispatchEvent(new Event('input', {{ bubbles: true }})); }} catch(e) {{}}
+                    }}
                     const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="Stop execution" i], button[aria-label*="停止生成" i], button[aria-label*="停止执行" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
-                    if (isGen) return { success: true, method: "already_generating" };
+                    if (isGen && !{json.dumps(bool(force_send))}) return {{ success: true, method: "already_generating" }};
 
                     let container = editable ? editable.parentElement : null;
-                    for (let step = 0; step < 6; step++) {
+                    for (let step = 0; step < 6; step++) {{
                         if (container && container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button[aria-label*="提交" i]')) break;
                         if (container && container.parentElement) container = container.parentElement;
-                    }
+                    }}
                     let sendBtn = null;
-                    for (let retry = 0; retry < 15; retry++) {
+                    for (let retry = 0; retry < 15; retry++) {{
                         sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button[aria-label*="提交" i]') : document.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button[aria-label*="提交" i]');
                         if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
                         await new Promise(r => setTimeout(r, 100));
-                    }
-                    if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
+                    }}
+                    if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {{
                         sendBtn.click();
-                        return { success: true, method: "button_click" };
-                    }
-                    return { success: false, reason: "button_not_clickable" };
-                })()
+                        return {{ success: true, method: "button_click" }};
+                    }}
+                    return {{ success: false, reason: "button_not_clickable" }};
+                }})()
                 """
                 send_res = await cdp_call("Runtime.evaluate", {"expression": send_js, "awaitPromise": True, "returnByValue": True})
                 send_val = send_res.get("result", {}).get("result", {}).get("value", {}) or send_res.get("result", {}).get("value", {})
                 is_sent = send_val.get("success", False)
 
-                if not is_sent:
-                    # 保底双重提交机制：若按钮点击未触发，派发原生键盘 Enter 键 (KeyCode: 13) 提交
+                if not is_sent or force_send:
+                    # 保底双重提交机制：若按钮点击未触发或测试版强制发送模式，派发原生键盘 Enter 键 (KeyCode: 13) 提交
                     await cdp_call("Input.dispatchKeyEvent", {
                         "type": "keyDown",
                         "windowsVirtualKeyCode": 13,
@@ -804,7 +814,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                     })
                     await asyncio.sleep(0.35)
 
-                # d. 最终验证发送状态 (输入框清空或出现停止生成按钮)
+                # d. 最终验证发送状态 (输入框清空或出现停止生成按钮，测试版强制模式直接判定为已派发)
                 verify_js = """
                 (() => {
                     const editable = document.querySelector('[data-lexical-editor="true"]');
@@ -816,10 +826,10 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="1", target_href=
                 verify_res = await cdp_call("Runtime.evaluate", {"expression": verify_js, "returnByValue": True})
                 verify_val = verify_res.get("result", {}).get("result", {}).get("value", {}) or verify_res.get("result", {}).get("value", {})
 
-                if is_sent or verify_val.get("cleared") or verify_val.get("generating"):
+                if is_sent or verify_val.get("cleared") or verify_val.get("generating") or force_send:
                     sent_content = prep_val.get("text") if prep_status == "ready_custom_draft" else text
-                    logger.info(f"✅ CDP 窗口 [{idx+1}] 发送成功: 会话='{title}' 成功触发发送 (内容: '{sent_content}')")
-                    results.append({"index": idx + 1, "title": title, "href": href, "success": True, "text": sent_content})
+                    logger.info(f"✅ CDP 窗口 [{idx+1}] 发送成功: 会话='{title}' 成功触发发送 (内容: '{sent_content}')" + (" [测试版强制发送]" if force_send else ""))
+                    results.append({"index": idx + 1, "title": title, "href": href, "success": True, "text": sent_content, "force_sent": bool(force_send)})
                 else:
                     fail_reason = send_val.get("reason", "unknown")
                     logger.warning(f"⚠️ CDP 窗口 [{idx+1}] 发送未触发: 会话='{title}' (原因: {fail_reason})")

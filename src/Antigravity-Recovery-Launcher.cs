@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.5.0.0")]
-[assembly: AssemblyFileVersion("1.5.0.0")]
-[assembly: AssemblyInformationalVersion("1.5.0")]
+[assembly: AssemblyVersion("1.5.1.0")]
+[assembly: AssemblyFileVersion("1.5.1.0")]
+[assembly: AssemblyInformationalVersion("1.5.1")]
 
 namespace AntigravityLauncher
 {
@@ -65,6 +65,20 @@ namespace AntigravityLauncher
             TraceLog("Main invoked: " + (args != null ? string.Join(" ", args) : "null"));
             bool backgroundMode = HasArgument(args, "--background");
             bool forceLaunch = HasArgument(args, "--force-launch");
+            bool betaMode = HasArgument(args, "--beta");
+
+            // Beta 模式：写入 beta.flag 文件，供 Python 守护进程读取以启用测试版行为
+            string betaFlagPath = Path.Combine(RuntimeDirectory, "beta.flag");
+            if (betaMode)
+            {
+                try
+                {
+                    Directory.CreateDirectory(RuntimeDirectory);
+                    File.WriteAllText(betaFlagPath, "1");
+                    TraceLog("Beta mode enabled. beta.flag written.");
+                }
+                catch { }
+            }
 
             // 1. 后台静默自愈模式 (由 AccountWatcher 调度，无任何 UI)
             if (backgroundMode)
@@ -685,9 +699,67 @@ namespace AntigravityLauncher
     }
 
     // ==========================================
+    // 视觉核心：轻巧最小化按钮 (CapsuleMinimizeButton)
+    // ==========================================
+    internal sealed class CapsuleMinimizeButton : Control
+    {
+        private bool isHovered = false;
+
+        public CapsuleMinimizeButton()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+            Size = new Size(24, 24);
+            Cursor = Cursors.Hand;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { isHovered = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { isHovered = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            if (isHovered)
+            {
+                using (var path = new GraphicsPath())
+                {
+                    path.AddEllipse(rect);
+                    using (var b = new SolidBrush(Color.FromArgb(219, 234, 254)))
+                    {
+                        e.Graphics.FillPath(b, path);
+                    }
+                }
+            }
+            Color tc = isHovered ? Color.FromArgb(37, 99, 235) : Color.FromArgb(148, 163, 184);
+            using (var pen = new Pen(tc, 2f))
+            {
+                int y = Height / 2 + 3;
+                e.Graphics.DrawLine(pen, 6, y, Width - 7, y);
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_PRINTCLIENT = 0x0318;
+            const int WM_PRINT = 0x0317;
+            if (m.Msg == WM_PRINTCLIENT || m.Msg == WM_PRINT)
+            {
+                using (Graphics g = Graphics.FromHdc(m.WParam))
+                {
+                    OnPaint(new PaintEventArgs(g, ClientRectangle));
+                }
+                return;
+            }
+            base.WndProc(ref m);
+        }
+    }
+
+    // ==========================================
     // 热启动选择动作枚举
     // ==========================================
     internal enum HotLaunchAction { Activate, Repair, Cancel }
+
 
     // ==========================================
     // 视觉核心：热启动拟态胶囊按钮 (HotLaunchButton)
@@ -805,7 +877,7 @@ namespace AntigravityLauncher
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(480, 146);
             BackColor = Color.FromArgb(248, 250, 252);
-            ShowInTaskbar = false;
+            ShowInTaskbar = true;
             TopMost = true;
             KeyPreview = true;
 
@@ -840,6 +912,22 @@ namespace AntigravityLauncher
                 Close();
             };
 
+            var minimizeButton = new CapsuleMinimizeButton
+            {
+                Location = new Point(ClientSize.Width - 58, 12),
+                Size = new Size(22, 22)
+            };
+            minimizeButton.Click += delegate
+            {
+                TopMost = false;
+                WindowState = FormWindowState.Minimized;
+            };
+            Resize += delegate
+            {
+                if (WindowState == FormWindowState.Normal)
+                    TopMost = true;
+            };
+
             btnActivate = new HotLaunchButton("进入代码窗口 (3s)")
             {
                 Location = new Point(20, 78),
@@ -865,6 +953,7 @@ namespace AntigravityLauncher
             };
 
             Controls.Add(closeButton);
+            Controls.Add(minimizeButton);
             Controls.Add(btnActivate);
             Controls.Add(btnRepair);
 
@@ -1239,6 +1328,21 @@ namespace AntigravityLauncher
                 Close();
             };
 
+            var btnMinimize = new CapsuleMinimizeButton
+            {
+                Location = new Point(Width - 58, 10)
+            };
+            btnMinimize.Click += delegate
+            {
+                TopMost = false;
+                WindowState = FormWindowState.Minimized;
+            };
+            Resize += delegate
+            {
+                if (WindowState == FormWindowState.Normal)
+                    TopMost = true;
+            };
+
             progressBar = new CapsuleProgress
             {
                 Location = new Point(22, 148),
@@ -1246,7 +1350,7 @@ namespace AntigravityLauncher
                 ProgressValue = 3
             };
 
-            Controls.AddRange(new Control[] { btnClose, progressBar });
+            Controls.AddRange(new Control[] { btnClose, btnMinimize, progressBar });
 
             Shown += delegate
             {
