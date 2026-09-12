@@ -335,7 +335,7 @@ def read_pending_switch():
         return None
 
 
-def write_pending_auto_resume(max_windows=4, text="1", target_href=None, target_title=None):
+def write_pending_auto_resume(max_windows=4, text="继续", target_href=None, target_title=None):
     """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌，支持活动会话精准锚定)"""
     try:
         os.makedirs(os.path.dirname(PENDING_AUTO_RESUME_FILE), exist_ok=True)
@@ -579,12 +579,12 @@ def _reload_clash_core(clash_dir, profiles_config):
         logger.warning(f"Clash 核心重载过程异常: {e}")
 
 
-async def _cdp_execute_auto_resume(ws_url, max_windows=4, text="1", target_href=None, force_send=None):
+async def _cdp_execute_auto_resume(ws_url, max_windows=4, text="继续", target_href=None, force_send=None):
     """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持活动会话精准锚定与草稿自愈提交)"""
     if force_send is None:
         force_send = True
     if force_send:
-        logger.info("⚡ [全版本标准特性] 已启用强制扣 1 续接策略：键入 '1' 并沉淀 5 秒后回车提交，彻底杜绝回车吞噬！")
+        logger.info("⚡ [全版本标准特性] 已启用强制续接策略：键入'继续'并沉淀 5 秒后回车提交，彻底杜绝回车吞噬！")
     import websockets
     try:
         async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
@@ -905,7 +905,7 @@ def get_antigravity_main_pid():
     return 0
 
 
-def execute_auto_resume(max_windows=4, text="1", wait_timeout=180, exclude_pids=None, target_href=None):
+def execute_auto_resume(max_windows=4, text="继续", wait_timeout=180, exclude_pids=None, target_href=None):
     """执行前排任务窗口打标与自动续接 (单飞互斥保护，支持活动会话精准锚定)"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
@@ -2021,7 +2021,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
 
     # 1. 记录切号待办事务与断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
     write_pending_switch(best_acc)
-    write_pending_auto_resume(max_windows=4, text="1", target_href=target_href, target_title=target_title)
+    write_pending_auto_resume(max_windows=4, text="继续", target_href=target_href, target_title=target_title)
     try:
         os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
         with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
@@ -2106,16 +2106,16 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     time.sleep(1.0)  # 留出 1 秒让中文语言包 MutationObserver 遍历并翻译当前界面
 
     # =========================================================================
-    # 【核心顺序 5】：启动后在前 4 对话窗口扣 1 (优先切号前活跃任务)
+    # 【核心顺序 5】：启动后在前 4 对话窗口发"继续"续接 (优先切号前活跃任务)
     # =========================================================================
-    logger.info("🎯 [步骤 5/5] 自动续接：正在等待语言服务就绪，并在前 4 个对话窗口扣 1 (优先切号前活跃任务)...")
+    logger.info("🎯 [步骤 5/5] 自动续接：正在等待语言服务就绪，并在前 4 个对话窗口发送'继续' (优先切号前活跃任务)...")
     # 热重启成功时 Antigravity 主进程未变，不需要 exclude_pids 排除旧进程
     resume_exclude_pids = None if hot_restart_success else ([old_pid] if old_pid else None)
     # 热重启成功时语言服务已就绪，等待时间可大幅缩短
     resume_wait_timeout = 45 if hot_restart_success else 180
     execute_auto_resume(
         max_windows=4,
-        text="1",
+        text="继续",
         wait_timeout=resume_wait_timeout,
         exclude_pids=resume_exclude_pids,
         target_href=target_href
@@ -2129,7 +2129,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     succ_msg = (
         f"✅ 账号已成功切换至: {best_acc['email']}\n"
         f"🔥 切换模式: {mode_desc}\n"
-        f"🚀 17897 专线复用，前 4 个对话窗口已自动扣 1 续接完成！"
+        f"🚀 17897 专线复用，前 4 个对话窗口已自动发送'继续'续接完成！"
     )
     send_dual_notification(succ_title, succ_msg, status="info")
     return "switched"
@@ -2416,10 +2416,10 @@ def run_watch_daemon(threshold=5.0, interval=30):
     # 检查是否存在待自动续接的事务凭据
     pending_resume = read_pending_auto_resume()
     if pending_resume and is_antigravity_running():
-        logger.info("发现切号后待自动续接的事务凭据，正在执行前排窗口自动扣 1 续接...")
+        logger.info("发现切号后待自动续接的事务凭据，正在执行前排窗口自动发送'继续'续接...")
         execute_auto_resume(
             max_windows=pending_resume.get("max_windows", 4),
-            text=pending_resume.get("text", "1"),
+            text=pending_resume.get("text", "继续"),
             wait_timeout=15
         )
     
