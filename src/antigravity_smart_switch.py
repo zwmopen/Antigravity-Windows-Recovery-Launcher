@@ -973,11 +973,28 @@ def execute_auto_resume(max_windows=4, text="继续", wait_timeout=180, exclude_
         ensure_chinese_localization_injected()
         time.sleep(0.5)
 
-        logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排窗口打标与扣 '{text}' 续接...")
+        logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排窗口打标与发送'{text}'续接...")
         for retry in range(2):
             try:
                 result = asyncio.run(_cdp_execute_auto_resume(ws_url, max_windows=max_windows, text=text, target_href=target_href))
                 logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
+
+                # 热重启后侧边栏可能尚未加载完成，no_conversations_found 时等 30 秒自动重试一次
+                if not result.get("success") and result.get("reason") == "no_conversations_found" and retry == 0:
+                    logger.warning(f"⏳ [续接重试] 侧边栏对话列表暂未加载，等待 30 秒后自动重试 (第 {retry + 1}/2 次)...")
+                    time.sleep(30.0)
+                    # 重新刷新 ws_url（以防热重启后端口变化）
+                    port = get_devtools_active_port(wait_timeout=5)
+                    if port:
+                        try:
+                            req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
+                            pages = json.loads(req.read().decode("utf-8"))
+                            page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+                            if page:
+                                ws_url = page["webSocketDebuggerUrl"]
+                        except Exception:
+                            pass
+                    continue  # 进入第 2 次循环重试
 
                 clear_pending_auto_resume()
 
