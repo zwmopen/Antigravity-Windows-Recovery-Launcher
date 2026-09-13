@@ -603,39 +603,23 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     if data.get("id") == cur_id:
                         return data
 
-            # 1. 抓取侧边栏所有会话列表
+            # 1. 抓取侧边栏所有会话列表（同步JS + Python侧轮询，彻底规避 awaitPromise 兼容问题）
             fetch_rows_js = """
-            (async () => {
-                let rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                let toggleFound = false;
-                let toggleAria = null;
-                for (let retry = 0; retry < 40; retry++) {
-                    rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                    if (rows.length > 0) break;
-                    const toggleBtn = document.querySelector('button[aria-label*="toggle" i], button[aria-label*="sidebar" i], button[aria-label*="历史" i], button[data-testid="sidebar-toggle"]');
-                    if (toggleBtn) {
-                        toggleFound = true;
-                        toggleAria = toggleBtn.getAttribute('aria-expanded');
-                        if (toggleAria === 'false') {
-                            toggleBtn.click();
-                            await new Promise(r => setTimeout(r, 600));
-                            rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                            if (rows.length > 0) break;
-                        }
-                    }
-                    await new Promise(r => setTimeout(r, 500));
+            (() => {
+                const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                const toggleBtn = document.querySelector('button[aria-label*="toggle" i], button[aria-label*="sidebar" i], button[aria-label*="历史" i], button[data-testid="sidebar-toggle"]');
+                if (rows.length === 0 && toggleBtn) {
+                    const aria = toggleBtn.getAttribute('aria-expanded');
+                    if (aria === 'false') { toggleBtn.click(); }
                 }
                 const convs = rows.map((r, i) => {
                     const titleDiv = r.querySelector('.truncate');
                     const a = r.querySelector('a');
                     let t = titleDiv ? titleDiv.textContent.trim() : '';
-                    if (!t && r.innerText) {
-                        t = r.innerText.split('\n')[0].trim();
-                    }
+                    if (!t && r.innerText) { t = r.innerText.split('\\n')[0].trim(); }
                     if (!t) t = `会话-${i + 1}`;
                     return {
-                        index: i,
-                        title: t,
+                        index: i, title: t,
                         href: a ? a.getAttribute('href') : '',
                         isSelected: r.classList.contains('bg-sidebar-secondary')
                     };
@@ -645,26 +629,38 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     currentUrl: window.location.href,
                     diagnostics: {
                         rows_found: rows.length,
-                        toggle_found: toggleFound,
-                        toggle_aria: toggleAria,
+                        toggle_found: !!toggleBtn,
                         title: document.title,
                         url: window.location.href
                     }
                 };
             })()
             """
-            r = await cdp_call("Runtime.evaluate", {"expression": fetch_rows_js, "awaitPromise": True, "returnByValue": True})
-            eval_val = r.get("result", {}).get("result", {}).get("value", {}) or r.get("result", {}).get("value", {})
-            all_convs = eval_val.get("convs", [])
-            current_url = eval_val.get("currentUrl", "")
-            diag = eval_val.get("diagnostics", {})
+            # Python 侧轮询：每 2 秒同步查一次，最多 20 次（40 秒）
+            all_convs = []
+            current_url = ""
+            diag = {}
+            for poll_i in range(20):
+                r = await cdp_call("Runtime.evaluate", {"expression": fetch_rows_js, "returnByValue": True})
+                eval_val = r.get("result", {}).get("result", {}).get("value") or {}
+                if not eval_val:
+                    eval_val = r.get("result", {}).get("value") or {}
+                all_convs = eval_val.get("convs", [])
+                current_url = eval_val.get("currentUrl", "")
+                diag = eval_val.get("diagnostics", {})
+                if all_convs:
+                    logger.info(f"✅ [Python轮询第{poll_i+1}次] 发现 {len(all_convs)} 个侧边栏会话")
+                    break
+                logger.info(f"⏳ [Python轮询第{poll_i+1}/20次] 侧边栏暂无对话 (rows={diag.get('rows_found',0)}, title={diag.get('title','?')})，2s后重试...")
+                await asyncio.sleep(2)
+
             if not all_convs:
                 logger.warning(f"CDP 侧边栏会话列表检索结束 (发现 0 个会话)，DOM 现场: {diag}")
                 record_incident(
                     incident_type="CDP_RESUME_NO_CONVERSATIONS",
                     severity="INFO",
                     summary="CDP 自动续接未检索到前排历史会话",
-                    root_cause="轮询 60 秒后未在 DOM 中发现 conversation-row-sidebar 元素。侧边栏可能为空或未展开。",
+                    root_cause="轮询 40 秒后未在 DOM 中发现 conversation-row-sidebar 元素。侧边栏可能为空或未展开。",
                     evidence=diag,
                     action_taken="跳过自动发送，保持当前新窗口正常在前台使用",
                     recommended_action="若需自动续接前排任务，请确认 Antigravity 侧边栏存在历史对话记录。"
