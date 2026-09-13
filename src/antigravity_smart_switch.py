@@ -609,7 +609,8 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 let rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                 let toggleFound = false;
                 let toggleAria = null;
-                for (let retry = 0; retry < 120; retry++) {
+                for (let retry = 0; retry < 40; retry++) {
+                    rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                     if (rows.length > 0) break;
                     const toggleBtn = document.querySelector('button[aria-label*="toggle" i], button[aria-label*="sidebar" i], button[aria-label*="历史" i], button[data-testid="sidebar-toggle"]');
                     if (toggleBtn) {
@@ -621,11 +622,6 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                             if (rows.length > 0) break;
                         }
-                    }
-                    // 每 20 次（10s）尝试触发页面导航到根路径，帮助侧边栏加载
-                    if (retry > 0 && retry % 20 === 0 && window.location.pathname !== '/') {
-                        try { window.location.href = '/'; } catch(e) {}
-                        await new Promise(r => setTimeout(r, 2000));
                     }
                     await new Promise(r => setTimeout(r, 500));
                 }
@@ -974,9 +970,11 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
             logger.warning("未能获取到新 Antigravity 页面的 WebSocket 调试地址，跳过自动续接。")
             return False
 
-        # 在连接 CDP 执行窗口切换与扣 1 前，先确保中文语言包已注入生效
+        # 在连接 CDP 执行窗口切换与续接前，先确保中文语言包已注入生效
         ensure_chinese_localization_injected()
-        time.sleep(0.5)
+        # 热重启后页面需要时间完成账号切换导航，等待 10 秒让侧边栏对话列表稳定加载
+        logger.info("⏳ 等待 10 秒让热重启后页面完全稳定...")
+        time.sleep(10.0)
 
         logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排窗口打标与发送'{text}'续接...")
         for retry in range(2):
