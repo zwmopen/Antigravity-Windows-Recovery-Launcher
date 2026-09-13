@@ -335,7 +335,7 @@ def read_pending_switch():
         return None
 
 
-def write_pending_auto_resume(max_windows=4, text="继续", target_href=None, target_title=None):
+def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, target_title=None):
     """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌，支持活动会话精准锚定)"""
     try:
         os.makedirs(os.path.dirname(PENDING_AUTO_RESUME_FILE), exist_ok=True)
@@ -579,7 +579,7 @@ def _reload_clash_core(clash_dir, profiles_config):
         logger.warning(f"Clash 核心重载过程异常: {e}")
 
 
-async def _cdp_execute_auto_resume(ws_url, max_windows=4, text="继续", target_href=None, force_send=None):
+async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_href=None, force_send=None):
     """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持活动会话精准锚定与草稿自愈提交)"""
     if force_send is None:
         force_send = True
@@ -905,7 +905,7 @@ def get_antigravity_main_pid():
     return 0
 
 
-def execute_auto_resume(max_windows=4, text="继续", wait_timeout=180, exclude_pids=None, target_href=None):
+def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_pids=None, target_href=None):
     """执行前排任务窗口打标与自动续接 (单飞互斥保护，支持活动会话精准锚定)"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
@@ -2038,7 +2038,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
 
     # 1. 记录切号待办事务与断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
     write_pending_switch(best_acc)
-    write_pending_auto_resume(max_windows=4, text="继续", target_href=target_href, target_title=target_title)
+    write_pending_auto_resume(max_windows=3, text="继续", target_href=target_href, target_title=target_title)
     try:
         os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
         with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
@@ -2131,7 +2131,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     # 热重启成功时语言服务已就绪，等待时间可大幅缩短
     resume_wait_timeout = 45 if hot_restart_success else 180
     execute_auto_resume(
-        max_windows=4,
+        max_windows=3,
         text="继续",
         wait_timeout=resume_wait_timeout,
         exclude_pids=resume_exclude_pids,
@@ -2633,3 +2633,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
