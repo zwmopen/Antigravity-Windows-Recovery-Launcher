@@ -609,7 +609,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 let rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                 let toggleFound = false;
                 let toggleAria = null;
-                for (let retry = 0; retry < 40; retry++) {
+                for (let retry = 0; retry < 120; retry++) {
                     if (rows.length > 0) break;
                     const toggleBtn = document.querySelector('button[aria-label*="toggle" i], button[aria-label*="sidebar" i], button[aria-label*="历史" i], button[data-testid="sidebar-toggle"]');
                     if (toggleBtn) {
@@ -621,6 +621,11 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                             if (rows.length > 0) break;
                         }
+                    }
+                    // 每 20 次（10s）尝试触发页面导航到根路径，帮助侧边栏加载
+                    if (retry > 0 && retry % 20 === 0 && window.location.pathname !== '/') {
+                        try { window.location.href = '/'; } catch(e) {}
+                        await new Promise(r => setTimeout(r, 2000));
                     }
                     await new Promise(r => setTimeout(r, 500));
                 }
