@@ -65,7 +65,7 @@ function Copy-WithUtf8BomAndValidate {
 }
 
 Copy-WithUtf8BomAndValidate (Join-Path $source 'Antigravity-ProxySupervisor.ps1') (Join-Path $release 'Antigravity-ProxySupervisor.ps1')
-foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd', 'antigravity_smart_switch.py', 'Invoke-AntigravitySmartSwitch.ps1', 'Antigravity-QuickSwitch.cmd')) {
+foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd', 'antigravity_smart_switch.py', 'Invoke-AntigravitySmartSwitch.ps1', 'Antigravity-QuickSwitch.cmd', 'restore_workspace_panes.py')) {
     $helperPath = Join-Path $source $helper
     if (Test-Path -LiteralPath $helperPath) {
         $destPath = Join-Path $release $helper

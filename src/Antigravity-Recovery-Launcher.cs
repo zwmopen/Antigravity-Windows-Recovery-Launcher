@@ -1915,14 +1915,14 @@ namespace AntigravityLauncher
             Text = "⚙ 启动器设置";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(380, 160);
+            ClientSize = new Size(380, 240);
             BackColor = Color.FromArgb(248, 250, 252);
             ShowInTaskbar = false;
             TopMost = true;
 
             var lblTitle = new Label
             {
-                Text = "⚙  功能开关",
+                Text = "⚙  启动器设置与工作台",
                 Font = new Font("微软雅黑", 12f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(30, 30, 30),
                 Location = new Point(20, 16),
@@ -1940,7 +1940,7 @@ namespace AntigravityLauncher
                 Text = "切号后自动在前排各分屏窗口发送\"继续\"",
                 Font = new Font("微软雅黑", 10f),
                 ForeColor = Color.FromArgb(40, 40, 40),
-                Location = new Point(20, 60),
+                Location = new Point(20, 56),
                 AutoSize = true,
                 Checked = settings.AutoResumeEnabled
             };
@@ -1949,15 +1949,131 @@ namespace AntigravityLauncher
                 Text = "关闭后切号只换账号，绝不会自动向窗口发消息",
                 Font = new Font("微软雅黑", 9f),
                 ForeColor = Color.FromArgb(140, 140, 140),
-                Location = new Point(38, 84),
+                Location = new Point(38, 78),
                 AutoSize = true
             };
+
+            var sep2 = new Panel
+            {
+                Location = new Point(20, 106),
+                Size = new Size(340, 1),
+                BackColor = Color.FromArgb(220, 224, 230)
+            };
+            var lblWorkbench = new Label
+            {
+                Text = "🪟  多分屏工作台记忆与恢复",
+                Font = new Font("微软雅黑", 10f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(40, 40, 40),
+                Location = new Point(20, 116),
+                AutoSize = true
+            };
+
+            var btnRestorePanes = new Button
+            {
+                Text = "🪟 恢复昨日6分屏",
+                Font = new Font("微软雅黑", 9.5f),
+                Location = new Point(20, 140),
+                Size = new Size(165, 32),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(241, 245, 249),
+                ForeColor = Color.FromArgb(30, 41, 59),
+                Cursor = Cursors.Hand
+            };
+            btnRestorePanes.FlatAppearance.BorderColor = Color.FromArgb(203, 213, 225);
+
+            var btnSavePanes = new Button
+            {
+                Text = "💾 记忆当前分屏",
+                Font = new Font("微软雅黑", 9.5f),
+                Location = new Point(195, 140),
+                Size = new Size(165, 32),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(241, 245, 249),
+                ForeColor = Color.FromArgb(30, 41, 59),
+                Cursor = Cursors.Hand
+            };
+            btnSavePanes.FlatAppearance.BorderColor = Color.FromArgb(203, 213, 225);
+
+            var lblPanesStatus = new Label
+            {
+                Text = "",
+                Font = new Font("微软雅黑", 9f),
+                ForeColor = Color.FromArgb(22, 163, 74),
+                Location = new Point(20, 178),
+                Size = new Size(340, 18),
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+
+            btnRestorePanes.Click += delegate
+            {
+                try
+                {
+                    string py = Program.ResolvePythonw();
+                    string script = Path.Combine(Program.AppDirectory, "restore_workspace_panes.py");
+                    if (File.Exists(script))
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = py,
+                            Arguments = "\"" + script + "\"",
+                            WorkingDirectory = Program.AppDirectory,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        });
+                        lblPanesStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                        lblPanesStatus.Text = "✅ 已发送恢复指令，1~2秒内呈现";
+                    }
+                    else
+                    {
+                        lblPanesStatus.ForeColor = Color.FromArgb(220, 38, 38);
+                        lblPanesStatus.Text = "❌ 脚本文件不存在: restore_workspace_panes.py";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    lblPanesStatus.ForeColor = Color.FromArgb(220, 38, 38);
+                    lblPanesStatus.Text = "❌ " + ex.Message;
+                }
+            };
+
+            btnSavePanes.Click += delegate
+            {
+                try
+                {
+                    string py = Program.ResolvePythonw();
+                    string script = Path.Combine(Program.AppDirectory, "restore_workspace_panes.py");
+                    if (File.Exists(script))
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = py,
+                            Arguments = "\"" + script + "\" --save",
+                            WorkingDirectory = Program.AppDirectory,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        });
+                        lblPanesStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                        lblPanesStatus.Text = "✅ 已成功记忆当前屏幕分屏布局！";
+                    }
+                    else
+                    {
+                        lblPanesStatus.ForeColor = Color.FromArgb(220, 38, 38);
+                        lblPanesStatus.Text = "❌ 脚本文件不存在: restore_workspace_panes.py";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    lblPanesStatus.ForeColor = Color.FromArgb(220, 38, 38);
+                    lblPanesStatus.Text = "❌ " + ex.Message;
+                }
+            };
+
             var btnOk = new Button
             {
                 Text = "确定",
-                Font = new Font("微软雅黑", 10f),
-                Location = new Point(ClientSize.Width - 100, ClientSize.Height - 44),
-                Size = new Size(80, 32),
+                Font = new Font("微软雅黑", 9.5f),
+                Location = new Point(ClientSize.Width - 95, ClientSize.Height - 38),
+                Size = new Size(75, 28),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(37, 99, 235),
                 ForeColor = Color.White,
@@ -1981,6 +2097,11 @@ namespace AntigravityLauncher
             Controls.Add(sep);
             Controls.Add(chkAutoResume);
             Controls.Add(lblHint);
+            Controls.Add(sep2);
+            Controls.Add(lblWorkbench);
+            Controls.Add(btnRestorePanes);
+            Controls.Add(btnSavePanes);
+            Controls.Add(lblPanesStatus);
             Controls.Add(btnOk);
             Controls.Add(closeBtn);
 
