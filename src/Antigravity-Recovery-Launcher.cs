@@ -762,6 +762,49 @@ namespace AntigravityLauncher
     // ==========================================
     // 热启动选择动作枚举
     // ==========================================
+        // ==========================================
+    // 视觉核心：轻巧设置齿轮按钮 (CapsuleSettingsButton)
+    // ==========================================
+    internal sealed class CapsuleSettingsButton : Control
+    {
+        private bool isHovered = false;
+
+        public CapsuleSettingsButton()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+            Size = new Size(22, 22);
+            Cursor = Cursors.Hand;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { isHovered = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { isHovered = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            if (isHovered)
+            {
+                using (var path = new GraphicsPath())
+                {
+                    path.AddEllipse(rect);
+                    using (var b = new SolidBrush(Color.FromArgb(219, 234, 254)))
+                    {
+                        e.Graphics.FillPath(b, path);
+                    }
+                }
+            }
+            Color tc = isHovered ? Color.FromArgb(37, 99, 235) : Color.FromArgb(148, 163, 184);
+            using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            using (var font = new Font("Segoe UI Symbol", 10.5f))
+            using (var b = new SolidBrush(tc))
+            {
+                e.Graphics.DrawString("⚙", font, b, new RectangleF(0, 0, Width, Height), sf);
+            }
+        }
+    }
+
     internal enum HotLaunchAction { Activate, Repair, Cancel }
 
     // ==========================================
@@ -971,36 +1014,12 @@ namespace AntigravityLauncher
                     TopMost = true;
             };
 
-            btnActivate = new HotLaunchButton("进入代码窗口 (3s)")
+            var settingsButton = new CapsuleSettingsButton
             {
-                Location = new Point(20, 78),
-                Size = new Size(192, 46)
+                Location = new Point(ClientSize.Width - 94, 11),
+                Size = new Size(22, 22)
             };
-            btnActivate.Click += delegate
-            {
-                StopTimer();
-                Action = HotLaunchAction.Activate;
-                Close();
-            };
-
-            btnRepair = new HotLaunchButton("⚡ 重启修复")
-            {
-                Location = new Point(228, 78),
-                Size = new Size(152, 46)
-            };
-            btnRepair.Click += delegate
-            {
-                StopTimer();
-                Action = HotLaunchAction.Repair;
-                Close();
-            };
-
-            var btnSettings = new HotLaunchButton("⚙ 设置")
-            {
-                Location = new Point(396, 78),
-                Size = new Size(64, 46)
-            };
-            btnSettings.Click += delegate
+            settingsButton.Click += delegate
             {
                 StopTimer();
                 btnActivate.ButtonText = "进入代码窗口";
@@ -1010,11 +1029,35 @@ namespace AntigravityLauncher
                 }
             };
 
+            btnActivate = new HotLaunchButton("进入代码窗口 (3s)")
+            {
+                Location = new Point(20, 78),
+                Size = new Size(212, 46)
+            };
+            btnActivate.Click += delegate
+            {
+                StopTimer();
+                Action = HotLaunchAction.Activate;
+                Close();
+            };
+
+            btnRepair = new HotLaunchButton("⚡ 一键重启修复")
+            {
+                Location = new Point(248, 78),
+                Size = new Size(212, 46)
+            };
+            btnRepair.Click += delegate
+            {
+                StopTimer();
+                Action = HotLaunchAction.Repair;
+                Close();
+            };
+
             Controls.Add(closeButton);
             Controls.Add(minimizeButton);
+            Controls.Add(settingsButton);
             Controls.Add(btnActivate);
             Controls.Add(btnRepair);
-            Controls.Add(btnSettings);
 
             MouseDown += delegate(object s, MouseEventArgs me)
             {
