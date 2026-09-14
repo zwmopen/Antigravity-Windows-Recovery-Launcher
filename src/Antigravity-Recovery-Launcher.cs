@@ -14,8 +14,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.6.2.0")]
-[assembly: AssemblyFileVersion("1.6.2.0")]
+[assembly: AssemblyVersion("1.6.4.0")]
+[assembly: AssemblyFileVersion("1.6.4.0")]
 [assembly: AssemblyInformationalVersion("1.6.0")]
 
 namespace AntigravityLauncher
@@ -29,6 +29,7 @@ namespace AntigravityLauncher
         internal static readonly string LauncherLogPath = Path.Combine(RuntimeDirectory, "launcher-error.log");
         internal static readonly string SupervisorLogPath = Path.Combine(RuntimeDirectory, "supervisor.log");
         internal static readonly string SupervisorStatePath = Path.Combine(RuntimeDirectory, "supervisor-state.json");
+        internal static readonly string LauncherSettingsPath = Path.Combine(RuntimeDirectory, "launcher-settings.json");
         internal static readonly string IconPath = Path.Combine(AppDirectory, "Antigravity-Launcher.ico");
 
         private const string SingleInstanceMutexName = @"Local\AntigravityLauncherSingleInstance";
@@ -763,6 +764,45 @@ namespace AntigravityLauncher
     // ==========================================
     internal enum HotLaunchAction { Activate, Repair, Cancel }
 
+    // ==========================================
+    // 启动器设置（持久化到 launcher-settings.json）
+    // ==========================================
+    internal class LauncherSettings
+    {
+        private bool autoResumeEnabled;
+        internal bool AutoResumeEnabled { get { return autoResumeEnabled; } set { autoResumeEnabled = value; } }
+
+        internal LauncherSettings() { autoResumeEnabled = false; }
+
+        internal static LauncherSettings Load()
+        {
+            try
+            {
+                if (File.Exists(Program.LauncherSettingsPath))
+                {
+                    string json = File.ReadAllText(Program.LauncherSettingsPath, Encoding.UTF8);
+                    var s = new LauncherSettings();
+                    var m = System.Text.RegularExpressions.Regex.Match(json, "\"auto_resume_enabled\"\\s*:\\s*(true|false)");
+                    if (m.Success) s.AutoResumeEnabled = m.Groups[1].Value == "true";
+                    return s;
+                }
+            }
+            catch { }
+            return new LauncherSettings();
+        }
+
+        internal void Save()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Program.LauncherSettingsPath));
+                string json = "{\n  \"auto_resume_enabled\": " + (AutoResumeEnabled ? "true" : "false") + "\n}\n";
+                File.WriteAllText(Program.LauncherSettingsPath, json, Encoding.UTF8);
+            }
+            catch { }
+        }
+    }
+
 
     // ==========================================
     // 视觉核心：热启动拟态胶囊按钮 (HotLaunchButton)
@@ -934,7 +974,7 @@ namespace AntigravityLauncher
             btnActivate = new HotLaunchButton("进入代码窗口 (3s)")
             {
                 Location = new Point(20, 78),
-                Size = new Size(212, 46)
+                Size = new Size(192, 46)
             };
             btnActivate.Click += delegate
             {
@@ -943,10 +983,10 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnRepair = new HotLaunchButton("⚡ 一键重启修复")
+            btnRepair = new HotLaunchButton("⚡ 重启修复")
             {
-                Location = new Point(248, 78),
-                Size = new Size(212, 46)
+                Location = new Point(228, 78),
+                Size = new Size(152, 46)
             };
             btnRepair.Click += delegate
             {
@@ -955,10 +995,26 @@ namespace AntigravityLauncher
                 Close();
             };
 
+            var btnSettings = new HotLaunchButton("⚙ 设置")
+            {
+                Location = new Point(396, 78),
+                Size = new Size(64, 46)
+            };
+            btnSettings.Click += delegate
+            {
+                StopTimer();
+                btnActivate.ButtonText = "进入代码窗口";
+                using (var sf = new LauncherSettingsForm())
+                {
+                    sf.ShowDialog(this);
+                }
+            };
+
             Controls.Add(closeButton);
             Controls.Add(minimizeButton);
             Controls.Add(btnActivate);
             Controls.Add(btnRepair);
+            Controls.Add(btnSettings);
 
             MouseDown += delegate(object s, MouseEventArgs me)
             {
@@ -1805,6 +1861,104 @@ namespace AntigravityLauncher
             internal int Ceiling;
         }
     }
+
+    // ==========================================
+    // 启动器设置面板 (LauncherSettingsForm)
+    // ==========================================
+    internal class LauncherSettingsForm : Form
+    {
+        public LauncherSettingsForm()
+        {
+            Text = "⚙ 启动器设置";
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new Size(380, 160);
+            BackColor = Color.FromArgb(248, 250, 252);
+            ShowInTaskbar = false;
+            TopMost = true;
+
+            var lblTitle = new Label
+            {
+                Text = "⚙  功能开关",
+                Font = new Font("微软雅黑", 12f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(30, 30, 30),
+                Location = new Point(20, 16),
+                AutoSize = true
+            };
+            var sep = new Panel
+            {
+                Location = new Point(20, 44),
+                Size = new Size(340, 1),
+                BackColor = Color.FromArgb(220, 224, 230)
+            };
+            var settings = LauncherSettings.Load();
+            var chkAutoResume = new CheckBox
+            {
+                Text = "切号后自动在前排各分屏窗口发送\"继续\"",
+                Font = new Font("微软雅黑", 10f),
+                ForeColor = Color.FromArgb(40, 40, 40),
+                Location = new Point(20, 60),
+                AutoSize = true,
+                Checked = settings.AutoResumeEnabled
+            };
+            var lblHint = new Label
+            {
+                Text = "关闭后切号只换账号，绝不会自动向窗口发消息",
+                Font = new Font("微软雅黑", 9f),
+                ForeColor = Color.FromArgb(140, 140, 140),
+                Location = new Point(38, 84),
+                AutoSize = true
+            };
+            var btnOk = new Button
+            {
+                Text = "确定",
+                Font = new Font("微软雅黑", 10f),
+                Location = new Point(ClientSize.Width - 100, ClientSize.Height - 44),
+                Size = new Size(80, 32),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(37, 99, 235),
+                ForeColor = Color.White,
+                Cursor = Cursors.Hand
+            };
+            btnOk.FlatAppearance.BorderSize = 0;
+            btnOk.Click += delegate
+            {
+                settings.AutoResumeEnabled = chkAutoResume.Checked;
+                settings.Save();
+                Close();
+            };
+            var closeBtn = new CapsuleCloseButton
+            {
+                Location = new Point(ClientSize.Width - 34, 11),
+                Size = new Size(22, 22)
+            };
+            closeBtn.Click += delegate { Close(); };
+
+            Controls.Add(lblTitle);
+            Controls.Add(sep);
+            Controls.Add(chkAutoResume);
+            Controls.Add(lblHint);
+            Controls.Add(btnOk);
+            Controls.Add(closeBtn);
+
+            MouseDown += delegate(object s, MouseEventArgs me)
+            {
+                if (me.Button == MouseButtons.Left)
+                {
+                    Program.ReleaseCapture();
+                    Program.SendMessage(Handle, 0xA1, 0x2, 0);
+                }
+            };
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ClassStyle |= 0x00020000;
+                return cp;
+            }
+        }
+    }
 }
-
-
