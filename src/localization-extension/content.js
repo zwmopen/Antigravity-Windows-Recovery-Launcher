@@ -9,6 +9,23 @@
   if (globalThis.__AntigravityZhContentInstalled) return;
   globalThis.__AntigravityZhContentInstalled = true;
 
+  // ── 永久隐藏右上角"安装 IDE"/"打开 IDE"/骨架加载按钮 ──────────────────
+  (function injectHideIdeStyle() {
+    var style = document.getElementById('__agy_hide_ide_btn__');
+    if (style) return;
+    style = document.createElement('style');
+    style.id = '__agy_hide_ide_btn__';
+    style.textContent = [
+      'button[data-testid="install-editor"]',
+      'button[data-testid^="open-editor"]',
+      'button[data-testid="editor-loading"]',
+      'a[data-testid="install-editor"]',
+      'a[data-testid^="open-editor"]'
+    ].join(',\n') + ' { display: none !important; }';
+    (document.head || document.documentElement).appendChild(style);
+  })();
+  // ─────────────────────────────────────────────────────────────────────────
+
   var DEBOUNCE_MS = 80;
   var MAX_WAIT_MS = 300;
   var pendingNodes = new Set();

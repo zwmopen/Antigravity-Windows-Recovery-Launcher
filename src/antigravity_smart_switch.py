@@ -2138,30 +2138,34 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     time.sleep(1.0)  # 留出 1 秒让中文语言包 MutationObserver 遍历并翻译当前界面
 
     # =========================================================================
-    # 【核心顺序 5】：启动后在前 4 对话窗口发"继续"续接 (优先切号前活跃任务)
+    # 【核心顺序 5】：启动后在前 3 对话窗口发"继续"续接 (优先切号前活跃任务)
     # =========================================================================
-    logger.info("🎯 [步骤 5/5] 自动续接：正在等待语言服务就绪，并在前 4 个对话窗口发送'继续' (优先切号前活跃任务)...")
     # 热重启成功时 Antigravity 主进程未变，不需要 exclude_pids 排除旧进程
     resume_exclude_pids = None if hot_restart_success else ([old_pid] if old_pid else None)
     # 热重启成功时语言服务已就绪，等待时间可大幅缩短
     resume_wait_timeout = 45 if hot_restart_success else 180
-    execute_auto_resume(
-        max_windows=3,
-        text="继续",
-        wait_timeout=resume_wait_timeout,
-        exclude_pids=resume_exclude_pids,
-        target_href=target_href
-    )
+    if _auto_resume_enabled:
+        logger.info("🎯 [步骤 5/5] 自动续接：正在等待语言服务就绪，并在前 3 个对话窗口发送'继续' (优先切号前活跃任务)...")
+        execute_auto_resume(
+            max_windows=3,
+            text="继续",
+            wait_timeout=resume_wait_timeout,
+            exclude_pids=resume_exclude_pids,
+            target_href=target_href
+        )
+    else:
+        logger.info("⏭ [步骤 5/5] 自动续接已关闭，跳过发送'继续'（可在启动器设置中开启）")
     clear_pending_switch()
     reset_language_server_log_pos()
 
     # 6. 切换成功：按规则【发桌面也发飞书】
     mode_desc = "无缝热重启（编辑器窗口未关闭）" if hot_restart_success else "完整重启"
     succ_title = "Antigravity 切换成功"
+    resume_desc = "前 3 个对话窗口已自动发送'继续'续接完成！" if _auto_resume_enabled else "自动续接已关闭"
     succ_msg = (
         f"✅ 账号已成功切换至: {best_acc['email']}\n"
         f"🔥 切换模式: {mode_desc}\n"
-        f"🚀 17897 专线复用，前 4 个对话窗口已自动发送'继续'续接完成！"
+        f"🚀 17897 专线复用，{resume_desc}"
     )
     send_dual_notification(succ_title, succ_msg, status="info")
     return "switched"
