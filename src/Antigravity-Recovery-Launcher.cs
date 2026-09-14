@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -11,11 +11,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("Antigravity 启动器")]
-[assembly: AssemblyProduct("Antigravity 启动器")]
-[assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.6.2.0")]
-[assembly: AssemblyFileVersion("1.6.2.0")]
+[assembly: AssemblyTitle("Antigravity 鍚姩鍣?)]
+[assembly: AssemblyProduct("Antigravity 鍚姩鍣?)]
+[assembly: AssemblyCopyright("Copyright 漏 2026 zwmopen")]
+[assembly: AssemblyVersion("1.6.3.0")]
+[assembly: AssemblyFileVersion("1.6.3.0")]
 [assembly: AssemblyInformationalVersion("1.6.0")]
 
 namespace AntigravityLauncher
@@ -29,6 +29,7 @@ namespace AntigravityLauncher
         internal static readonly string LauncherLogPath = Path.Combine(RuntimeDirectory, "launcher-error.log");
         internal static readonly string SupervisorLogPath = Path.Combine(RuntimeDirectory, "supervisor.log");
         internal static readonly string SupervisorStatePath = Path.Combine(RuntimeDirectory, "supervisor-state.json");
+        internal static readonly string LauncherSettingsPath = Path.Combine(RuntimeDirectory, "launcher-settings.json");
         internal static readonly string IconPath = Path.Combine(AppDirectory, "Antigravity-Launcher.ico");
 
         private const string SingleInstanceMutexName = @"Local\AntigravityLauncherSingleInstance";
@@ -67,7 +68,7 @@ namespace AntigravityLauncher
             bool forceLaunch = HasArgument(args, "--force-launch");
             bool betaMode = HasArgument(args, "--beta");
 
-            // Beta 模式：写入 beta.flag 文件，供 Python 守护进程读取以启用测试版行为
+            // Beta 妯″紡锛氬啓鍏?beta.flag 鏂囦欢锛屼緵 Python 瀹堟姢杩涚▼璇诲彇浠ュ惎鐢ㄦ祴璇曠増琛屼负
             string betaFlagPath = Path.Combine(RuntimeDirectory, "beta.flag");
             if (betaMode)
             {
@@ -80,7 +81,7 @@ namespace AntigravityLauncher
                 catch { }
             }
 
-            // 1. 后台静默自愈模式 (由 AccountWatcher 调度，无任何 UI)
+            // 1. 鍚庡彴闈欓粯鑷剤妯″紡 (鐢?AccountWatcher 璋冨害锛屾棤浠讳綍 UI)
             if (backgroundMode)
             {
                 TraceLog("Running in backgroundMode");
@@ -95,7 +96,7 @@ namespace AntigravityLauncher
                 }
             }
 
-            // 2. 检查是否已有启动器实例在运行 (互斥锁防重入)
+            // 2. 妫€鏌ユ槸鍚﹀凡鏈夊惎鍔ㄥ櫒瀹炰緥鍦ㄨ繍琛?(浜掓枼閿侀槻閲嶅叆)
             bool createdNew;
             try
             {
@@ -116,7 +117,7 @@ namespace AntigravityLauncher
             Application.SetCompatibleTextRenderingDefault(false);
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 
-            // 3. 检查 Antigravity 是否已经在运行中 (热启动场景：带 3 秒自动进入的双选卡片)
+            // 3. 妫€鏌?Antigravity 鏄惁宸茬粡鍦ㄨ繍琛屼腑 (鐑惎鍔ㄥ満鏅細甯?3 绉掕嚜鍔ㄨ繘鍏ョ殑鍙岄€夊崱鐗?
             bool antigravityRunning = IsAntigravityRunning();
             TraceLog("antigravityRunning=" + antigravityRunning + ", forceLaunch=" + forceLaunch);
 
@@ -145,8 +146,7 @@ namespace AntigravityLauncher
                 }
             }
 
-            // 4. 冷启动 / 重启修复：展示具备清晰通路与链路核验反馈的极简状态卡片
-            TraceLog("Displaying AntigravityLaunchCapsuleForm...");
+            // 4. 鍐峰惎鍔?/ 閲嶅惎淇锛氬睍绀哄叿澶囨竻鏅伴€氳矾涓庨摼璺牳楠屽弽棣堢殑鏋佺畝鐘舵€佸崱鐗?            TraceLog("Displaying AntigravityLaunchCapsuleForm...");
             string resolvedReason = GetRecoveryReason(args);
             if (string.IsNullOrEmpty(resolvedReason))
             {
@@ -304,7 +304,7 @@ namespace AntigravityLauncher
         }
 
         // ==========================================
-        // Win32 穿透唤醒与置顶逻辑 (突破 Windows 11 焦点限制)
+        // Win32 绌块€忓敜閱掍笌缃《閫昏緫 (绐佺牬 Windows 11 鐒︾偣闄愬埗)
         // ==========================================
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr OpenDesktop(string lpszDesktop, uint dwFlags, bool fInherit, uint dwDesiredAccess);
@@ -567,7 +567,7 @@ namespace AntigravityLauncher
             {
                 if (!File.Exists(filePath)) return null;
                 byte[] bytes = File.ReadAllBytes(filePath);
-                // 检索 ICO 文件内部嵌入的 256x256 高清 PNG 头部
+                // 妫€绱?ICO 鏂囦欢鍐呴儴宓屽叆鐨?256x256 楂樻竻 PNG 澶撮儴
                 for (int i = 0; i <= bytes.Length - 8; i++)
                 {
                     if (bytes[i] == 0x89 && bytes[i + 1] == 0x50 && bytes[i + 2] == 0x4E && bytes[i + 3] == 0x47)
@@ -586,7 +586,7 @@ namespace AntigravityLauncher
     }
 
     // ==========================================
-    // 视觉核心：精巧拟态圆角进度条 (CapsuleProgress)
+    // 瑙嗚鏍稿績锛氱簿宸ф嫙鎬佸渾瑙掕繘搴︽潯 (CapsuleProgress)
     // ==========================================
     internal sealed class CapsuleProgress : Control
     {
@@ -641,7 +641,7 @@ namespace AntigravityLauncher
     }
 
     // ==========================================
-    // 视觉核心：轻巧关闭按钮 (CapsuleCloseButton)
+    // 瑙嗚鏍稿績锛氳交宸у叧闂寜閽?(CapsuleCloseButton)
     // ==========================================
     internal sealed class CapsuleCloseButton : Control
     {
@@ -678,7 +678,7 @@ namespace AntigravityLauncher
             using (var brushX = new SolidBrush(tc))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
             {
-                e.Graphics.DrawString("✕", fontX, brushX, rect, sf);
+                e.Graphics.DrawString("鉁?, fontX, brushX, rect, sf);
             }
         }
 
@@ -699,7 +699,7 @@ namespace AntigravityLauncher
     }
 
     // ==========================================
-    // 视觉核心：轻巧最小化按钮 (CapsuleMinimizeButton)
+    // 瑙嗚鏍稿績锛氳交宸ф渶灏忓寲鎸夐挳 (CapsuleMinimizeButton)
     // ==========================================
     internal sealed class CapsuleMinimizeButton : Control
     {
@@ -759,13 +759,50 @@ namespace AntigravityLauncher
     }
 
     // ==========================================
-    // 热启动选择动作枚举
+    // 鐑惎鍔ㄩ€夋嫨鍔ㄤ綔鏋氫妇
     // ==========================================
     internal enum HotLaunchAction { Activate, Repair, Cancel }
 
+    // ==========================================
+    // 鍚姩鍣ㄨ缃紙鎸佷箙鍖栧埌 launcher-settings.json锛?    // ==========================================
+    internal class LauncherSettings
+    {
+        private bool autoResumeEnabled;
+        internal bool AutoResumeEnabled { get { return autoResumeEnabled; } set { autoResumeEnabled = value; } } // 鍒囧彿鍚庤嚜鍔ㄥ彂閫?缁х画"锛岄粯璁ゅ叧闂?
+        internal LauncherSettings() { autoResumeEnabled = false; }
+
+        internal static LauncherSettings Load()
+        {
+            try
+            {
+                if (File.Exists(Program.LauncherSettingsPath))
+                {
+                    string json = File.ReadAllText(Program.LauncherSettingsPath, Encoding.UTF8);
+                    var s = new LauncherSettings();
+                    var m = System.Text.RegularExpressions.Regex.Match(json, "\"auto_resume_enabled\"\\s*:\\s*(true|false)");
+                    if (m.Success) s.AutoResumeEnabled = m.Groups[1].Value == "true";
+                    return s;
+                }
+            }
+            catch { }
+            return new LauncherSettings();
+        }
+
+        internal void Save()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Program.LauncherSettingsPath));
+                string json = "{\n  \"auto_resume_enabled\": " + (AutoResumeEnabled ? "true" : "false") + "\n}\n";
+                File.WriteAllText(Program.LauncherSettingsPath, json, Encoding.UTF8);
+            }
+            catch { }
+        }
+    }
+
 
     // ==========================================
-    // 视觉核心：热启动拟态胶囊按钮 (HotLaunchButton)
+    // 瑙嗚鏍稿績锛氱儹鍚姩鎷熸€佽兌鍥婃寜閽?(HotLaunchButton)
     // ==========================================
     internal sealed class HotLaunchButton : Control
     {
@@ -857,7 +894,7 @@ namespace AntigravityLauncher
     }
 
     // ==========================================
-    // 热启动拟态选项卡片：带 3 秒自动进入倒计时 (AntigravityHotLaunchChoiceForm)
+    // 鐑惎鍔ㄦ嫙鎬侀€夐」鍗＄墖锛氬甫 3 绉掕嚜鍔ㄨ繘鍏ュ€掕鏃?(AntigravityHotLaunchChoiceForm)
     // ==========================================
     internal class AntigravityHotLaunchChoiceForm : Form
     {
@@ -868,14 +905,14 @@ namespace AntigravityLauncher
         private HotLaunchButton btnRepair;
         private CapsuleCloseButton closeButton;
         private Image appIcon = null;
-        private string egressBadgeText = "高速专线就绪";
-        private string statusBadgeText = "● 运行中";
-        private string subtitleText = "当前专线连接畅通 · 可秒切代码窗口，或一键重启自愈";
+        private string egressBadgeText = "楂橀€熶笓绾垮氨缁?;
+        private string statusBadgeText = "鈼?杩愯涓?;
+        private string subtitleText = "褰撳墠涓撶嚎杩炴帴鐣呴€?路 鍙鍒囦唬鐮佺獥鍙ｏ紝鎴栦竴閿噸鍚嚜鎰?;
 
         internal AntigravityHotLaunchChoiceForm()
         {
             Action = HotLaunchAction.Cancel;
-            Text = "Antigravity 启动助手";
+            Text = "Antigravity 鍚姩鍔╂墜";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(480, 146);
@@ -894,11 +931,11 @@ namespace AntigravityLauncher
                     var mEgress = System.Text.RegularExpressions.Regex.Match(json, "\"egress_country\"\\s*:\\s*\"([^\"]+)\"");
                     string egress = mEgress.Success ? mEgress.Groups[1].Value.Trim().ToUpperInvariant() : "";
                     if (egress == "US")
-                        egressBadgeText = "美国专线就绪";
+                        egressBadgeText = "缇庡浗涓撶嚎灏辩华";
                     else if (egress == "JP")
-                        egressBadgeText = "日本专线就绪";
+                        egressBadgeText = "鏃ユ湰涓撶嚎灏辩华";
                     else if (!string.IsNullOrEmpty(egress))
-                        egressBadgeText = egress + " 专线就绪";
+                        egressBadgeText = egress + " 涓撶嚎灏辩华";
                 }
             }
             catch { }
@@ -931,10 +968,10 @@ namespace AntigravityLauncher
                     TopMost = true;
             };
 
-            btnActivate = new HotLaunchButton("进入代码窗口 (3s)")
+            btnActivate = new HotLaunchButton("杩涘叆浠ｇ爜绐楀彛 (3s)")
             {
                 Location = new Point(20, 78),
-                Size = new Size(212, 46)
+                Size = new Size(192, 46)
             };
             btnActivate.Click += delegate
             {
@@ -943,10 +980,10 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnRepair = new HotLaunchButton("⚡ 一键重启修复")
+            btnRepair = new HotLaunchButton("鈿?閲嶅惎淇")
             {
-                Location = new Point(248, 78),
-                Size = new Size(212, 46)
+                Location = new Point(228, 78),
+                Size = new Size(152, 46)
             };
             btnRepair.Click += delegate
             {
@@ -955,10 +992,26 @@ namespace AntigravityLauncher
                 Close();
             };
 
+            var btnSettings = new HotLaunchButton("鈿?璁剧疆")
+            {
+                Location = new Point(396, 78),
+                Size = new Size(64, 46)
+            };
+            btnSettings.Click += delegate
+            {
+                StopTimer();
+                btnActivate.ButtonText = "杩涘叆浠ｇ爜绐楀彛";
+                using (var sf = new LauncherSettingsForm())
+                {
+                    sf.ShowDialog(this);
+                }
+            };
+
             Controls.Add(closeButton);
             Controls.Add(minimizeButton);
             Controls.Add(btnActivate);
             Controls.Add(btnRepair);
+            Controls.Add(btnSettings);
 
             MouseDown += delegate(object s, MouseEventArgs me)
             {
@@ -981,7 +1034,7 @@ namespace AntigravityLauncher
                 }
                 else
                 {
-                    btnActivate.ButtonText = "进入代码窗口 (" + remainingSeconds + "s)";
+                    btnActivate.ButtonText = "杩涘叆浠ｇ爜绐楀彛 (" + remainingSeconds + "s)";
                 }
             };
             countdownTimer.Start();
@@ -1131,7 +1184,7 @@ namespace AntigravityLauncher
     }
 
     // ==========================================
-    // 拟态状态卡片：包含清晰通路与链路核验反馈 (无缝渲染)
+    // 鎷熸€佺姸鎬佸崱鐗囷細鍖呭惈娓呮櫚閫氳矾涓庨摼璺牳楠屽弽棣?(鏃犵紳娓叉煋)
     // ==========================================
     internal class AntigravityLaunchCapsuleForm : Form
     {
@@ -1143,14 +1196,13 @@ namespace AntigravityLauncher
         private CapsuleProgress progressBar;
         private Image appIcon = null;
 
-        // 动态状态模型
-        private string lineStatusText = "正在检索可用专线…";
+        // 鍔ㄦ€佺姸鎬佹ā鍨?        private string lineStatusText = "姝ｅ湪妫€绱㈠彲鐢ㄤ笓绾库€?;
         private bool linePassed = false;
-        private string googleStatusText = "等待网络握手…";
+        private string googleStatusText = "绛夊緟缃戠粶鎻℃墜鈥?;
         private bool googlePassed = false;
-        private string modelStatusText = "等待链路验证…";
+        private string modelStatusText = "绛夊緟閾捐矾楠岃瘉鈥?;
         private bool modelPassed = false;
-        private string footerStatusText = "正在匹配最优专线通道…";
+        private string footerStatusText = "姝ｅ湪鍖归厤鏈€浼樹笓绾块€氶亾鈥?;
 
         public AntigravityLaunchCapsuleForm(string reason)
         {
@@ -1230,8 +1282,7 @@ namespace AntigravityLauncher
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
 
-            // 1. 卡片磨砂与拟态背景
-            using (var path = RoundedRectangle(bounds, 16))
+            // 1. 鍗＄墖纾ㄧ爞涓庢嫙鎬佽儗鏅?            using (var path = RoundedRectangle(bounds, 16))
             using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(250, 252, 255), Color.FromArgb(236, 244, 252), 90F))
             using (var border = new Pen(Color.FromArgb(205, 222, 238), 1.2F))
             {
@@ -1244,38 +1295,36 @@ namespace AntigravityLauncher
                 e.Graphics.DrawLine(highlight, 20, 2, Width - 20, 2);
             }
 
-            // 2. 高清 Antigravity 图标
+            // 2. 楂樻竻 Antigravity 鍥炬爣
             if (appIcon != null)
             {
                 e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 e.Graphics.DrawImage(appIcon, new Rectangle(20, 16, 36, 36));
             }
 
-            // 3. 标题
+            // 3. 鏍囬
             using (var fontTitle = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold))
             {
                 TextRenderer.DrawText(e.Graphics, "Antigravity", fontTitle, new Point(64, 16), Color.FromArgb(16, 43, 69));
             }
 
-            // 4. 拟态策略徽标 (直观体现底层：网速优先、同区低延、记忆好用)
-            DrawPillBadge(e.Graphics, "⚡ 网速优先", 170, 19, Color.FromArgb(219, 234, 254), Color.FromArgb(147, 197, 253), Color.FromArgb(29, 78, 216));
-            DrawPillBadge(e.Graphics, "🌐 同区低延", 260, 19, Color.FromArgb(224, 231, 255), Color.FromArgb(165, 180, 252), Color.FromArgb(67, 56, 202));
-            DrawPillBadge(e.Graphics, "⭐ 记忆好用", 348, 19, Color.FromArgb(220, 252, 231), Color.FromArgb(134, 239, 172), Color.FromArgb(21, 128, 61));
+            // 4. 鎷熸€佺瓥鐣ュ窘鏍?(鐩磋浣撶幇搴曞眰锛氱綉閫熶紭鍏堛€佸悓鍖轰綆寤躲€佽蹇嗗ソ鐢?
+            DrawPillBadge(e.Graphics, "鈿?缃戦€熶紭鍏?, 170, 19, Color.FromArgb(219, 234, 254), Color.FromArgb(147, 197, 253), Color.FromArgb(29, 78, 216));
+            DrawPillBadge(e.Graphics, "馃寪 鍚屽尯浣庡欢", 260, 19, Color.FromArgb(224, 231, 255), Color.FromArgb(165, 180, 252), Color.FromArgb(67, 56, 202));
+            DrawPillBadge(e.Graphics, "猸?璁板繂濂界敤", 348, 19, Color.FromArgb(220, 252, 231), Color.FromArgb(134, 239, 172), Color.FromArgb(21, 128, 61));
 
-            // 5. 三行直观、清晰的通路状态步骤 (无白边缝隙，融入背景)
+            // 5. 涓夎鐩磋銆佹竻鏅扮殑閫氳矾鐘舵€佹楠?(鏃犵櫧杈圭紳闅欙紝铻嶅叆鑳屾櫙)
             using (var fontStep = new Font("Microsoft YaHei UI", 9F))
             using (var fontDot = new Font("Segoe UI", 8.5F, FontStyle.Bold))
             {
-                // 行 1：本地专线
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 64, "本地专线", lineStatusText, linePassed);
-                // 行 2：Google 通路
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 90, "Google 通路", googleStatusText, googlePassed);
-                // 行 3：AI 模型服务
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 116, "AI 模型服务", modelStatusText, modelPassed);
+                // 琛?1锛氭湰鍦颁笓绾?                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 64, "鏈湴涓撶嚎", lineStatusText, linePassed);
+                // 琛?2锛欸oogle 閫氳矾
+                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 90, "Google 閫氳矾", googleStatusText, googlePassed);
+                // 琛?3锛欰I 妯″瀷鏈嶅姟
+                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 116, "AI 妯″瀷鏈嶅姟", modelStatusText, modelPassed);
             }
 
-            // 6. 底部柔和状态文字
-            using (var fontFooter = new Font("Microsoft YaHei UI", 8.5F))
+            // 6. 搴曢儴鏌斿拰鐘舵€佹枃瀛?            using (var fontFooter = new Font("Microsoft YaHei UI", 8.5F))
             {
                 TextRenderer.DrawText(e.Graphics, footerStatusText, fontFooter, new Point(22, 168), Color.FromArgb(100, 116, 139));
             }
@@ -1283,14 +1332,14 @@ namespace AntigravityLauncher
 
         private void DrawStepRow(Graphics g, Font fontText, Font fontDot, int x, int y, string label, string text, bool passed)
         {
-            string symbol = passed ? "✔" : "●";
+            string symbol = passed ? "鉁? : "鈼?;
             Color symbolColor = passed ? Color.FromArgb(22, 163, 74) : Color.FromArgb(59, 130, 246);
             Color labelColor = Color.FromArgb(30, 41, 59);
             Color contentColor = passed ? Color.FromArgb(21, 128, 61) : Color.FromArgb(71, 85, 105);
 
             TextRenderer.DrawText(g, symbol, fontDot, new Point(x, y + 1), symbolColor);
-            TextRenderer.DrawText(g, label + "：", fontText, new Point(x + 18, y), labelColor);
-            int labelWidth = TextRenderer.MeasureText(label + "：", fontText).Width;
+            TextRenderer.DrawText(g, label + "锛?, fontText, new Point(x + 18, y), labelColor);
+            int labelWidth = TextRenderer.MeasureText(label + "锛?, fontText).Width;
             TextRenderer.DrawText(g, text, fontText, new Point(x + 18 + labelWidth - 2, y), contentColor);
         }
 
@@ -1382,13 +1431,13 @@ namespace AntigravityLauncher
         {
             BeginInvoke(new Action(delegate
             {
-                lineStatusText = "已锁定高速专线 [美日低延迟]";
+                lineStatusText = "宸查攣瀹氶珮閫熶笓绾?[缇庢棩浣庡欢杩焆";
                 linePassed = true;
-                googleStatusText = "连通正常 · 授权畅通";
+                googleStatusText = "杩為€氭甯?路 鎺堟潈鐣呴€?;
                 googlePassed = true;
-                modelStatusText = "Gemini 编程模型验证通过";
+                modelStatusText = "Gemini 缂栫▼妯″瀷楠岃瘉閫氳繃";
                 modelPassed = true;
-                footerStatusText = Program.IsAntigravityRunning() ? "🚀 最优专线已就绪，正在切回代码窗口…" : "🚀 通路已全部就绪，正在打开 Antigravity…";
+                footerStatusText = Program.IsAntigravityRunning() ? "馃殌 鏈€浼樹笓绾垮凡灏辩华锛屾鍦ㄥ垏鍥炰唬鐮佺獥鍙ｂ€? : "馃殌 閫氳矾宸插叏閮ㄥ氨缁紝姝ｅ湪鎵撳紑 Antigravity鈥?;
                 progressBar.ProgressValue = 100;
                 Invalidate();
             }));
@@ -1408,8 +1457,8 @@ namespace AntigravityLauncher
 
             BeginInvoke(new Action(delegate
             {
-                lineStatusText = "专线自愈中 · 已接管检测进度…";
-                footerStatusText = "⚡ 检测到专线自愈正在进行，正在无缝接管…";
+                lineStatusText = "涓撶嚎鑷剤涓?路 宸叉帴绠℃娴嬭繘搴︹€?;
+                footerStatusText = "鈿?妫€娴嬪埌涓撶嚎鑷剤姝ｅ湪杩涜锛屾鍦ㄦ棤缂濇帴绠♀€?;
                 Invalidate();
             }));
 
@@ -1453,7 +1502,7 @@ namespace AntigravityLauncher
                     Invalidate();
                 }));
 
-                // 检查是否有新鲜就绪标记
+                // 妫€鏌ユ槸鍚︽湁鏂伴矞灏辩华鏍囪
                 if (logChunk.Contains("antigravity_live_seamless_attached") || logChunk.Contains("antigravity_ready"))
                 {
                     OnLaunchSuccess();
@@ -1478,7 +1527,7 @@ namespace AntigravityLauncher
                     catch { }
                 }
 
-                // 检查前序 Supervisor 互斥锁是否已释放
+                // 妫€鏌ュ墠搴?Supervisor 浜掓枼閿佹槸鍚﹀凡閲婃斁
                 if (!Program.IsSupervisorRunning())
                 {
                     Thread.Sleep(500);
@@ -1522,7 +1571,7 @@ namespace AntigravityLauncher
                 {
                     ExitCode = 2;
                     Close();
-                    MessageBox.Show("缺少 Antigravity 启动核心脚本：\n" + Program.ScriptPath, "启动提示", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show("缂哄皯 Antigravity 鍚姩鏍稿績鑴氭湰锛歕n" + Program.ScriptPath, "鍚姩鎻愮ず", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }));
                 return;
             }
@@ -1531,8 +1580,7 @@ namespace AntigravityLauncher
             int displayedProgress = 3;
             int animationTick = 0;
 
-            // 1. 若检测到后台或已有 Supervisor 正在运行，直接进入平滑接管监控模式
-            if (Program.IsSupervisorRunning())
+            // 1. 鑻ユ娴嬪埌鍚庡彴鎴栧凡鏈?Supervisor 姝ｅ湪杩愯锛岀洿鎺ヨ繘鍏ュ钩婊戞帴绠＄洃鎺фā寮?            if (Program.IsSupervisorRunning())
             {
                 Program.TraceLog("Supervisor mutex is currently held. Entering takeover monitor.");
                 if (WaitForExistingSupervisor(logStartOffset, ref displayedProgress))
@@ -1643,7 +1691,7 @@ namespace AntigravityLauncher
                 {
                     ExitCode = result;
                     Close();
-                    MessageBox.Show(TranslateFailure(finalLog, error.ToString()), "Antigravity 启动提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show(TranslateFailure(finalLog, error.ToString()), "Antigravity 鍚姩鎻愮ず", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }));
             }
         }
@@ -1683,7 +1731,7 @@ namespace AntigravityLauncher
             var state = new CapsuleState();
             state.TargetProgress = 10;
             state.Ceiling = 25;
-            state.FooterText = "正在匹配最优专线通道…";
+            state.FooterText = "姝ｅ湪鍖归厤鏈€浼樹笓绾块€氶亾鈥?;
 
             int discoveredTotal = 0;
             int candidateIndex = 0;
@@ -1720,15 +1768,15 @@ namespace AntigravityLauncher
                 }
                 else if (line.Contains("proxy_started") || line.Contains("proxy_reused"))
                 {
-                    state.GoogleText = "专属通道 17897 已连通，正在测速…";
+                    state.GoogleText = "涓撳睘閫氶亾 17897 宸茶繛閫氾紝姝ｅ湪娴嬮€熲€?;
                     state.TargetProgress = Math.Max(state.TargetProgress, 50);
                     state.Ceiling = Math.Max(state.Ceiling, 60);
                 }
                 else if (line.Contains("google_connectivity_passed"))
                 {
                     rttStr = GetValue(line, "rtt_ms");
-                    string suffix = string.IsNullOrEmpty(rttStr) ? "" : (" · 延迟 " + rttStr + "ms");
-                    state.GoogleText = "连通正常" + suffix;
+                    string suffix = string.IsNullOrEmpty(rttStr) ? "" : (" 路 寤惰繜 " + rttStr + "ms");
+                    state.GoogleText = "杩為€氭甯? + suffix;
                     state.GooglePassed = true;
                     state.TargetProgress = Math.Max(state.TargetProgress, 68);
                     state.Ceiling = Math.Max(state.Ceiling, 78);
@@ -1742,33 +1790,32 @@ namespace AntigravityLauncher
                 }
                 else if (line.Contains("model_generation_probe_passed"))
                 {
-                    string countryDesc = egressCountry == "JP" ? "日本 JP" : (egressCountry == "US" ? "美国 US" : (!string.IsNullOrEmpty(egressCountry) ? egressCountry : "高速专线"));
-                    state.ModelText = "Gemini 编程模型验证通过 [出口 " + countryDesc + "]";
+                    string countryDesc = egressCountry == "JP" ? "鏃ユ湰 JP" : (egressCountry == "US" ? "缇庡浗 US" : (!string.IsNullOrEmpty(egressCountry) ? egressCountry : "楂橀€熶笓绾?));
+                    state.ModelText = "Gemini 缂栫▼妯″瀷楠岃瘉閫氳繃 [鍑哄彛 " + countryDesc + "]";
                     state.ModelPassed = true;
-                    state.FooterText = "🚀 通路已全部通过，正在拉起 Antigravity…";
+                    state.FooterText = "馃殌 閫氳矾宸插叏閮ㄩ€氳繃锛屾鍦ㄦ媺璧?Antigravity鈥?;
                     state.TargetProgress = Math.Max(state.TargetProgress, 88);
                     state.Ceiling = Math.Max(state.Ceiling, 94);
                 }
                 else if (line.Contains("antigravity_started"))
                 {
-                    state.FooterText = "正在启动 Antigravity 代码编辑器…";
+                    state.FooterText = "姝ｅ湪鍚姩 Antigravity 浠ｇ爜缂栬緫鍣ㄢ€?;
                     state.TargetProgress = Math.Max(state.TargetProgress, 95);
                     state.Ceiling = Math.Max(state.Ceiling, 98);
                 }
                 else if (line.Contains("antigravity_ready") || line.Contains("localization_loader_succeeded"))
                 {
-                    state.FooterText = "已就绪，正在打开工作区…";
+                    state.FooterText = "宸插氨缁紝姝ｅ湪鎵撳紑宸ヤ綔鍖衡€?;
                     state.TargetProgress = 100;
                     state.Ceiling = 100;
                 }
             }
 
-            // 组合专线状态文本
-            if (discoveredTotal > 0 || candidateTotal > 0)
+            // 缁勫悎涓撶嚎鐘舵€佹枃鏈?            if (discoveredTotal > 0 || candidateTotal > 0)
             {
                 int total = candidateTotal > 0 ? candidateTotal : discoveredTotal;
                 int current = candidateIndex > 0 ? candidateIndex : 1;
-                state.LineText = "发现 " + total + " 条候选 · 正在验证 " + current + "/" + total;
+                state.LineText = "鍙戠幇 " + total + " 鏉″€欓€?路 姝ｅ湪楠岃瘉 " + current + "/" + total;
             }
 
             return state;
@@ -1778,18 +1825,18 @@ namespace AntigravityLauncher
         {
             string all = logText + "\n" + stderr;
             if (all.Contains("mihomo_missing"))
-                return "💡 未检测到本地代理软件\n\n请先确认电脑中已安装并启动 Clash Verge 或 Mihomo Party。";
+                return "馃挕 鏈娴嬪埌鏈湴浠ｇ悊杞欢\n\n璇峰厛纭鐢佃剳涓凡瀹夎骞跺惎鍔?Clash Verge 鎴?Mihomo Party銆?;
             if (all.Contains("antigravity_missing"))
-                return "💡 未找到 Antigravity 程序\n\n请确认 Antigravity 已安装在默认应用路径。";
+                return "馃挕 鏈壘鍒?Antigravity 绋嬪簭\n\n璇风‘璁?Antigravity 宸插畨瑁呭湪榛樿搴旂敤璺緞銆?;
             if (all.Contains("target_node_not_found"))
-                return "💡 未发现可用专线\n\n请在你的 Clash 代理软件中更新一次订阅节点，确保包含日本或美国高速专线。";
+                return "馃挕 鏈彂鐜板彲鐢ㄤ笓绾縗n\n璇峰湪浣犵殑 Clash 浠ｇ悊杞欢涓洿鏂颁竴娆¤闃呰妭鐐癸紝纭繚鍖呭惈鏃ユ湰鎴栫編鍥介珮閫熶笓绾裤€?;
             if (all.Contains("google_connectivity_failed") || all.Contains("proxy_egress_network_failure"))
-                return "💡 无法连接 Google 服务\n\n当前网络暂无法连通 Google，请检查网络或在 Clash 中切换其他可用节点。";
+                return "馃挕 鏃犳硶杩炴帴 Google 鏈嶅姟\n\n褰撳墠缃戠粶鏆傛棤娉曡繛閫?Google锛岃妫€鏌ョ綉缁滄垨鍦?Clash 涓垏鎹㈠叾浠栧彲鐢ㄨ妭鐐广€?;
             if (all.Contains("model_generation_probe_failed") || all.Contains("model_location"))
-                return "💡 专线未通过 AI 模型验证\n\n当前节点可能受到地区限制，请在代理软件中切换到支持 Gemini 的专线。";
+                return "馃挕 涓撶嚎鏈€氳繃 AI 妯″瀷楠岃瘉\n\n褰撳墠鑺傜偣鍙兘鍙楀埌鍦板尯闄愬埗锛岃鍦ㄤ唬鐞嗚蒋浠朵腑鍒囨崲鍒版敮鎸?Gemini 鐨勪笓绾裤€?;
             if (all.Contains("localization_loader_failed"))
-                return "💡 Antigravity 已启动，中文组件将在后台自动加载完成。";
-            return "💡 启动连接稍有延迟\n\n网络通道尚未完全就绪，请确认代理软件运行正常后重试。";
+                return "馃挕 Antigravity 宸插惎鍔紝涓枃缁勪欢灏嗗湪鍚庡彴鑷姩鍔犺浇瀹屾垚銆?;
+            return "馃挕 鍚姩杩炴帴绋嶆湁寤惰繜\n\n缃戠粶閫氶亾灏氭湭瀹屽叏灏辩华锛岃纭浠ｇ悊杞欢杩愯姝ｅ父鍚庨噸璇曘€?;
         }
 
         private sealed class CapsuleState
@@ -1805,6 +1852,105 @@ namespace AntigravityLauncher
             internal int Ceiling;
         }
     }
-}
 
+    // ==========================================
+    // 鍚姩鍣ㄨ缃潰鏉?(LauncherSettingsForm)
+    // ==========================================
+    internal class LauncherSettingsForm : Form
+    {
+        public LauncherSettingsForm()
+        {
+            Text = "鈿?鍚姩鍣ㄨ缃?;
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new Size(380, 160);
+            BackColor = Color.FromArgb(248, 250, 252);
+            ShowInTaskbar = false;
+            TopMost = true;
+
+            var lblTitle = new Label
+            {
+                Text = "鈿? 鍔熻兘寮€鍏?,
+                Font = new Font("寰蒋闆呴粦", 12f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(30, 30, 30),
+                Location = new Point(20, 16),
+                AutoSize = true
+            };
+            var sep = new Panel
+            {
+                Location = new Point(20, 44),
+                Size = new Size(340, 1),
+                BackColor = Color.FromArgb(220, 224, 230)
+            };
+            var settings = LauncherSettings.Load();
+            var chkAutoResume = new CheckBox
+            {
+                Text = "鍒囧彿鍚庤嚜鍔ㄥ湪鍓?3 涓璇濈獥鍙ｅ彂閫乗"缁х画\"",
+                Font = new Font("寰蒋闆呴粦", 10f),
+                ForeColor = Color.FromArgb(40, 40, 40),
+                Location = new Point(20, 60),
+                AutoSize = true,
+                Checked = settings.AutoResumeEnabled
+            };
+            var lblHint = new Label
+            {
+                Text = "鍏抽棴鍚庡垏鍙峰彧鎹㈣处鍙凤紝涓嶄細鑷姩缁帴瀵硅瘽",
+                Font = new Font("寰蒋闆呴粦", 9f),
+                ForeColor = Color.FromArgb(140, 140, 140),
+                Location = new Point(38, 84),
+                AutoSize = true
+            };
+            var btnOk = new Button
+            {
+                Text = "纭畾",
+                Font = new Font("寰蒋闆呴粦", 10f),
+                Location = new Point(ClientSize.Width - 100, ClientSize.Height - 44),
+                Size = new Size(80, 32),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(37, 99, 235),
+                ForeColor = Color.White,
+                Cursor = Cursors.Hand
+            };
+            btnOk.FlatAppearance.BorderSize = 0;
+            btnOk.Click += delegate
+            {
+                settings.AutoResumeEnabled = chkAutoResume.Checked;
+                settings.Save();
+                Close();
+            };
+            var closeBtn = new CapsuleCloseButton
+            {
+                Location = new Point(ClientSize.Width - 34, 11),
+                Size = new Size(22, 22)
+            };
+            closeBtn.Click += delegate { Close(); };
+
+            Controls.Add(lblTitle);
+            Controls.Add(sep);
+            Controls.Add(chkAutoResume);
+            Controls.Add(lblHint);
+            Controls.Add(btnOk);
+            Controls.Add(closeBtn);
+
+            MouseDown += delegate(object s, MouseEventArgs me)
+            {
+                if (me.Button == MouseButtons.Left)
+                {
+                    Program.ReleaseCapture();
+                    Program.SendMessage(Handle, 0xA1, 0x2, 0);
+                }
+            };
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ClassStyle |= 0x00020000;
+                return cp;
+            }
+        }
+    }
+}
 

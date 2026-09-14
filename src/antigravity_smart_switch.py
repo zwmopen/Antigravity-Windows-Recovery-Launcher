@@ -2037,7 +2037,23 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
 
     # 1. 记录切号待办事务与断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
     write_pending_switch(best_acc)
-    write_pending_auto_resume(max_windows=3, text="继续", target_href=target_href, target_title=target_title)
+    # 读取启动器设置，判断是否启用自动续接
+    _settings_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Antigravity", "private-proxy", "launcher-settings.json")
+    _auto_resume_enabled = False
+    try:
+        if os.path.exists(_settings_path):
+            import re as _re
+            _sj = open(_settings_path, encoding="utf-8").read()
+            _m = _re.search(r'"auto_resume_enabled"\s*:\s*(true|false)', _sj)
+            if _m:
+                _auto_resume_enabled = _m.group(1) == "true"
+    except Exception:
+        pass
+    if _auto_resume_enabled:
+        write_pending_auto_resume(max_windows=3, text="继续", target_href=target_href, target_title=target_title)
+        logger.info("✅ [设置] 自动续接已启用，切号后将在前 3 个窗口发送'继续'")
+    else:
+        logger.info("⏭ [设置] 自动续接已关闭（可在启动器设置中开启）")
     try:
         os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
         with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
