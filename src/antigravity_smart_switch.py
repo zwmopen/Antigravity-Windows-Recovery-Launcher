@@ -140,7 +140,7 @@ def load_quarantined_accounts():
         return {}
 
 
-def record_quarantine_account(account_id, duration_seconds=9000):
+def record_quarantine_account(account_id, duration_seconds=1800):
     """将触发 429 报错的账号加入临时关押名单，避免短时间内再次被优选"""
     try:
         data = load_quarantined_accounts()
@@ -1292,6 +1292,22 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         and float(acc.get("gemini_5h", 0.0)) > threshold
     ]
     
+    if not candidates and quarantined:
+        # 【紧急解冻救场机制】：备选账号告急时，绝对不能因为历史冷冻而直接宣布无号可用！
+        # 对所有被隔离账号执行即时探活审计，只要当前额度满足可用标准，立刻强制解冻并拉入救场候选池！
+        rescued = []
+        for acc in accounts:
+            aid = acc.get("id")
+            if aid in quarantined and not acc.get("disabled", False) and aid != current_id:
+                w_q = float(acc.get("gemini_weekly", 0.0))
+                h_q = float(acc.get("gemini_5h", 0.0))
+                if w_q > 1.0 and h_q > threshold:
+                    remove_quarantined_account(aid)
+                    rescued.append(acc)
+                    logger.info(f"🚨 [紧急解冻救场] 备选池告急！检测到隔离账号 [{acc.get('email')}] 额度充沛 (5h: {h_q}%, 周: {w_q}%)，已强制解冻救场！")
+        if rescued:
+            candidates = rescued
+
     if candidates:
         # 按 Cockpit Tools 综合评分降序排列
         candidates.sort(key=lambda x: x.get("cockpit_score", 0.0), reverse=True)
@@ -1508,6 +1524,21 @@ def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, curr_f
         and float(a.get("gemini_weekly", 0.0)) > 1.0
         and float(a.get("gemini_5h", 0.0)) > threshold
     ]
+
+    if not candidates and quarantined:
+        # 【紧急解冻救场机制】：备选告急时不轻易判定池子耗尽，即时探活隔离账号
+        rescued = []
+        for a in enabled_accounts:
+            aid = a.get("id")
+            if aid in quarantined and aid != current_id and not a.get("is_current", False):
+                w_q = float(a.get("gemini_weekly", 0.0))
+                h_q = float(a.get("gemini_5h", 0.0))
+                if w_q > 1.0 and h_q > threshold:
+                    remove_quarantined_account(aid)
+                    rescued.append(a)
+                    logger.info(f"🚨 [紧急解冻救场] 备选池告急！检测到隔离账号 [{a.get('email')}] 额度充沛 (5h: {h_q}%, 周: {w_q}%)，已强制解冻救场！")
+        if rescued:
+            candidates = rescued
 
     curr_acc = next((a for a in enabled_accounts if a.get("id") == current_id or a.get("is_current")), None)
     curr_is_exhausted = (
