@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import asyncio
+import subprocess
 import urllib.request
 import urllib.parse
 import websockets
@@ -45,6 +46,23 @@ async def cdp_call(ws, seq_holder, method, params=None):
         if d.get("id") == cur_id:
             return d
 
+def load_localization_script():
+    base_dirs = [
+        os.path.join(os.path.dirname(__file__), "localization-extension"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Antigravity\launcher\localization-extension"),
+        r"d:\AICode\工具开发\projects\antigravity-recovery-launcher\src\localization-extension"
+    ]
+    for d in base_dirs:
+        core_p = os.path.join(d, "translation-core.js")
+        content_p = os.path.join(d, "content.js")
+        if os.path.exists(core_p) and os.path.exists(content_p):
+            with open(core_p, "r", encoding="utf-8") as f:
+                core_js = f.read()
+            with open(content_p, "r", encoding="utf-8") as f:
+                content_js = f.read()
+            return core_js + "\n" + content_js
+    return ""
+
 async def hide_install_ide(ws, seq_holder):
     js = """
     (() => {
@@ -57,7 +75,9 @@ async def hide_install_ide(ws, seq_holder):
                 button[data-testid^="open-editor"],
                 button[data-testid="editor-loading"],
                 a[data-testid="install-editor"],
-                a[data-testid^="open-editor"] { display: none !important; }
+                a[data-testid^="open-editor"],
+                div:has(> button[data-testid="install-editor"]),
+                div:has(> a[data-testid="install-editor"]) { display: none !important; }
             `;
             (document.head || document.documentElement).appendChild(style);
         }
@@ -121,15 +141,26 @@ async def restore_layout():
     combined_route = "+".join(columns)
     target_url = f"{base_origin}/c/{combined_route}?focused={focused}"
 
+    injection_script = load_localization_script()
+
     print(f"正在复原 {len(columns)} 列工作台: {target_url}")
     async with websockets.connect(ws_url) as ws:
+        # Pre-register script before navigating
+        if injection_script:
+            await cdp_call(ws, seq_holder, "Page.addScriptToEvaluateOnNewDocument", {"source": injection_script})
+
         await cdp_call(ws, seq_holder, "Page.navigate", {"url": target_url})
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(2.5)
+
+        if injection_script:
+            await cdp_call(ws, seq_holder, "Runtime.evaluate", {"expression": injection_script})
         await hide_install_ide(ws, seq_holder)
+
+        target_idx = columns.index(focused) if focused in columns else 0
         js_focus = f"""
         (() => {{
-            const panes = Array.from(document.querySelectorAll('.group\\/pane'));
-            const target = panes.find(p => p.querySelector('a[href*="{focused}"]')) || panes[0];
+            const panes = Array.from(document.querySelectorAll('.group\\\\/pane'));
+            const target = panes[{target_idx}] || panes[0];
             if (target) {{
                 const ed = target.querySelector('[data-lexical-editor="true"]') || target;
                 ed.focus();
@@ -137,7 +168,16 @@ async def restore_layout():
         }})()
         """
         await cdp_call(ws, seq_holder, "Runtime.evaluate", {"expression": js_focus})
-        print(f"[OK] 成功复原 {len(columns)} 列分屏！已激活主工作台。")
+
+    # Trigger official loader as well
+    loader = os.path.expandvars(r"%LOCALAPPDATA%\Antigravity\launcher\Antigravity-CdpLocalizationLoader.exe")
+    if os.path.exists(loader):
+        try:
+            subprocess.run([loader], capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+    print(f"[OK] 成功复原 {len(columns)} 列分屏！汉化语言包已同步注入，右上角干扰图标已彻底抹除。")
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--save":

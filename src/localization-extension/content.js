@@ -5,17 +5,20 @@
   // 必须在 guard 之前执行，确保每次汉化加载器重注入时都能保证样式存在
   (function injectHideIdeStyle() {
     var style = document.getElementById('__agy_hide_ide_btn__');
-    if (style) return; // 幂等，已注入则跳过
-    style = document.createElement('style');
-    style.id = '__agy_hide_ide_btn__';
-    style.textContent = [
-      'button[data-testid="install-editor"]',
-      'button[data-testid^="open-editor"]',
-      'button[data-testid="editor-loading"]',
-      'a[data-testid="install-editor"]',
-      'a[data-testid^="open-editor"]'
-    ].join(',\n') + ' { display: none !important; }';
-    (document.head || document.documentElement).appendChild(style);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = '__agy_hide_ide_btn__';
+      style.textContent = [
+        'button[data-testid="install-editor"]',
+        'button[data-testid^="open-editor"]',
+        'button[data-testid="editor-loading"]',
+        'a[data-testid="install-editor"]',
+        'a[data-testid^="open-editor"]',
+        'div:has(> button[data-testid="install-editor"])',
+        'div:has(> a[data-testid="install-editor"])'
+      ].join(',\n') + ' { display: none !important; }';
+      (document.head || document.documentElement).appendChild(style);
+    }
   })();
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -110,6 +113,8 @@
 
   function shouldTranslateTextNode(node) {
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.parentElement) return false;
+    var val = (node.nodeValue || '').trim();
+    if (val === 'Queued Messages' || val === 'Queued Message' || val === 'Queued') return true;
     if (!isProtectedTextElement(node.parentElement)) return true;
     var row = closest(node.parentElement, '[data-testid="conversation-row-sidebar"]');
     return !!row && /^\s*\d+\s*(?:[smhd]|seconds?|minutes?|hours?|days?)\s*$/i.test(node.nodeValue || '');

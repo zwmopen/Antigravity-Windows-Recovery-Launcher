@@ -8,6 +8,74 @@
   // into ordinary descriptions, skill text, or user-authored titles.
   var PHRASE_PAIRS = Object.freeze([
   [
+    "See our",
+    "请查阅"
+  ],
+  [
+    "See our ",
+    "请查阅 "
+  ],
+  [
+    "See our ",
+    "请查阅 "
+  ],
+  [
+    "troubleshooting guide",
+    "故障排查指南"
+  ],
+  [
+    "for more help.",
+    "获取更多帮助。"
+  ],
+  [
+    "Queued Messages",
+    "已排队消息"
+  ],
+  [
+    "Queued Message",
+    "已排队消息"
+  ],
+  [
+    "Queued",
+    "已排队"
+  ],
+  [
+    "Conversation Log",
+    "会话记录"
+  ],
+  [
+    "Load older messages",
+    "加载更早消息"
+  ],
+  [
+    "Agent terminated due to error",
+    "智能体由于异常已终止"
+  ],
+  [
+    "You can prompt the model to try again or start a",
+    "您可以提示模型重试或发起"
+  ],
+  [
+    "if the error persists.",
+    "如果错误持续存在。"
+  ],
+  [
+    "See our troubleshooting guide for more help.",
+    "查看故障排除指南获取更多帮助。"
+  ],
+  [
+    "Queued Messages",
+    "已排队消息"
+  ],
+  [
+    "Queued message",
+    "已排队消息"
+  ],
+  [
+    "Copy debug info",
+    "复制调试信息"
+  ],
+  [
     "Learn more.",
     "了解更多。"
   ],
@@ -4367,6 +4435,9 @@
   }
 
   var DYNAMIC_PATTERNS = Object.freeze([
+    { pattern: /^Thought for (\d+)\s*s(?:econds?)?$/i, replace: function (_m, n) { return '深度思考 ' + n + ' 秒'; } },
+    { pattern: /^Running (\d+)\s*commands?$/i, replace: function (_m, n) { return '正在运行 ' + n + ' 个命令'; } },
+    { pattern: /^Queued Messages?$/i, replace: function () { return '已排队消息'; } },
     { pattern: /Requesting permission to (read access to this path|write access to this path|reading this URL|executing actions on this URL|running this command outside the sandbox|running this command|using this MCP tool) (.+)/i, replace: function (_m, action, target) {
         var labels = { 'read access to this path': '读取此路径', 'write access to this path': '写入此路径', 'reading this URL': '读取此 URL', 'executing actions on this URL': '在此 URL 上执行操作', 'running this command outside the sandbox': '在沙盒外运行此命令', 'running this command': '运行此命令', 'using this MCP tool': '使用此 MCP 工具' };
         return '正在请求权限：' + (labels[action] || action) + ' ' + target;
@@ -4389,9 +4460,10 @@
         var scopes = { 'when not in a project': '未处于项目时', 'in this project': '此项目中', 'in this workspace': '此工作区' };
         return '是，并' + (scope ? '在' + scopes[scope] : '') + '始终允许';
       } },
-    { pattern: /^Worked for (\d+)\s*s$/i, replace: function (_m, n) { return '已工作 ' + n + ' 秒'; } },
-    { pattern: /^Worked for (\d+)\s*m$/i, replace: function (_m, n) { return '已工作 ' + n + ' 分钟'; } },
-    { pattern: /^Worked for (\d+)\s*h$/i, replace: function (_m, n) { return '已工作 ' + n + ' 小时'; } },
+    { pattern: /^(?:Worked for|已工作)\s*(\d+)\s*s(?:econds?)?$/i, replace: function (_m, n) { return '已工作 ' + n + ' 秒'; } },
+    { pattern: /^(?:Worked for|已工作)\s*(\d+)\s*m(?:inutes?)?$/i, replace: function (_m, n) { return '已工作 ' + n + ' 分钟'; } },
+    { pattern: /^(?:Worked for|已工作)\s*(\d+)\s*h(?:ours?)?$/i, replace: function (_m, n) { return '已工作 ' + n + ' 小时'; } },
+    { pattern: /^(?:Timed|计时)\s*(\d+)\s*s(?:econds?)?$/i, replace: function (_m, n) { return '计时 ' + n + ' 秒'; } },
     { pattern: /^(\d+)\s*([smhd])$/i, replace: function (_m, n, unit) {
         return n + ' ' + ({ s: '秒', m: '分钟', h: '小时', d: '天' }[unit.toLowerCase()] || unit);
       } },
