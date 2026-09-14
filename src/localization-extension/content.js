@@ -1,18 +1,11 @@
 (function () {
   'use strict';
 
-  // The CDP loader and the Chromium fallback can both reach the same
-  // document during an upgrade.  Installing a second observer would make
-  // every React update traverse the page more than once.
-  var core = globalThis.AntigravityZhCore;
-  if (!core) return;
-  if (globalThis.__AntigravityZhContentInstalled) return;
-  globalThis.__AntigravityZhContentInstalled = true;
-
   // ── 永久隐藏右上角"安装 IDE"/"打开 IDE"/骨架加载按钮 ──────────────────
+  // 必须在 guard 之前执行，确保每次汉化加载器重注入时都能保证样式存在
   (function injectHideIdeStyle() {
     var style = document.getElementById('__agy_hide_ide_btn__');
-    if (style) return;
+    if (style) return; // 幂等，已注入则跳过
     style = document.createElement('style');
     style.id = '__agy_hide_ide_btn__';
     style.textContent = [
@@ -25,6 +18,14 @@
     (document.head || document.documentElement).appendChild(style);
   })();
   // ─────────────────────────────────────────────────────────────────────────
+
+  // The CDP loader and the Chromium fallback can both reach the same
+  // document during an upgrade.  Installing a second observer would make
+  // every React update traverse the page more than once.
+  var core = globalThis.AntigravityZhCore;
+  if (!core) return;
+  if (globalThis.__AntigravityZhContentInstalled) return;
+  globalThis.__AntigravityZhContentInstalled = true;
 
   var DEBOUNCE_MS = 80;
   var MAX_WAIT_MS = 300;
