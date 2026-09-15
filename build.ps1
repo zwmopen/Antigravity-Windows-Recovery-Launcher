@@ -54,13 +54,13 @@ if (Test-Path -LiteralPath $traySource) {
 $utf8Bom = New-Object System.Text.UTF8Encoding($true)
 function Copy-WithUtf8BomAndValidate {
     param([string]$SourcePath, [string]$DestPath)
+    $text = [System.IO.File]::ReadAllText($SourcePath, [System.Text.Encoding]::UTF8)
     $errs = @()
-    $null = [System.Management.Automation.Language.Parser]::ParseFile($SourcePath, [ref]$null, [ref]$errs)
+    $null = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$errs)
     if ($errs.Count -gt 0) {
         $msg = ($errs | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }) -join "; "
         throw "PowerShell syntax validation failed in $SourcePath : $msg"
     }
-    $text = [System.IO.File]::ReadAllText($SourcePath, [System.Text.Encoding]::UTF8)
     [System.IO.File]::WriteAllText($DestPath, $text, $utf8Bom)
 }
 

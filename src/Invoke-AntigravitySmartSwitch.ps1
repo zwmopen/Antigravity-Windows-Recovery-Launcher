@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Antigravity 智能切号与平滑重启工具 (PowerShell 调度入口)
 

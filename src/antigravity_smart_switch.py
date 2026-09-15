@@ -1899,7 +1899,7 @@ def write_antigravity_windows_credential(account_id):
 
     token = acc_data.get("token", {})
     access_token = token.get("access_token", "")
-    refresh_token = (token.get("refresh_token", ""))
+    r_token = token.get("refresh_token", "")
     expiry_ts = token.get("expiry_timestamp")
     if expiry_ts:
         expiry_str = datetime.fromtimestamp(expiry_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
@@ -1910,7 +1910,7 @@ def write_antigravity_windows_credential(account_id):
         "token": {
             "access_token": access_token,
             "token_type": "Bearer",
-            "refresh_token": refresh_token,
+            "refresh_token": r_token,
             "expiry": expiry_str
         },
         "auth_method": "consumer"
