@@ -7,7 +7,7 @@ param(
 )
 
 # Antigravity private proxy supervisor
-# Version: 2.8.0
+# Version: 2.8.1
 # Purpose: run one private Mihomo listener for Antigravity only.
 # The executable core is ASCII-only for Windows PowerShell 5.1 compatibility.
 
@@ -251,7 +251,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.7.2'
+            version = '2.8.1'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -960,32 +960,33 @@ function Get-OrderedCandidates {
         }
     }
 
-    # A node that already passed the real model gate is stronger evidence than
-    # its country label. Keep verified/sticky history first.
-    # Speed-first policy: Startup and regular recoveries prioritize verified low-latency routes
-    # (SmartScore with RTT and recency).
-    # Only LocationFailure recovery temporarily prioritizes the alternate region to break geo-blocks.
-    $ordered = if ($RecoveryReason -eq 'LocationFailure') {
-        @($decorated | Sort-Object @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
-    } else {
-        @($decorated | Sort-Object @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.RegionRank } }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
-    }
+    # History helps break ties, but country never wins a tie by policy.
+    # The startup loop performs a fresh isolated RTT probe and then sorts by
+    # that measured latency before the real model gate.
+    $ordered = @($decorated | Sort-Object @{ Expression = { $_.VerifiedRank } }, @{ Expression = { $_.ActiveRank } }, @{ Expression = { $_.SmartScore }; Descending = $true }, @{ Expression = { $_.LastPassedTicks }; Descending = $true }, @{ Expression = { $_.SuccessCount }; Descending = $true }, @{ Expression = { $_.Priority } }, @{ Expression = { $_.DiscoveryIndex } })
     if ($ordered.Count -gt $MaxCandidateCount) {
-        # United States remains the primary region. If the pool is larger than
-        # the bounded probe budget, reserve up to 16 slots for the Japan
-        # fallback so a cooling US prefix cannot starve it.
-        $primaryOrdered = @($ordered | Where-Object { [int]$_.RegionRank -eq 0 })
-        $fallbackOrdered = @($ordered | Where-Object { [int]$_.RegionRank -eq 1 })
-        $fallbackReserve = if ($primaryOrdered.Count -gt 0) {
-            [Math]::Min(16, $fallbackOrdered.Count)
-        } else {
-            0
+        # Keep the bounded probe pool region-neutral. Round-robin the country
+        # buckets so an oversized subscription set cannot hide JP or US behind
+        # a country-specific prefix; measured RTT decides the final order.
+        $regionBuckets = @{}
+        foreach ($entry in $ordered) {
+            $regionKey = [string]$entry.Candidate.Region
+            if ([string]::IsNullOrWhiteSpace($regionKey)) { $regionKey = 'UNKNOWN' }
+            if (-not $regionBuckets.ContainsKey($regionKey)) { $regionBuckets[$regionKey] = @() }
+            $regionBuckets[$regionKey] += $entry
         }
-        $primaryLimit = [Math]::Max(0, $MaxCandidateCount - $fallbackReserve)
-        $capped = @($primaryOrdered | Select-Object -First $primaryLimit)
-        $remaining = $MaxCandidateCount - $capped.Count
-        if ($remaining -gt 0) {
-            $capped += @($fallbackOrdered | Select-Object -First $remaining)
+        $regionKeys = @($regionBuckets.Keys | Sort-Object)
+        $capped = @()
+        for ($round = 0; $capped.Count -lt $MaxCandidateCount; $round++) {
+            $added = $false
+            foreach ($regionKey in $regionKeys) {
+                $bucket = @($regionBuckets[$regionKey])
+                if ($round -lt $bucket.Count -and $capped.Count -lt $MaxCandidateCount) {
+                    $capped += $bucket[$round]
+                    $added = $true
+                }
+            }
+            if (-not $added) { break }
         }
         $ordered = @($capped)
     }
@@ -1238,7 +1239,9 @@ function Get-CandidateNodeDefinitions {
                         continue
                     }
                     $regionRank = if ($candidateCountry -eq 'US') { 0 } else { 1 }
-                    $priority = ($regionRank * 1000) + [int]$source.Priority
+                    # Country is a diagnostic label, not a speed preference.
+                    # US and JP candidates enter the same latency-first pool.
+                    $priority = [int]$source.Priority
                     $candidates += [pscustomobject]@{
                         Id = Get-StringSha256 -Text (([string]$source.SourceKey) + '|' + $candidateName + '|' + $definitionId)
                         SourceId = $sourceId
@@ -1483,11 +1486,11 @@ function Save-SubscriptionReport {
             expired_subscription_count = $expiredProfiles.Count
             source_count = $rows.Count
             recommendation = if ($script:LastRunStatus -eq 'ready') {
-                'Prefer the candidate that passed the real model gate; keep US first and use JP only as fallback.'
+                'Prefer the lowest-latency candidate that passed the real model gate across US and JP. Country is not a fixed priority.'
             } elseif ($script:LastRunStatus -eq 'failed') {
                 'No candidate passed the real model gate in the last run. Basic reachability is not model eligibility; check the current account and egress combination or update subscriptions before retrying.'
             } else {
-                'Prefer US; use JP only after US candidates fail the real model gate. Basic reachability is not model eligibility.'
+                'Measure US and JP together and prefer the lowest-latency candidate that passes the real model gate. Basic reachability is not model eligibility.'
             }
             sources = @($rows)
             privacy = 'Stores only source label, country counts, status counts and timestamps; never stores subscription URLs, servers, UUIDs, passwords, tokens or account identifiers.'
@@ -2302,7 +2305,7 @@ if ($PolicyTest) {
         preferred_first = [bool]($policyCandidates.Count -gt 0 -and [int]$policyCandidates[0].RegionRank -eq 0)
         japan_candidate_count = @($policyCandidates | Where-Object { [string]$_.Region -eq 'JP' }).Count
         united_states_candidate_count = @($policyCandidates | Where-Object { [string]$_.Region -eq 'US' }).Count
-        united_states_preferred_first = [bool]($regionOrder.Count -gt 0 -and [string]$regionOrder[0].Id -eq 'us-verified')
+        region_neutral_order = [bool]($regionOrder.Count -gt 0 -and [string]$regionOrder[0].Id -eq 'japan-unverified')
         account_scoped_state = [bool]((New-EmptyFailoverState).PSObject.Properties.Name -contains 'account_fingerprint')
         max_candidate_count = $MaxCandidateCount
         cooldown_minutes = $CandidateCooldownMinutes
@@ -2423,13 +2426,21 @@ if ($null -eq $selectedCandidate) {
             $candidateCountry = $verified.Country
             # Only a verified candidate may touch production.
             $previousConfig = if (Test-Path $ConfigPath) { [IO.File]::ReadAllBytes($ConfigPath) } else { $null }
+            $formalGateStarted = $false
             try {
                 Write-SafeLog -Event 'candidate_promoting' -Values @{node_id=$candidate.Id; port=$Port}
                 $candidateConfig = Write-PrivateConfig -ProfileId 'active-clash-runtime' -Candidate $candidate
                 Test-PrivateConfig
                 Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
                 $null = Test-GoogleConnectivity
+                Write-SafeLog -Event 'formal_model_gate_started' -Values @{node_id=$candidate.Id; port=$Port}
+                $formalGateStarted = $true
+                $null = Test-RealModelGeneration
+                Write-SafeLog -Event 'formal_model_gate_passed' -Values @{node_id=$candidate.Id; port=$Port}
             } catch {
+                if ($formalGateStarted) {
+                    Write-SafeLog -Event 'formal_model_gate_failed' -Values @{node_id=$candidate.Id; error_type=$_.Exception.GetType().Name}
+                }
                 if ($null -ne $previousConfig) {
                     [IO.File]::WriteAllBytes($ConfigPath, $previousConfig)
                     Start-OrReuseMihomo -ExpectedConfigHash (Get-FileSha256 -LiteralPath $ConfigPath)
@@ -2570,7 +2581,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.7.2'
+    version = '2.8.1'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId

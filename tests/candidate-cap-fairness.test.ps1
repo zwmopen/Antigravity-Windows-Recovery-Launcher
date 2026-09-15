@@ -8,7 +8,7 @@ if ($source -notmatch '\$MaxCandidateCount\s*=\s*96') {
 if ($source.Contains('for ($round = 0; $ordered.Count -lt $MaxCandidateCount; $round++)')) {
     throw 'candidate_cap_must_not_run_before_state_filter'
 }
-if ($source -notmatch 'fallbackReserve') {
-    throw 'us_fallback_reservation_missing'
+if ($source -notmatch 'regionBuckets') {
+    throw 'region_neutral_bucket_round_robin_missing'
 }
 Write-Output 'candidate-cap-fairness.test.ps1: PASS'

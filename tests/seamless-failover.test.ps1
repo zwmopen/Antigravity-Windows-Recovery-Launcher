@@ -44,10 +44,10 @@ $sb = [ScriptBlock]::Create($functionExtract + "`n" + $fnCode)
 
 $resLocation = Get-OrderedCandidates -Candidates $candidates -State $state -RecoveryReason 'LocationFailure'
 if ($resLocation.Count -lt 2) { throw 'failed to order candidates' }
-if ($resLocation[0].Id -ne 'us-unverified') {
-    throw 'regression: LocationFailure must prioritize US candidate over historically verified JP candidate'
+if ($resLocation[0].Id -ne 'jp-historically-verified') {
+    throw 'regression: LocationFailure must not hard-code US ahead of verified low-latency candidates'
 }
-Write-Output 'location_failure_us_priority_ok'
+Write-Output 'location_failure_region_neutral_ok'
 
 $resStartup = Get-OrderedCandidates -Candidates $candidates -State $state -RecoveryReason 'Startup'
 if ($resStartup[0].Id -ne 'jp-historically-verified') {
