@@ -1,6 +1,21 @@
 # 变更记录
 
-## 1.6.0 稳定版 (Stable Release) — 2026-09-13
+## 1.6.5 稳定优化版 — 2026-09-15
+
+- **配额判定算法 V2 全面升级 (Quota Evaluation V2)**：
+  - **全新未用账号识别修复**：修复 Google API 在账号全新未消耗时未生成 `gemini-5h` bucket 导致被误判为 0% 额度淘汰的致命 Bug；若周额度 $\ge 90\%$ 且 5h bucket 为空，自动推断 5h 额度为 100% 满血；
+  - **模型 Fallback 容错**：当 `quota_summary` 为空但 `models` 中所有模型 `remainingFraction == 1.0` 时，自动识别为全新满血号（如 `leinhartlamonica`）；
+  - **容量为王 (Weekly Capacity is King)**：周总蓄水池权重提升至 1.5 倍，优先保障续航能力强的账号；
+  - **周重置紧迫度门禁**：仅在周额度 $> 15\%$ 时享受紧迫加分，彻底消除 1.3% 濒死账号反超满血账号的评分倒挂缺陷。
+- **5% 周额度濒死硬隔离机制 (5% Dying Quota Auto-Parking)**：
+  - 周额度 $< 5.0\%$ 的账号自动判定为濒死，彻底静置挂起，移出自动轮转候选池，避免调用残血号产生 429 报错；
+  - 若全池所有账号周额度均 $< 5.0\%$，自动安全挂起停机并通知用户等待周重置，严禁无谓切号与杀进程；
+  - 仅保留显式手动指定（`--target`）后门。
+- **Claude (3P) 双引擎配额穿透 (Claude Dual-Engine Quota Tracking)**：
+  - 底层打通 `Claude and GPT models`（`3p-weekly`, `3p-5h`）配额独立采集与可观测性；
+  - 揭秘偏科满血号（如 `idmzwm` Gemini 仅剩 1.4%，但 Claude 额度高达 58.5%）；
+  - 为后续跨引擎分流路由提供底层数据支撑。
+
 
 - **无缝热重启切号引擎 (Seamless Hot-Restart Engine)**：
   - 首创“只杀内核 AI 语言服务（`language_server.exe`），保留前端编辑器窗口（Electron）”的无感换号架构；
