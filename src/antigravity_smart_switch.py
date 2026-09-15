@@ -1182,15 +1182,21 @@ def get_all_accounts_and_quotas():
         is_current = (acc_id == current_id)
         
         cd = cache_map.get(email.lower(), {})
-        groups = cd.get("payload", {}).get("quota_summary", {}).get("groups", [])
+        payload = cd.get("payload", {})
+        groups = payload.get("quota_summary", {}).get("groups", [])
+        models = payload.get("models", {})
         
         q_5h = None
         q_weekly = None
         rt_weekly = None
         rt_5h = None
+        q_claude_5h = None
+        q_claude_weekly = None
+        rt_claude_weekly = None
         
         for g in groups:
-            if g.get("displayName") == "Gemini Models":
+            gname = g.get("displayName", "")
+            if gname == "Gemini Models":
                 for b in g.get("buckets", []):
                     bid = b.get("bucketId", "")
                     rf = b.get("remainingFraction", 0.0)
@@ -1202,10 +1208,56 @@ def get_all_accounts_and_quotas():
                     elif bid == "gemini-weekly":
                         q_weekly = pct
                         rt_weekly = rt
+            elif "Claude" in gname or "3p" in gname.lower() or "gpt" in gname.lower():
+                for b in g.get("buckets", []):
+                    bid = b.get("bucketId", "")
+                    rf = b.get("remainingFraction", 0.0)
+                    pct = round(rf * 100.0, 1)
+                    rt = parse_iso_datetime(b.get("resetTime"))
+                    if bid == "3p-5h":
+                        q_claude_5h = pct
+                    elif bid == "3p-weekly":
+                        q_claude_weekly = pct
+                        rt_claude_weekly = rt
         
+        # 增强容错 1：如果 groups 中缺少 buckets，但 models 列表中所有模型 remainingFraction 为 1.0（全新未用账号如 leinhartlamonica）
+        if (q_weekly is None or q_5h is None) and models:
+            fractions = [
+                m.get("quotaInfo", {}).get("remainingFraction")
+                for m in models.values()
+                if isinstance(m, dict) and "quotaInfo" in m and m.get("quotaInfo", {}).get("remainingFraction") is not None
+            ]
+            if fractions:
+                avg_frac = sum(fractions) / len(fractions)
+                pct = round(avg_frac * 100.0, 1)
+                if q_weekly is None:
+                    q_weekly = pct
+                if q_5h is None:
+                    q_5h = pct
+
+        # 增强容错 2：如果周额度满血 (100%) 或极高，但 Google API 尚未生成 gemini-5h bucket（未消耗过5h额度的新号如 zwmrpg）
+        # 绝对不能当作 0.0% 淘汰！周额度既然 100%，5小时滚动额度必然是 100% 满血！
+        if q_weekly is not None and q_5h is None:
+            if q_weekly >= 90.0:
+                q_5h = 100.0
+            else:
+                q_5h = q_weekly
+
+        # 增强容错 3：Claude / 3P 配额同步继承
+        if q_weekly == 100.0:
+            if q_claude_weekly is None:
+                q_claude_weekly = 100.0
+            if q_claude_5h is None:
+                q_claude_5h = 100.0
+
         # 默认安全兜底
         q_5h_val = q_5h if q_5h is not None else 0.0
         q_w_val = q_weekly if q_weekly is not None else 0.0
+        q_c_5h_val = q_claude_5h if q_claude_5h is not None else 0.0
+        q_c_w_val = q_claude_weekly if q_claude_weekly is not None else 0.0
+        
+        # 是否处于 <5.0% 濒死静置隔离状态 (用户铁律：<5% 坚决不参与自动生产)
+        is_parked = (q_w_val < 5.0)
         
         # 有效额度：以 5 小时滚动额度与周额度作为并行门禁！
         # 铁律：只要周额度 <= 1.0% (见底) 或 5小时额度 <= 5.0%，该账号有效额度即为 0.0%
@@ -1220,28 +1272,31 @@ def get_all_accounts_and_quotas():
             sec_to_w_reset = 7.0 * 86400.0
             days_to_w_reset = 7.0
         
-        # Cockpit Tools 综合评分机制 (Cockpit Score)：
+        # Cockpit Tools 综合评分机制 (Cockpit Score V2 - 额度深度判定升级)：
         # 1. 5小时满血度（0~150分）：越高越好，>=95% 满血加 50 分
         score_5h = q_5h_val + (50.0 if q_5h_val >= 95.0 else 0.0)
         
-        # 2. 周恢复紧迫度（0~100分）：越快恢复重置，紧迫度越高，越优先消化存量
-        if days_to_w_reset <= 1.0:
-            score_urgency = 100.0
-        elif days_to_w_reset <= 2.0:
-            score_urgency = 80.0
-        elif days_to_w_reset <= 3.0:
-            score_urgency = 60.0
-        elif days_to_w_reset <= 4.0:
-            score_urgency = 40.0
-        elif days_to_w_reset <= 5.0:
-            score_urgency = 20.0
+        # 2. 周总容量为王（0~150分）：周额度是持久续航的核心基石，权重提升至 1.5 倍
+        score_weekly = q_w_val * 1.5
+        
+        # 3. 周恢复紧迫度（0~50分）：越快恢复重置越优先消化存量，但严格设门禁：
+        #    铁律：只有当周额度充足 (> 15%) 时才享受紧迫加分；若周额度 <= 10%，残血账号严禁加速消耗！
+        if q_w_val > 15.0:
+            if days_to_w_reset <= 1.0:
+                score_urgency = 50.0
+            elif days_to_w_reset <= 2.0:
+                score_urgency = 35.0
+            elif days_to_w_reset <= 3.0:
+                score_urgency = 20.0
+            else:
+                score_urgency = 0.0
         else:
             score_urgency = 0.0
+            
+        # 4. 残血红线惩罚：周额度 <= 5.0% 的账号极度容易在数轮对话内再次暴毙，扣 100 分
+        score_penalty = -100.0 if q_w_val <= 5.0 else 0.0
         
-        # 3. 周剩余额度安全分（0~50分）：周额度越充沛越能持续支撑对话
-        score_weekly = min(50.0, q_w_val * 0.5)
-        
-        cockpit_score = round(score_5h + score_urgency + score_weekly, 1)
+        cockpit_score = round(score_5h + score_weekly + score_urgency + score_penalty, 1)
         tiger_score = cockpit_score
         
         results.append({
@@ -1261,7 +1316,10 @@ def get_all_accounts_and_quotas():
             "score_urgency": score_urgency,
             "score_weekly": score_weekly,
             "cockpit_score": cockpit_score,
-            "tiger_score": tiger_score
+            "tiger_score": tiger_score,
+            "claude_5h": q_c_5h_val,
+            "claude_weekly": q_c_w_val,
+            "is_parked": is_parked
         })
     
     return current_id, results
@@ -1282,7 +1340,7 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
     # 4. 5小时额度 <= threshold (5%) 必须一票否决淘汰；
     # 铁律：候选账号必须同时满足 [周额度 > 1.0%] 且 [5小时额度 > threshold]！
     quarantined = load_quarantined_accounts()
-    candidates = [
+    all_eligible = [
         acc for acc in accounts
         if not acc.get("disabled", False)
         and not acc.get("is_current", False)
@@ -1291,6 +1349,9 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         and float(acc.get("gemini_weekly", 0.0)) > 1.0
         and float(acc.get("gemini_5h", 0.0)) > threshold
     ]
+    # 濒死硬隔离铁律（用户强制基准）：周额度 < 5.0% 必须彻底静置挂起，绝不调用濒死残血账号产出！
+    # 自动切号时坚决排除所有周额度 < 5.0% 的账号；若全部 < 5.0%，直接安全停机等待周重置，绝不频繁切号报429！
+    candidates = [acc for acc in all_eligible if float(acc.get("gemini_weekly", 0.0)) >= 5.0]
     
     if not candidates and quarantined:
         # 【紧急解冻救场机制】：备选账号告急时，绝对不能因为历史冷冻而直接宣布无号可用！
@@ -1320,7 +1381,7 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
     
     # 彻底废除旧代码的盲目 fallback 兜底！
     # 严格遵从用户铁律：若没有真正可用账号，坚决不切号、不重启、不杀窗口！
-    raise RuntimeError("当前所有备选账号的 5小时或周额度均已耗尽 (周额度 <= 1% 或 5h <= 5%)，无法自动切换！")
+    raise RuntimeError("🛑【账号池周额度硬隔离保护】全池备选账号周额度均已低于 5.0% 濒死警戒线！已自动挂起停止切号，保持当前窗口完好，静待周重置（若急用可手动指定账号切入）。")
 
 
 def is_antigravity_running():
@@ -1512,7 +1573,7 @@ def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, curr_f
             current_id = curr.get("id")
 
     # 1. 全池所有启用账号周额度均见底 (<= 1.0%)
-    all_weekly_exhausted = all(float(a.get("gemini_weekly", 0.0)) <= 1.0 for a in enabled_accounts)
+    all_weekly_exhausted = all(float(a.get("gemini_weekly", 0.0)) < 5.0 for a in enabled_accounts)
 
     # 2. 检查除当前账号外是否存在合资格候选账号 (周额度 > 1.0% 且 5h > threshold)
     quarantined = load_quarantined_accounts()
