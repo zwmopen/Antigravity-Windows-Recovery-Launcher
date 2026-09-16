@@ -1846,15 +1846,19 @@ function Start-OrReuseMihomo {
 }
 
 function Get-HttpStatusThroughProxy {
-    param([Parameter(Mandatory = $true)][string]$Uri)
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [int]$TimeoutMs = 0
+    )
 
     $request = $null
     $response = $null
     try {
+        $timeout = if ($TimeoutMs -gt 0) { $TimeoutMs } else { $ProbeTimeoutMs }
         $request = [System.Net.HttpWebRequest]::Create($Uri)
         $request.Proxy = New-Object -TypeName System.Net.WebProxy -ArgumentList @($ProxyUrl)
-        $request.Timeout = $ProbeTimeoutMs
-        $request.ReadWriteTimeout = $ProbeTimeoutMs
+        $request.Timeout = $timeout
+        $request.ReadWriteTimeout = $timeout
         $request.Method = 'GET'
         $response = $request.GetResponse()
         return [int]$response.StatusCode
@@ -2321,6 +2325,16 @@ function Stop-ExistingAntigravity {
     Stop-WithMessage -Event 'existing_antigravity_stop_failed'
 }
 
+function Get-PrivateProxyConnectionCount {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+    try {
+        return @(Get-NetTCPConnection -OwningProcess $ProcessId -State Established -ErrorAction SilentlyContinue | Where-Object { $_.RemoteAddress -eq '127.0.0.1' -and $_.RemotePort -eq $Port })
+    } catch {
+        return @()
+    }
+}
+
 function Wait-AntigravityReady {
     param(
         [Parameter(Mandatory = $true)][int]$MainPid,
@@ -2348,7 +2362,7 @@ function Wait-AntigravityReady {
             $languageServer = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $MainPid) -ErrorAction SilentlyContinue | Where-Object { $_.Name -ieq 'language_server.exe' } | Select-Object -First 1)
             if ($languageServer.Count -gt 0) {
                 $proxyConnections = Get-PrivateProxyConnectionCount -ProcessId ([int]$languageServer[0].ProcessId)
-                if ($proxyConnections.Count -gt 0) {
+                if ($proxyConnections.Count -gt 0 -or $i -ge 15) {
                     Write-SafeLog -Event 'antigravity_ready' -Values @{ pid = $MainPid; language_pid = $languageServer[0].ProcessId; proxy_connections = $proxyConnections.Count }
                     return @{
                         LanguageServerPid = [int]$languageServer[0].ProcessId
@@ -2502,7 +2516,7 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
         if (Test-LocalPort -TestPort $Port) {
             $lastSavedState = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ([string]$lastSavedState.status -eq 'ready' -and -not [string]::IsNullOrWhiteSpace([string]$lastSavedState.active_node_id)) {
-                $status204 = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204' -TimeoutMs 1500
+                $status204 = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204' -TimeoutMs 3000
                 if ($status204 -eq 204) {
                     $fastStartupPassed = $true
                     $failoverState = Get-FailoverState
@@ -2534,7 +2548,7 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
 }
 
 if (-not $fastStartupPassed) {
-    # 自动按需刷新机场订阅：若有订阅过期、距离上次更新超 1 小时、或本地节点库为空，自动增量拉取最新节点
+    # Automatic on-demand subscription refresh: if profiles expired, last update > 1h, or cache empty
     $shouldUpdateSubs = $false
     $indexedProfiles = @(Get-IndexedRemoteProfiles)
     if ($indexedProfiles.Count -gt 0) {
@@ -2549,7 +2563,24 @@ if (-not $fastStartupPassed) {
         }
     }
     if ($shouldUpdateSubs) {
-        try { $null = Update-ClashSubscriptionProfiles -TimeoutSeconds 10 } catch { }
+        $existingCandidates = @(Get-CandidateNodeDefinitions)
+        if ($existingCandidates.Count -gt 0 -and $RecoveryReason -eq 'Startup') {
+            # Asynchronously update subscriptions in background so candidate preflight is not blocked
+            $pyScript = Join-Path $ScriptRoot 'antigravity_smart_switch.py'
+            if (-not (Test-Path -LiteralPath $pyScript)) {
+                $canonicalScript = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\antigravity_smart_switch.py'
+                if (Test-Path -LiteralPath $canonicalScript) { $pyScript = $canonicalScript }
+            }
+            if (Test-Path -LiteralPath $pyScript) {
+                $pyExe = Resolve-PythonPath
+                try {
+                    Start-Process -FilePath $pyExe -ArgumentList "`"$pyScript`" --update-subscriptions" -WorkingDirectory $ScriptRoot -WindowStyle Hidden
+                    Write-SafeLog -Event 'subscription_update_dispatched_async'
+                } catch { }
+            }
+        } else {
+            try { $null = Update-ClashSubscriptionProfiles -TimeoutSeconds 10 } catch { }
+        }
     }
 
     $candidates = @(Get-CandidateNodeDefinitions)
@@ -2768,16 +2799,27 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
         Restore-ProcessEnvironment -Previous $previousEnvironment
     }
 
+    $loader = $null
+    if ($localizationEnabled -and $localizationMode -eq 'cdp-loader') {
+        try {
+            $loader = Start-Process -FilePath $LocalizationLoaderPath -WorkingDirectory $ScriptRoot -WindowStyle Hidden -PassThru
+            Write-SafeLog -Event 'localization_loader_dispatched' -Values @{ loader_pid = $loader.Id }
+        } catch {
+            Write-SafeLog -Event 'localization_loader_dispatch_failed' -Values @{ error = $_.Exception.Message }
+        }
+    }
+
     $readiness = Wait-AntigravityReady -MainPid $antigravityPid -LaunchTime $launchTime
 
-    if ($localizationEnabled -and $localizationMode -eq 'cdp-loader') {
-        $loader = Start-Process -FilePath $LocalizationLoaderPath -WorkingDirectory $ScriptRoot -WindowStyle Hidden -Wait -PassThru
-        if ($loader.ExitCode -ne 0) {
-            Write-SafeLog -Event 'localization_loader_failed'
-            Stop-ExistingAntigravity
-            Stop-WithMessage -Event 'localization_loader_failed'
+    if ($null -ne $loader) {
+        if (-not $loader.HasExited) {
+            $null = $loader.WaitForExit(5000)
         }
-        Write-SafeLog -Event 'localization_loader_succeeded'
+        if ($loader.HasExited -and $loader.ExitCode -eq 0) {
+            Write-SafeLog -Event 'localization_loader_succeeded'
+        } else {
+            Write-SafeLog -Event 'localization_loader_finished' -Values @{ exit_code = if ($loader.HasExited) { $loader.ExitCode } else { -1 } }
+        }
     }
 
     $PendingAutoResumePath = Join-Path $ProxyRoot 'pending-auto-resume.json'
