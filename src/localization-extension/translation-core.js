@@ -1819,6 +1819,14 @@
   [
     "Clear terminal output",
     "清空终端输出"
+  ],
+  [
+    "Are you sure you want to delete this conversation? This action cannot be undone.",
+    "您确定要删除此对话吗？此操作无法撤销。"
+  ],
+  [
+    "No groups yet",
+    "暂无分组"
   ]
 ]);
 
@@ -4362,6 +4370,122 @@
   [
     "More",
     "更多"
+  ],
+  [
+    "Pin",
+    "固定"
+  ],
+  [
+    "Unpin",
+    "取消固定"
+  ],
+  [
+    "Archive",
+    "归档"
+  ],
+  [
+    "Restore",
+    "恢复"
+  ],
+  [
+    "Split",
+    "分屏"
+  ],
+  [
+    "Split Right",
+    "向右分屏"
+  ],
+  [
+    "Split Down",
+    "向下分屏"
+  ],
+  [
+    "Replace With New",
+    "替换为新建"
+  ],
+  [
+    "Remove From Split",
+    "从分屏中移除"
+  ],
+  [
+    "Conversation Name",
+    "对话名称"
+  ],
+  [
+    "Conversation ID",
+    "对话 ID"
+  ],
+  [
+    "Workspace Name",
+    "工作区名称"
+  ],
+  [
+    "Worktree Name",
+    "工作树名称"
+  ],
+  [
+    "Project Name",
+    "项目名称"
+  ],
+  [
+    "Fork",
+    "派生"
+  ],
+  [
+    "Share",
+    "分享"
+  ],
+  [
+    "Share Conversation",
+    "分享对话"
+  ],
+  [
+    "Copy Link",
+    "复制链接"
+  ],
+  [
+    "Code Search",
+    "代码搜索"
+  ],
+  [
+    "Trajectory Debug View",
+    "轨迹调试视图"
+  ],
+  [
+    "Command Center",
+    "命令中心"
+  ],
+  [
+    "Mark Read",
+    "标为已读"
+  ],
+  [
+    "Mark Unread",
+    "标为未读"
+  ],
+  [
+    "Move to Group",
+    "移动到分组"
+  ],
+  [
+    "New Group",
+    "新建分组"
+  ],
+  [
+    "Create Group",
+    "创建分组"
+  ],
+  [
+    "Remove from Group",
+    "从分组中移除"
+  ],
+  [
+    "No groups yet",
+    "暂无分组"
+  ],
+  [
+    "Are you sure you want to delete this conversation? This action cannot be undone.",
+    "您确定要删除此对话吗？此操作无法撤销。"
   ]
 ]);
 

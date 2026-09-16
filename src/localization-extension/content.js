@@ -88,8 +88,9 @@
   function isUiTextElement(element) {
     if (!element || isProtectedTextElement(element)) return false;
     return !!closest(element,
-      'button, [role="button"], label, h1, h2, h3, h4, h5, h6, ' +
-      '[role="heading"], [data-testid^="settings-nav-item-"]'
+      'button, [role="button"], [role="menuitem"], [role="menuitemcheckbox"], ' +
+      '[role="menuitemradio"], [role="menu"], [role="option"], [role="tab"], ' +
+      'label, h1, h2, h3, h4, h5, h6, [role="heading"], [data-testid^="settings-nav-item-"]'
     );
   }
 

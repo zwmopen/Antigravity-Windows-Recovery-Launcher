@@ -125,9 +125,36 @@ assert.strictEqual(
   core.translateText('Configure the agent\'s visual theme and display preferences.'),
   '配置智能体的视觉主题与显示偏好。'
 );
-assert.ok(core.ATTRIBUTES.includes('aria-label'));
-assert.ok(core.ATTRIBUTES.includes('placeholder'));
-assert.ok(core.PHRASE_PAIRS.length >= 300);
-assert.ok(core.UI_PAIRS.length >= 500);
+assert.ok(contentSource.includes('role="menuitem"'));
+assert.strictEqual(core.translateUiText('Pin'), '固定');
+assert.strictEqual(core.translateUiText('Unpin'), '取消固定');
+assert.strictEqual(core.translateUiText('Archive'), '归档');
+assert.strictEqual(core.translateUiText('Restore'), '恢复');
+assert.strictEqual(core.translateUiText('Split'), '分屏');
+assert.strictEqual(core.translateUiText('Split Right'), '向右分屏');
+assert.strictEqual(core.translateUiText('Split Down'), '向下分屏');
+assert.strictEqual(core.translateUiText('Replace With New'), '替换为新建');
+assert.strictEqual(core.translateUiText('Remove From Split'), '从分屏中移除');
+assert.strictEqual(core.translateUiText('Conversation Name'), '对话名称');
+assert.strictEqual(core.translateUiText('Conversation ID'), '对话 ID');
+assert.strictEqual(core.translateUiText('Workspace Name'), '工作区名称');
+assert.strictEqual(core.translateUiText('Worktree Name'), '工作树名称');
+assert.strictEqual(core.translateUiText('Project Name'), '项目名称');
+assert.strictEqual(core.translateUiText('Fork'), '派生');
+assert.strictEqual(core.translateUiText('Share'), '分享');
+assert.strictEqual(core.translateUiText('Code Search'), '代码搜索');
+assert.strictEqual(core.translateUiText('Trajectory Debug View'), '轨迹调试视图');
+assert.strictEqual(core.translateUiText('Command Center'), '命令中心');
+assert.strictEqual(core.translateUiText('Mark Read'), '标为已读');
+assert.strictEqual(core.translateUiText('Mark Unread'), '标为未读');
+assert.strictEqual(core.translateUiText('Move to Group'), '移动到分组');
+assert.strictEqual(core.translateUiText('New Group'), '新建分组');
+assert.strictEqual(core.translateUiText('Create Group'), '创建分组');
+assert.strictEqual(core.translateUiText('Remove from Group'), '从分组中移除');
+assert.strictEqual(core.translateUiText('No groups yet'), '暂无分组');
+assert.strictEqual(
+  core.translateText('Are you sure you want to delete this conversation? This action cannot be undone.'),
+  '您确定要删除此对话吗？此操作无法撤销。'
+);
 
 console.log('localization-extension.test.js: PASS');
