@@ -1,5 +1,17 @@
 # 变更记录
 
+## 1.6.11 动态执行胶囊与排队状态汉化、超大文本安全防护与热更新闭环 — 2026-09-16
+
+- **动态任务胶囊与排队状态汉化补齐**：
+  - 彻底攻克消息保护区内动态胶囊漏译问题，支持排队状态栏（`Sends after agent finishes working` $\to$ `智能体结束工作后发送`）；
+  - 动态执行计数全覆盖：`X search` $\to$ `X 次搜索`，`X commands` $\to$ `X 条命令`，`X tasks running` $\to$ `X 个任务正在运行`，`X files changed +Y -Z` $\to$ `X 个修改的文件 +Y -Z`；
+  - 补齐右侧工作区面板与图片批注提示：`Uploads` $\to$ `上传文件`，`Drag to select a region to comment` $\to$ `拖拽框选区域以添加批注`。
+- **超大文本节点与 V8 引擎安全防护**：
+  - 在 `translateUiText` 与 `shouldTranslateTextNode` 中引入 `> 5000` 字符快速旁路守卫，彻底杜绝 PowerShell 终端或代码超巨文本输出（如 256MB 空格/日志串）导致 V8 引擎报 `RangeError: Invalid string length`。
+- **无感热重载机制升级（Zero-Downtime Hot Reload）**：
+  - 扩展注入支持 `__AntigravityZhForceTranslate()` 机制，支持在保留前台所有工作区、会话分屏和未保存代码的前提下，通过 CDP 秒级热生效最新词库；
+  - 单元测试 100% PASS，并在当前运行的 Antigravity 窗口中实机验证通过。
+
 ## 1.6.10 标题栏菜单汉化、全界面零闪烁本地化与交互体验闭环 — 2026-09-16
 
 - **热启动与交互直觉终极定版**：
