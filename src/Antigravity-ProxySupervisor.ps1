@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$TargetNodeOverride = '',
     [string]$ExpectedEgressCountryOverride = '',
@@ -7,7 +7,7 @@ param(
 )
 
 # Antigravity private proxy supervisor
-# Version: 2.8.1
+# Version: 2.8.3
 # Purpose: run one private Mihomo listener for Antigravity only.
 # The executable core is ASCII-only for Windows PowerShell 5.1 compatibility.
 
@@ -1897,12 +1897,57 @@ function Test-ProxyEgress {
     throw 'proxy_egress_network_failure'
 }
 
+function Test-IsLanguageServerReady {
+    # Returns $true if language_server.exe is known-running and has written
+    # "initialized server successfully" to its log within the last 10 minutes.
+    $languageLog = Join-Path $env:APPDATA 'Antigravity\logs\language_server.log'
+    if ($script:LaunchedLanguageServerPid -gt 0) {
+        $lsProc = Get-Process -Id $script:LaunchedLanguageServerPid -ErrorAction SilentlyContinue
+        if ($null -ne $lsProc -and -not $lsProc.HasExited) { return $true }
+    }
+    # Fallback: check the log for any recent initialization (within 10 min).
+    if (Test-Path -LiteralPath $languageLog) {
+        try {
+            $tail = @(Get-Content -LiteralPath $languageLog -Tail 200 -ErrorAction SilentlyContinue)
+            $hasInit = [bool]($tail -match 'initialized server successfully')
+            if ($hasInit) {
+                $logItem = Get-Item -LiteralPath $languageLog -ErrorAction SilentlyContinue
+                if ($null -ne $logItem -and $logItem.LastWriteTime -ge (Get-Date).AddMinutes(-10)) {
+                    return $true
+                }
+            }
+        } catch { }
+    }
+    return $false
+}
+
 function Test-RealModelGeneration {
     $script:LastModelProbeState = 'running'
     if (-not (Test-Path -LiteralPath $AgyPath)) {
         $script:LastModelProbeState = 'failed'
         Write-SafeLog -Event 'model_probe_cli_missing'
         throw 'model_probe_cli_missing'
+    }
+
+    # Wait up to 15 s for language_server.exe to be ready before invoking agy.
+    # Without this guard, agy starts its own language server process which fails
+    # immediately (exit_code=1 / model_location) because the Antigravity app
+    # hasn't finished initializing, causing every node to be quarantined.
+    $lsWaitSeconds = 15
+    $lsReady = Test-IsLanguageServerReady
+    if (-not $lsReady) {
+        Write-SafeLog -Event 'language_server_wait_started' -Values @{ max_wait_s = $lsWaitSeconds }
+        for ($w = 0; $w -lt $lsWaitSeconds; $w++) {
+            Start-Sleep -Seconds 1
+            if (Test-IsLanguageServerReady) { $lsReady = $true; break }
+        }
+        if (-not $lsReady) {
+            $script:LastModelProbeState = 'failed'
+            Write-SafeLog -Event 'language_server_wait_timeout' -Values @{ waited_s = $lsWaitSeconds }
+            # Treat as a transient transport error — do NOT retire the node.
+            throw 'model_transport'
+        }
+        Write-SafeLog -Event 'language_server_wait_passed' -Values @{ waited_s = $w }
     }
 
     $probeId = [guid]::NewGuid().ToString('N')
@@ -2362,56 +2407,109 @@ if ($null -ne $script:FixedUpstream) {
     Write-SafeLog -Event 'fixed_upstream_enabled' -Values @{ expected_country = [string]$script:FixedUpstream.ExpectedCountry; expected_ip_check = -not [string]::IsNullOrWhiteSpace([string]$script:FixedUpstream.ExpectedIp) }
 }
 Repair-DesktopShortcut
-$candidates = @(Get-CandidateNodeDefinitions)
-$script:DiscoveredCandidateCount = $candidates.Count
-if ($candidates.Count -eq 0) {
-    Stop-WithMessage -Event 'target_node_not_found'
-}
-Write-SafeLog -Event 'candidate_discovery_completed' -Values @{ candidate_count = $candidates.Count }
-
-$failoverState = Get-FailoverState
-$script:CurrentFailoverState = $failoverState
-$originalActiveCandidate = @($candidates | Where-Object {
-    -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id) -and
-    [string]$_.Id -eq [string]$failoverState.active_node_id
-} | Select-Object -First 1)
-if ($RecoveryReason -in @('NetworkFailure', 'LocationFailure', 'UserRequestedRepair', 'Force') -and -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id)) {
-    Add-NodeCooldown -State $failoverState -NodeId ([string]$failoverState.active_node_id) -Reason $RecoveryReason
-}
-$cooldownIds = @(Get-ActiveCooldownEntries -State $failoverState | Select-Object -ExpandProperty node_id)
-$includeCooldown = $RecoveryReason -eq 'Startup'
-$orderedCandidates = @(Get-OrderedCandidates -Candidates $candidates -State $failoverState -CooldownIds $cooldownIds -IncludeCooldown:$includeCooldown -RecoveryReason $RecoveryReason)
-$script:EligibleCandidateCount = $orderedCandidates.Count
-Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
-if ($includeCooldown -and $cooldownIds.Count -gt 0) {
-    Write-SafeLog -Event 'manual_startup_cooldown_bypass' -Values @{ candidate_count = $orderedCandidates.Count }
-}
-if ($orderedCandidates.Count -eq 0) {
-    Save-FailoverState -State $failoverState
-    Stop-WithMessage -Event 'all_candidates_in_cooldown'
-}
 
 $selectedCandidate = $null
 $configState = $null
 $connectivity = $null
 $egressCountry = ''
 $candidateIndex = 0
-$candidateTotal = $orderedCandidates.Count
-$script:CandidateTotal = $candidateTotal
+$candidateTotal = 0
+$candidates = @()
+$orderedCandidates = @()
+$failoverState = $null
+$lastSavedState = $null
 
-# Measure current candidates without changing the production listener.
-$latencyCandidates = @()
-foreach ($probeCandidate in $orderedCandidates) {
+$fastStartupPassed = $false
+if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and (Test-Path -LiteralPath $StatePath)) {
     try {
-        $measured = Invoke-IsolatedCandidateProbe -Candidate $probeCandidate -ConnectivityOnly
-        $latencyCandidates += [pscustomobject]@{ Candidate=$probeCandidate; RttMs=[int]$measured.Connectivity.RttMs }
+        if (Test-LocalPort -TestPort $Port) {
+            $lastSavedState = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ([string]$lastSavedState.status -eq 'ready' -and -not [string]::IsNullOrWhiteSpace([string]$lastSavedState.active_node_id)) {
+                $status204 = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204' -TimeoutMs 1500
+                if ($status204 -eq 204) {
+                    $fastStartupPassed = $true
+                    $failoverState = Get-FailoverState
+                    $script:CurrentFailoverState = $failoverState
+                    $selectedCandidate = [pscustomobject]@{
+                        Id = [string]$lastSavedState.active_node_id
+                        SourceId = [string]$lastSavedState.active_source_id
+                        SmartScore = if ($null -ne $lastSavedState.active_node_score) { [int]$lastSavedState.active_node_score } else { 0 }
+                    }
+                    $configState = @{
+                        ProfileId = [string]$lastSavedState.profile_id
+                        ConfigHash = [string]$lastSavedState.config_hash
+                    }
+                    $connectivity = [pscustomobject]@{
+                        GoogleStatus = [int]$lastSavedState.google_status
+                        ApiStatus = [int]$lastSavedState.generativelanguage_status
+                        OAuthStatus = [int]$lastSavedState.oauth_status
+                    }
+                    $egressCountry = [string]$lastSavedState.egress_country
+                    $script:LastProbeRttMs = if ($null -ne $lastSavedState.active_node_rtt_ms) { [int]$lastSavedState.active_node_rtt_ms } else { 0 }
+                    $script:CurrentConfigHash = [string]$lastSavedState.config_hash
+                    Write-SafeLog -Event 'fast_startup_reused' -Values @{ port = $Port; active_node_id = [string]$lastSavedState.active_node_id; rtt_ms = $script:LastProbeRttMs }
+                }
+            }
+        }
     } catch {
-        Write-SafeLog -Event 'isolated_latency_failed' -Values @{node_id=$probeCandidate.Id; error_type=$_.Exception.GetType().Name}
+        $fastStartupPassed = $false
     }
 }
-$orderedCandidates = @($latencyCandidates | Sort-Object RttMs | ForEach-Object { $_.Candidate })
-$candidateTotal = $orderedCandidates.Count
-$script:CandidateTotal = $candidateTotal
+
+if (-not $fastStartupPassed) {
+    $candidates = @(Get-CandidateNodeDefinitions)
+    $script:DiscoveredCandidateCount = $candidates.Count
+    if ($candidates.Count -eq 0) {
+        Stop-WithMessage -Event 'target_node_not_found'
+    }
+    Write-SafeLog -Event 'candidate_discovery_completed' -Values @{ candidate_count = $candidates.Count }
+
+    $failoverState = Get-FailoverState
+    $script:CurrentFailoverState = $failoverState
+    $originalActiveCandidate = @($candidates | Where-Object {
+        -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id) -and
+        [string]$_.Id -eq [string]$failoverState.active_node_id
+    } | Select-Object -First 1)
+    if ($RecoveryReason -in @('NetworkFailure', 'LocationFailure', 'UserRequestedRepair', 'Force') -and -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id)) {
+        Add-NodeCooldown -State $failoverState -NodeId ([string]$failoverState.active_node_id) -Reason $RecoveryReason
+    }
+    $cooldownIds = @(Get-ActiveCooldownEntries -State $failoverState | Select-Object -ExpandProperty node_id)
+    $includeCooldown = $RecoveryReason -eq 'Startup'
+    $orderedCandidates = @(Get-OrderedCandidates -Candidates $candidates -State $failoverState -CooldownIds $cooldownIds -IncludeCooldown:$includeCooldown -RecoveryReason $RecoveryReason)
+    $script:EligibleCandidateCount = $orderedCandidates.Count
+    Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
+    if ($includeCooldown -and $cooldownIds.Count -gt 0) {
+        Write-SafeLog -Event 'manual_startup_cooldown_bypass' -Values @{ candidate_count = $orderedCandidates.Count }
+    }
+    if ($orderedCandidates.Count -eq 0) {
+        Save-FailoverState -State $failoverState
+        Stop-WithMessage -Event 'all_candidates_in_cooldown'
+    }
+
+    $candidateTotal = $orderedCandidates.Count
+    $script:CandidateTotal = $candidateTotal
+
+    # Measure current top candidates without changing the production listener.
+    $maxLatencyProbes = 6
+    $latencyCandidates = @()
+    $unprobedCandidates = @()
+    for ($i = 0; $i -lt $orderedCandidates.Count; $i++) {
+        $probeCandidate = $orderedCandidates[$i]
+        if ($i -lt $maxLatencyProbes) {
+            try {
+                $measured = Invoke-IsolatedCandidateProbe -Candidate $probeCandidate -ConnectivityOnly
+                $latencyCandidates += [pscustomobject]@{ Candidate=$probeCandidate; RttMs=[int]$measured.Connectivity.RttMs }
+            } catch {
+                Write-SafeLog -Event 'isolated_latency_failed' -Values @{node_id=$probeCandidate.Id; error_type=$_.Exception.GetType().Name}
+            }
+        } else {
+            $unprobedCandidates += $probeCandidate
+        }
+    }
+    $orderedCandidates = @($latencyCandidates | Sort-Object RttMs | ForEach-Object { $_.Candidate }) + @($unprobedCandidates)
+    $candidateTotal = $orderedCandidates.Count
+    $script:CandidateTotal = $candidateTotal
+}
 
 if ($null -eq $selectedCandidate) {
     foreach ($candidate in $orderedCandidates) {
@@ -2480,7 +2578,9 @@ if ($null -eq $selectedCandidate) {
 Save-FailoverState -State $failoverState -ActiveNodeId ([string]$selectedCandidate.Id)
 $script:LastRunStatus = 'ready'
 $script:RunFinishedAt = Get-Date
-Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
+if (-not $fastStartupPassed) {
+    Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
+}
 Sync-AntigravityProxySetting
 
 $normalizedAntigravityPath = [System.IO.Path]::GetFullPath($AntigravityPath)
@@ -2581,7 +2681,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.8.1'
+    version = '2.8.3'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId
@@ -2592,8 +2692,8 @@ $state = [ordered]@{
     active_source_id = [string]$selectedCandidate.SourceId
     active_node_score = if ($null -ne $selectedCandidate.PSObject.Properties['SmartScore']) { [int]$selectedCandidate.SmartScore } else { 0 }
     active_node_rtt_ms = [int]$script:LastProbeRttMs
-    candidate_count = $candidates.Count
-    eligible_candidate_count = $orderedCandidates.Count
+    candidate_count = if ($candidates.Count -gt 0) { $candidates.Count } elseif ($null -ne $lastSavedState -and $null -ne $lastSavedState.candidate_count) { [int]$lastSavedState.candidate_count } else { 0 }
+    eligible_candidate_count = if ($orderedCandidates.Count -gt 0) { $orderedCandidates.Count } elseif ($null -ne $lastSavedState -and $null -ne $lastSavedState.eligible_candidate_count) { [int]$lastSavedState.eligible_candidate_count } else { 0 }
     retired_candidate_count = @(Get-RetiredNodeEntries -State $failoverState).Count
     verified_candidate_count = @(Get-SuccessfulNodeEntries -State $failoverState).Count
     recovery_reason = $RecoveryReason
