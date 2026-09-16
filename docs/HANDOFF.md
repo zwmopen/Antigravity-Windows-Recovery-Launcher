@@ -1,7 +1,7 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：1.6.8
+> 对应版本：1.6.10
 > 最后核对：2026-09-16。
 
 ## 项目定位和范围
@@ -22,8 +22,8 @@
 - `Antigravity-AccountWatcher.exe`：监控 Cockpit 当前账号、无代理 `--reuse-window` 实例，以及 17897 到 Google/OAuth 的持续健康；0.6.0 对地区 400 做 30 秒防抖、120 秒稳定观察和 15 分钟熔断，连续 3 次真实网络失败仍触发有界后台恢复。
 - `Antigravity-ProxySupervisor.ps1`：监督器 2.8.4 从 Clash Verge 与 Mihomo Party 订阅索引定位仍有效的本地缓存，发现跨来源日本/美国候选，维护失败冷却，配置/启动 17897，并以官方 `agy` 最小真实生成作为正式 17897 模型门禁；临时端口只做网络/出口预检，避免重复消耗额度；US/JP 共同进入低延迟池，不再按国家硬编码优先；新增脱敏候选数量、来源统计和失败状态事件供中文启动器显示。
 - `src/watchdog-restore-fix.ps1`：按监督器版本保护 private-proxy golden copy，隔离探针的局部超时配置不会触发误回滚。
-- `localization-extension/translation-core.js`：可审查的词库和纯替换核心；完整句子、UI 短词、权限/额度/时间/数量/模型动态规则分层。
-- `localization-extension/content.js`：本地 UI DOM 观察、属性翻译和防抖调度；保护虚拟列表对话标题及用户内容。
+- `localization-extension/translation-core.js`：可审查的词库和纯替换核心；完整句子、UI 短词、权限/额度/时间/数量/模型思考动态规则分层；优先 `uiLookup[exactKey]` 拦截，杜绝部分短语污染。
+- `localization-extension/content.js`：本地 UI DOM 观察、属性翻译与微任务同步拦截；`isInstantUiNode` 覆盖 `[role="menuitem"]` 等全部 WAI-ARIA 菜单与控件，实现 0ms 屏幕绘制前截杀（零闪烁 Zero-FOUT）；严格保护 Monaco 代码块、Markdown、终端命令与会话标题。
 - `Set-AntigravityLocalization.ps1` + 两个 `.cmd`：中文启用/英文恢复的可逆开关。
 - `Antigravity-Chinese-Assistant.exe`：可对外分享的独立便携界面，只负责查找官方客户端、动态汉化、英文恢复和桌面入口，不依赖本机代理恢复链。
 - `build-shareable.ps1`：构建独立 Windows x64 ZIP、校验清单和用户说明。
