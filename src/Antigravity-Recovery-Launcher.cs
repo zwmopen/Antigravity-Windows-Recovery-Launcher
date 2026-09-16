@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.6.4.0")]
-[assembly: AssemblyFileVersion("1.6.4.0")]
-[assembly: AssemblyInformationalVersion("1.6.0")]
+[assembly: AssemblyVersion("1.6.8.0")]
+[assembly: AssemblyFileVersion("1.6.8.0")]
+[assembly: AssemblyInformationalVersion("1.6.8")]
 
 namespace AntigravityLauncher
 {
@@ -953,7 +953,7 @@ namespace AntigravityLauncher
         private Image appIcon = null;
         private string egressBadgeText = "高速专线就绪";
         private string statusBadgeText = "● 运行中";
-        private string subtitleText = "当前专线连接畅通 · 可秒切代码窗口，或一键重启自愈";
+        private string subtitleText = "专线稳定畅通 · 点击秒切编辑器，或快速换节点自愈";
 
         internal AntigravityHotLaunchChoiceForm()
         {
@@ -1022,14 +1022,14 @@ namespace AntigravityLauncher
             settingsButton.Click += delegate
             {
                 StopTimer();
-                btnActivate.ButtonText = "进入代码窗口";
+                btnActivate.ButtonText = "回到编辑器";
                 using (var sf = new LauncherSettingsForm())
                 {
                     sf.ShowDialog(this);
                 }
             };
 
-            btnActivate = new HotLaunchButton("进入代码窗口 (3s)")
+            btnActivate = new HotLaunchButton("回到编辑器 (3s)")
             {
                 Location = new Point(20, 78),
                 Size = new Size(212, 46)
@@ -1041,7 +1041,7 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnRepair = new HotLaunchButton("⚡ 一键重启修复")
+            btnRepair = new HotLaunchButton("⚡ 刷新专线 / 换节点")
             {
                 Location = new Point(248, 78),
                 Size = new Size(212, 46)
@@ -1080,7 +1080,7 @@ namespace AntigravityLauncher
                 }
                 else
                 {
-                    btnActivate.ButtonText = "进入代码窗口 (" + remainingSeconds + "s)";
+                    btnActivate.ButtonText = "回到编辑器 (" + remainingSeconds + "s)";
                 }
             };
             countdownTimer.Start();
@@ -1512,7 +1512,7 @@ namespace AntigravityLauncher
                 Invalidate();
             }));
 
-            while ((DateTime.Now - waitStart).TotalSeconds < 55)
+            while ((DateTime.Now - waitStart).TotalSeconds < 120)
             {
                 if (userCancelled) { ExitCode = 0; return true; }
 
@@ -1553,7 +1553,7 @@ namespace AntigravityLauncher
                 }));
 
                 // 检查是否有新鲜就绪标记
-                if (logChunk.Contains("antigravity_live_seamless_attached") || logChunk.Contains("antigravity_ready"))
+                if (logChunk.Contains("antigravity_live_seamless_attached") || logChunk.Contains("antigravity_ready") || logChunk.Contains("fast_startup_reused"))
                 {
                     OnLaunchSuccess();
                     return true;
@@ -1582,7 +1582,7 @@ namespace AntigravityLauncher
                 {
                     Thread.Sleep(500);
                     string finalChunk = ReadLogSince(logStartOffset);
-                    if (finalChunk.Contains("antigravity_live_seamless_attached") || finalChunk.Contains("antigravity_ready"))
+                    if (finalChunk.Contains("antigravity_live_seamless_attached") || finalChunk.Contains("antigravity_ready") || finalChunk.Contains("fast_startup_reused"))
                     {
                         OnLaunchSuccess();
                         return true;
@@ -1817,6 +1817,17 @@ namespace AntigravityLauncher
                 {
                     state.LinePassed = true;
                 }
+                else if (line.Contains("fast_startup_reused"))
+                {
+                    state.LinePassed = true;
+                    state.LineText = "已复用就绪专线 [秒级极速唤醒]";
+                    state.GooglePassed = true;
+                    state.GoogleText = "连通正常 · 授权畅通";
+                    state.ModelPassed = true;
+                    state.ModelText = "Gemini 编程模型就绪";
+                    state.TargetProgress = 95;
+                    state.Ceiling = 100;
+                }
                 else if (line.Contains("proxy_started") || line.Contains("proxy_reused"))
                 {
                     state.GoogleText = "专属通道 17897 已连通，正在测速…";
@@ -1937,7 +1948,7 @@ namespace AntigravityLauncher
             var settings = LauncherSettings.Load();
             var chkAutoResume = new CheckBox
             {
-                Text = "切号后自动在前排各分屏窗口发送\"继续\"",
+                Text = "切号或网络重连后，自动恢复会话与任务上下文",
                 Font = new Font("微软雅黑", 10f),
                 ForeColor = Color.FromArgb(40, 40, 40),
                 Location = new Point(20, 56),
@@ -1946,7 +1957,7 @@ namespace AntigravityLauncher
             };
             var lblHint = new Label
             {
-                Text = "关闭后切号只换账号，绝不会自动向窗口发消息",
+                Text = "账号切换或专线刷新后自动续接未完成任务；关闭则仅静默换号",
                 Font = new Font("微软雅黑", 9f),
                 ForeColor = Color.FromArgb(140, 140, 140),
                 Location = new Point(38, 78),

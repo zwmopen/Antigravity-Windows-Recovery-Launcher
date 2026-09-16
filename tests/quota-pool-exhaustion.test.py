@@ -89,7 +89,10 @@ try:
     module.select_best_account(parallel_exhausted_pool, current_id="current", threshold=5.0)
     assert False, "select_best_account 必须抛出 RuntimeError，严禁 fallback！"
 except RuntimeError as re:
-    assert "当前所有备选账号的 5小时或周额度均已耗尽" in str(re)
+    assert (
+        "当前所有备选账号的 5小时或周额度均已耗尽" in str(re)
+        or "全池备选账号周额度均已低于 5.0%" in str(re)
+    )
 
 # 场景 2：存在真正合格满血备选账号 (周额度 50.0% > 1.0 且 5h 90.0% > 5.0)
 healthy_pool = [

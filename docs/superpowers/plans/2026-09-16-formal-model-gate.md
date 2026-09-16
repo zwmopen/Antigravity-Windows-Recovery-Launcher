@@ -138,3 +138,4 @@ Expected: all PASS and the policy JSON reports `region_neutral_order=true`.
 
 - Source, installed supervisor, golden rollback copy, and current release copy were verified at SHA-256 `D769901AB1BD87960C51B6A6CDF669E97C19CC4D14AAE8677E68DA2B2BF5E774` with BOM preserved.
 - The formal gate caught both location and transport failures in live runs; the final cold start passed on `C08400083F1ADCEF` and launched a fresh client through `17897`.
+- Follow-up cold-start evidence on 2026-09-16 11:16–11:30 disproved the 2.8.3 runtime acceptance: the deployed copy had been rolled back to 2.8.1 by a watchdog false positive, and the 15-second language-server wait prevented AGY from running on cold start. Version 2.8.4 removes that wait, keeps the formal gate, and moves model generation out of the temporary candidate preflight to avoid duplicate quota consumption.

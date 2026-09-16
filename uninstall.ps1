@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Antigravity\launcher')
 )
@@ -60,7 +60,9 @@ if (Test-Path -LiteralPath $runKey) {
 }
 
 foreach ($shortcutPath in @(
+    (Join-Path $desktop 'Google Antigravity.lnk'),
     (Join-Path $desktop 'Antigravity 启动器.lnk'),
+    (Join-Path $startMenu 'Google Antigravity.lnk'),
     (Join-Path $startMenu 'Antigravity 启动器.lnk'),
     (Join-Path $startMenu 'Antigravity 中文版.lnk'),
     (Join-Path $startMenu 'Antigravity 英文恢复.lnk')

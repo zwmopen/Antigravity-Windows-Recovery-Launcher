@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-1.6.6-blue.svg" alt="版本 1.6.6" />
+  <img src="https://img.shields.io/badge/版本-1.6.8-blue.svg" alt="版本 1.6.8" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线调度-内存级无感热漂移-orange.svg" alt="专线调度" />
   <img src="https://img.shields.io/badge/界面汉化-首帧微任务零闪直译-blueviolet.svg" alt="界面汉化" />
@@ -39,6 +39,8 @@
 * **极简双态感知胶囊**：编辑器已运行时，双击桌面图标呼出精致卡片：
   - **`进入代码窗口 (3s)`**：3 秒无操作自动聚焦编辑器窗口，不干扰专注；
   - **`⚡ 一键重启修复`**：平时一键无感切换最优通道，遇顽疾时彻底重置连接池与坏节点冷却隔离。
+
+  后台守卫对客户端地区 400 做有界处理：先防抖再轮换，成功后观察稳定性；同一账号短时间重复 400 会暂停自动轮换，不会反复重启专用 `17897` 造成连接中断。真实网络断流仍按连续失败触发自愈。
 
 ### 2. 🛡️ 17897 独立沙盒：零污染、零干扰
 * **完全隔离日常上网**：启动器为 Antigravity 单独开辟 `127.0.0.1:17897` 独立端口，绝不占用、不修改用户日常使用的 Clash 端口（通常为 7897）；
@@ -74,7 +76,7 @@
 3. 双击 `Antigravity-Recovery-Launcher.exe`（或 `Install.cmd`）：
    - 首次启动会自动在桌面创建 **`Antigravity 启动器.lnk`** 快捷方式；
    - 自动在后台接入 `Antigravity-AccountWatcher` 开机自愈守卫；
-4. **之后每天只需双击桌面的 `Antigravity 启动器` 图标即可！**
+4. **之后每天只需双击桌面的 `Antigravity 启动器` 图标即可！** 如需绕过恢复门禁直接打开官方客户端，可使用同时维护的 `Antigravity 原版` 桌面快捷方式。
 
 ### 选项 B：标准 Windows 安装向导版（适合小白用户）
 1. 从 [最新发布页 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest) 下载 [`Antigravity-Windows-Recovery-Setup-1.5.0-windows-x64.exe`](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/download/v1.5.0/Antigravity-Windows-Recovery-Setup-1.5.0-windows-x64.exe)；

@@ -65,7 +65,27 @@
 
 ---
 
-## 6. “真源脱节与发布冲刷”惨剧：声称修复未入库导致构建回退旧版本
+## 6. 冷启动模型验证卡在“等待 language server”
+
+- **现象**：Google 204 和出口检查已经通过，但每条候选都固定多等 15 秒，随后记录 `model_transport`；整轮没有新的 `agy` 探针日志。
+- **根因**：监督器 2.8.3 把“已有 language server 已就绪”当成 AGY 模型探针前置条件。冷启动时 Antigravity 尚未启动，这个条件永远不成立，导致 AGY 还没执行就被误判为传输失败。
+- **修复**：2.8.4 不再进行阻塞式等待；若没有现成 language server，记录 `language_server_wait_skipped` 并让官方 `agy` 自行启动/复用其服务。候选临时端口只做网络和出口预检，正式 `17897` 才执行一次真实模型门禁。
+- **验证**：应看到 `language_server_wait_skipped` 后紧接 AGY 的真实结果；`OK` 才算通过，400 地区限制、429 额度耗尽、403 账号资格和网络超时分别记录，不互相伪装。
+- **防回归**：watchdog 按 `# Version:` 与 golden copy 比较，不扫描隔离探针的局部超时值；`tests/model-gate-cold-start.test.ps1` 和 `tests/watchdog-version-contract.test.ps1` 必须通过。
+- **适用版本**：2.8.4 / 1.6.8+。
+
+## 6.1. 客户端地区 400 触发专用端口反复重启
+
+- **现象**：Antigravity 客户端反复出现 `User location is not supported`；日志随后出现 `proxyconnect ... 17897 ... actively refused`，看起来像节点一直坏掉。
+- **根因**：旧 Watcher 把每个客户端地区 400 都当成新的代理故障。监督器即使已通过一次正式 `agy` 模型门禁，Watcher 仍会在冷却结束后再次重启 17897；重启窗口本身会主动断开已有连接，制造新的拒绝错误。
+- **修复**：Watcher 0.6.0 对地区错误 30 秒合并后只做有界轮换，成功后观察 120 秒；15 分钟内重复恢复达到 2 次，或一次恢复周期耗尽，则暂停地区驱动的自动轮换。Google/OAuth 连续 3 次真实网络失败仍独立恢复。
+- **验证**：应看到 `proxy_location_failure_observed` 后出现 `proxy_location_failure_observation_started` 或 `proxy_location_failure_circuit_open`；熔断期间只记录 `proxy_location_failure_suppressed`，不再产生 `health_recovery_started reason=proxy_location_failure`。日常 `7897` 不变。
+- **边界**：这不能把 Google 的账号/出口资格限制伪装成网络已修复；最终业务可用仍需客户端新请求产生新的 `ResponseID` 且无新的地区 400。
+- **适用版本**：Watcher 0.6.0 / 产品 1.6.8+。
+
+---
+
+## 7. “真源脱节与发布冲刷”惨剧：声称修复未入库导致构建回退旧版本
 
 - **现象**：CHANGELOG 和交接文档声称已经修复了超时 bug（如 1.4.13），但某次重新构建部署后，实机再次爆发一模一样的超时误杀故障，陷入“修好了又坏、坏了又修”的死循环。
 - **根因**：
@@ -80,7 +100,7 @@
 
 ---
 
-## 7. Windows PowerShell 5.1 编码吞噬：无 BOM UTF-8 在中文系统引发 ParserError 导致所有入口全灭
+## 8. Windows PowerShell 5.1 编码吞噬：无 BOM UTF-8 在中文系统引发 ParserError 导致所有入口全灭
 
 - **现象**：
   1. 自动切号时旧 Antigravity 正常关闭后，新实例迟迟无法启动，守护神日志持续报 `未能获取到新 Antigravity 页面的 WebSocket 调试地址`；
@@ -101,4 +121,3 @@
   1. **构建链路强制 BOM 注入与 AST 语法预检**：在 `build.ps1` 中新增 `Copy-WithUtf8BomAndValidate` 门禁。所有 `.ps1` 脚本在构建时必须先通过 PowerShell 官方抽象语法树解析器（`[System.Management.Automation.Language.Parser]::ParseFile`）进行语法预检；预检通过后，一律使用 `New-Object System.Text.UTF8Encoding($true)`（强制带 BOM 的 UTF-8）输出；
   2. **严禁无 BOM 格式入库**：在 Windows PowerShell 5.1 运行环境中，带 BOM 是唯一能够免疫全球各种本地 ANSI 编码吞噬的工业级规范。
 - **适用版本**：1.5.1+。
-

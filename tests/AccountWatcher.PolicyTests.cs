@@ -61,6 +61,23 @@ internal static class AccountWatcherPolicyTests
             "three consecutive health failures trigger recovery");
         Assert(AntigravityAccountWatcher.HealthRepairDue(0, true),
             "new location failure triggers candidate rotation");
+        DateTime locationDebounce = AntigravityAccountWatcher.ScheduleLocationFailureDebounce(now);
+        Assert(locationDebounce == now.AddSeconds(AntigravityAccountWatcher.LocationFailureDebounceSeconds),
+            "location failures use a bounded debounce window");
+        Assert(!AntigravityAccountWatcher.LocationFailureRepairDue(
+                true, now.AddSeconds(29), locationDebounce, DateTime.MinValue, DateTime.MinValue) &&
+            AntigravityAccountWatcher.LocationFailureRepairDue(
+                true, now.AddSeconds(30), locationDebounce, DateTime.MinValue, DateTime.MinValue),
+            "location repair waits for debounce then becomes eligible");
+        Assert(!AntigravityAccountWatcher.LocationFailureRepairDue(
+                true, now.AddSeconds(60), now, now.AddSeconds(120), DateTime.MinValue) &&
+            !AntigravityAccountWatcher.LocationFailureRepairDue(
+                true, now.AddSeconds(60), now, DateTime.MinValue, now.AddSeconds(120)),
+            "stability window and circuit breaker suppress repeated location recovery");
+        Assert(!AntigravityAccountWatcher.LocationFailureCircuitShouldOpen(1, now, now) &&
+            AntigravityAccountWatcher.LocationFailureCircuitShouldOpen(2, now.AddSeconds(60), now) &&
+            !AntigravityAccountWatcher.LocationFailureCircuitShouldOpen(2, now.AddSeconds(901), now),
+            "location circuit opens only after repeated recovery in its window");
         Assert(AntigravityAccountWatcher.RecoveryModeForReason("proxy_network_failure") == "NetworkFailure" &&
             AntigravityAccountWatcher.RecoveryModeForReason("proxy_location_failure") == "LocationFailure" &&
             AntigravityAccountWatcher.RecoveryModeForReason("cockpit_account_changed") == "AccountChange",

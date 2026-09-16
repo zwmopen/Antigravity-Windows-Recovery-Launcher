@@ -178,7 +178,8 @@ except Exception:
 
 LAUNCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-Recovery-Launcher.exe")
 ACCOUNT_WATCHER_EXE = os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "Antigravity-AccountWatcher.exe")
-DESKTOP_LNK = os.path.join(USER_PROFILE, "Desktop", "Antigravity 启动器.lnk")
+DESKTOP_LNK = os.path.join(USER_PROFILE, "Desktop", "Google Antigravity.lnk")
+LEGACY_DESKTOP_LNK = os.path.join(USER_PROFILE, "Desktop", "Antigravity 启动器.lnk")
 
 
 def record_incident(incident_type, severity, summary, root_cause, action_taken, evidence=None, recommended_action="系统正在/已完成自动自愈，无需手动干预。"):
@@ -2157,6 +2158,8 @@ def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed", b
         target = LAUNCHER_EXE
     elif os.path.exists(DESKTOP_LNK):
         target = DESKTOP_LNK
+    elif os.path.exists(LEGACY_DESKTOP_LNK):
+        target = LEGACY_DESKTOP_LNK
     
     if not target:
         raise FileNotFoundError(f"未找到启动器文件: {LAUNCHER_EXE}")

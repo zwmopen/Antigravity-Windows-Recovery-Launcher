@@ -7,7 +7,7 @@ param(
 )
 
 # Antigravity private proxy supervisor
-# Version: 2.8.3
+# Version: 2.8.5
 # Purpose: run one private Mihomo listener for Antigravity only.
 # The executable core is ASCII-only for Windows PowerShell 5.1 compatibility.
 
@@ -251,7 +251,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.8.1'
+            version = '2.8.4'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -1530,7 +1530,7 @@ function Save-SubscriptionReport {
 }
 
 function Invoke-IsolatedCandidateProbe {
-    param($Candidate, [switch]$ConnectivityOnly)
+    param($Candidate, [switch]$ConnectivityOnly, [switch]$SkipModelGeneration)
     # Local scope overrides keep all probe IO away from the production instance.
     $reservation = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $reservation.Start()
@@ -1566,7 +1566,12 @@ function Invoke-IsolatedCandidateProbe {
         $expectedCountry = if ($null -ne $script:FixedUpstream) { $script:FixedUpstream.ExpectedCountry } else { $Candidate.ExpectedEgressCountry }
         $expectedIp = if ($null -ne $script:FixedUpstream) { $script:FixedUpstream.ExpectedIp } else { '' }
         $country = Test-ProxyEgress -ExpectedCountry $expectedCountry -ExpectedIp $expectedIp
-        $null = Test-RealModelGeneration
+        # Candidate discovery is deliberately non-consuming. The formal
+        # 17897 gate below is the authoritative model check for the selected
+        # candidate; an explicit live probe may still request model generation.
+        if (-not $SkipModelGeneration) {
+            $null = Test-RealModelGeneration
+        }
         return @{Connectivity=$net; Country=$country}
     } finally {
         if ($null -ne $probeProcess -and -not $probeProcess.HasExited) {
@@ -1929,25 +1934,15 @@ function Test-RealModelGeneration {
         throw 'model_probe_cli_missing'
     }
 
-    # Wait up to 15 s for language_server.exe to be ready before invoking agy.
-    # Without this guard, agy starts its own language server process which fails
-    # immediately (exit_code=1 / model_location) because the Antigravity app
-    # hasn't finished initializing, causing every node to be quarantined.
-    $lsWaitSeconds = 15
-    $lsReady = Test-IsLanguageServerReady
-    if (-not $lsReady) {
-        Write-SafeLog -Event 'language_server_wait_started' -Values @{ max_wait_s = $lsWaitSeconds }
-        for ($w = 0; $w -lt $lsWaitSeconds; $w++) {
-            Start-Sleep -Seconds 1
-            if (Test-IsLanguageServerReady) { $lsReady = $true; break }
-        }
-        if (-not $lsReady) {
-            $script:LastModelProbeState = 'failed'
-            Write-SafeLog -Event 'language_server_wait_timeout' -Values @{ waited_s = $lsWaitSeconds }
-            # Treat as a transient transport error — do NOT retire the node.
-            throw 'model_transport'
-        }
-        Write-SafeLog -Event 'language_server_wait_passed' -Values @{ waited_s = $w }
+    # AGY owns language_server.exe bootstrap. A cold supervisor run happens
+    # before Antigravity is launched, so waiting for an existing language
+    # server would block every candidate and misclassify it as model_transport.
+    # Reuse an already-ready server when present, otherwise let AGY start or
+    # attach its own server and classify the real result below.
+    if (Test-IsLanguageServerReady) {
+        Write-SafeLog -Event 'language_server_ready_reused'
+    } else {
+        Write-SafeLog -Event 'language_server_wait_skipped' -Values @{ reason = 'agy_cli_bootstrap'; recovery = $RecoveryReason }
     }
 
     $probeId = [guid]::NewGuid().ToString('N')
@@ -2270,7 +2265,7 @@ function Wait-AntigravityReady {
         if ($initialized -and $main.MainWindowHandle -ne 0 -and $main.Responding) {
             $languageServer = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $MainPid) -ErrorAction SilentlyContinue | Where-Object { $_.Name -ieq 'language_server.exe' } | Select-Object -First 1)
             if ($languageServer.Count -gt 0) {
-                $proxyConnections = @(Get-NetTCPConnection -OwningProcess $languageServer[0].ProcessId -State Established -ErrorAction SilentlyContinue | Where-Object { $_.RemoteAddress -eq '127.0.0.1' -and $_.RemotePort -eq $Port })
+                $proxyConnections = Get-PrivateProxyConnectionCount -ProcessId ([int]$languageServer[0].ProcessId)
                 if ($proxyConnections.Count -gt 0) {
                     Write-SafeLog -Event 'antigravity_ready' -Values @{ pid = $MainPid; language_pid = $languageServer[0].ProcessId; proxy_connections = $proxyConnections.Count }
                     return @{
@@ -2519,10 +2514,11 @@ if ($null -eq $selectedCandidate) {
         $script:AttemptedCandidateIds[[string]$candidate.Id] = $true
         try {
             Write-SafeLog -Event 'candidate_preflight_started' -Values @{ node_id = [string]$candidate.Id; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
-            $verified = Invoke-IsolatedCandidateProbe -Candidate $candidate
+            $verified = Invoke-IsolatedCandidateProbe -Candidate $candidate -SkipModelGeneration
             $candidateConnectivity = $verified.Connectivity
             $candidateCountry = $verified.Country
-            # Only a verified candidate may touch production.
+            # Network and egress verification may touch production briefly;
+            # the formal model gate below is the final admission decision.
             $previousConfig = if (Test-Path $ConfigPath) { [IO.File]::ReadAllBytes($ConfigPath) } else { $null }
             $formalGateStarted = $false
             try {
@@ -2681,7 +2677,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.8.3'
+    version = '2.8.4'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId

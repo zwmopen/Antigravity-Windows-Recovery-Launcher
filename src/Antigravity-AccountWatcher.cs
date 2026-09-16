@@ -7,9 +7,9 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading;
 
-[assembly: AssemblyVersion("0.5.3.0")]
-[assembly: AssemblyFileVersion("0.5.3.0")]
-[assembly: AssemblyInformationalVersion("0.5.3")]
+[assembly: AssemblyVersion("0.6.0.0")]
+[assembly: AssemblyFileVersion("0.6.0.0")]
+[assembly: AssemblyInformationalVersion("0.6.0")]
 
 internal static class AntigravityAccountWatcher
 {
@@ -31,13 +31,21 @@ internal static class AntigravityAccountWatcher
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Antigravity", "localization-extension-pending.flag");
     private const string RequiredProxyArgument = "--proxy-server=http://127.0.0.1:17897";
-    private const string WatcherVersion = "0.5.6";
+    private const string WatcherVersion = "0.6.0";
     internal const int MaxRepairAttempts = 3;
     internal const int SuccessfulRepairCooldownSeconds = 30;
     internal const int HealthFailureThreshold = 3;
     internal const int HealthCheckIntervalSeconds = 20;
     internal const int HealthRepairCooldownSeconds = 60;
     internal const int ExhaustedHealthRetrySeconds = 300;
+    // A client-side location 400 is not proof that the local listener is
+    // broken. Debounce it, give a successful rotation time to settle, then
+    // stop repeatedly restarting the production listener when the same
+    // account/client keeps receiving the same upstream policy response.
+    internal const int LocationFailureDebounceSeconds = 30;
+    internal const int LocationStabilityWindowSeconds = 120;
+    internal const int LocationCircuitBreakerSeconds = 900;
+    internal const int MaxLocationRecoveriesPerWindow = 2;
 
     internal static string ReadHandledAccountId()
     {
@@ -97,6 +105,32 @@ internal static class AntigravityAccountWatcher
     internal static bool HealthRepairDue(int consecutiveFailures, bool newLocationFailure)
     {
         return newLocationFailure || consecutiveFailures >= HealthFailureThreshold;
+    }
+
+    internal static DateTime ScheduleLocationFailureDebounce(DateTime observedUtc)
+    {
+        return observedUtc.AddSeconds(LocationFailureDebounceSeconds);
+    }
+
+    internal static bool LocationFailureRepairDue(
+        bool pending,
+        DateTime utcNow,
+        DateTime debounceUntilUtc,
+        DateTime observationUntilUtc,
+        DateTime circuitUntilUtc)
+    {
+        return pending && utcNow >= debounceUntilUtc &&
+            utcNow >= observationUntilUtc && utcNow >= circuitUntilUtc;
+    }
+
+    internal static bool LocationFailureCircuitShouldOpen(
+        int recoveryCount,
+        DateTime utcNow,
+        DateTime recoveryWindowStartUtc)
+    {
+        return recoveryCount >= MaxLocationRecoveriesPerWindow &&
+            recoveryWindowStartUtc != DateTime.MinValue &&
+            utcNow < recoveryWindowStartUtc.AddSeconds(LocationCircuitBreakerSeconds);
     }
 
     internal static string RecoveryModeForReason(string reason)
@@ -260,8 +294,8 @@ internal static class AntigravityAccountWatcher
             var request = (HttpWebRequest)WebRequest.Create(uri);
             request.Proxy = new WebProxy("http://127.0.0.1:17897");
             request.Method = "GET";
-            request.Timeout = 6000;
-            request.ReadWriteTimeout = 6000;
+            request.Timeout = 10000;
+            request.ReadWriteTimeout = 10000;
             response = (HttpWebResponse)request.GetResponse();
             return true;
         }
@@ -465,6 +499,11 @@ internal static class AntigravityAccountWatcher
             DateTime nextQuotaWatcherUtc = DateTime.UtcNow.AddSeconds(3);
             bool repairInProgress = false;
             bool locationFailurePending = false;
+            DateTime locationFailureDebounceUntilUtc = DateTime.MinValue;
+            DateTime locationFailureObservationUntilUtc = DateTime.MinValue;
+            DateTime locationFailureCircuitUntilUtc = DateTime.MinValue;
+            DateTime locationFailureRecoveryWindowStartUtc = DateTime.MinValue;
+            int locationFailureRecoveryCount = 0;
             long languageLogPosition = CurrentLanguageLogLength();
             if (AccountIdChanged(activeAccountId, handledAccountId))
             {
@@ -597,6 +636,11 @@ internal static class AntigravityAccountWatcher
                         healthFailureChecks = 0;
                         healthRepairAttempts = 0;
                         locationFailurePending = false;
+                        locationFailureDebounceUntilUtc = DateTime.MinValue;
+                        locationFailureObservationUntilUtc = DateTime.MinValue;
+                        locationFailureCircuitUntilUtc = DateTime.MinValue;
+                        locationFailureRecoveryWindowStartUtc = DateTime.MinValue;
+                        locationFailureRecoveryCount = 0;
                         languageLogPosition = CurrentLanguageLogLength();
                     }
                     else
@@ -621,8 +665,41 @@ internal static class AntigravityAccountWatcher
 
                 if (ReadNewLocationFailure(ref languageLogPosition))
                 {
-                    locationFailurePending = true;
-                    Log("proxy_location_failure_observed");
+                    DateTime failureObservedUtc = DateTime.UtcNow;
+                    if (failureObservedUtc < locationFailureObservationUntilUtc)
+                    {
+                        locationFailurePending = false;
+                        locationFailureDebounceUntilUtc = DateTime.MinValue;
+                        Log("proxy_location_failure_ignored reason=stability_observation_window");
+                    }
+                    else if (failureObservedUtc < locationFailureCircuitUntilUtc)
+                    {
+                        locationFailurePending = false;
+                        locationFailureDebounceUntilUtc = DateTime.MinValue;
+                        Log("proxy_location_failure_suppressed reason=circuit_breaker");
+                    }
+                    else
+                    {
+                        if (locationFailureRecoveryWindowStartUtc != DateTime.MinValue &&
+                            failureObservedUtc >= locationFailureRecoveryWindowStartUtc.AddSeconds(LocationCircuitBreakerSeconds))
+                        {
+                            locationFailureRecoveryWindowStartUtc = DateTime.MinValue;
+                            locationFailureRecoveryCount = 0;
+                            locationFailureCircuitUntilUtc = DateTime.MinValue;
+                            Log("proxy_location_failure_circuit_reset reason=window_expired");
+                        }
+
+                        if (!locationFailurePending)
+                        {
+                            locationFailurePending = true;
+                            locationFailureDebounceUntilUtc = ScheduleLocationFailureDebounce(failureObservedUtc);
+                            Log("proxy_location_failure_observed debounce_seconds=" + LocationFailureDebounceSeconds);
+                        }
+                        else
+                        {
+                            Log("proxy_location_failure_coalesced");
+                        }
+                    }
                 }
 
                 bool compliantMainRunning;
@@ -634,6 +711,11 @@ internal static class AntigravityAccountWatcher
                     healthFailureChecks = 0;
                     healthRepairAttempts = 0;
                     locationFailurePending = false;
+                    locationFailureDebounceUntilUtc = DateTime.MinValue;
+                    locationFailureObservationUntilUtc = DateTime.MinValue;
+                    locationFailureCircuitUntilUtc = DateTime.MinValue;
+                    locationFailureRecoveryWindowStartUtc = DateTime.MinValue;
+                    locationFailureRecoveryCount = 0;
                 }
                 else if (!launcherRunning && !repairInProgress && DateTime.UtcNow >= nextHealthCheckUtc)
                 {
@@ -652,13 +734,20 @@ internal static class AntigravityAccountWatcher
                     }
                 }
 
+                bool locationFailureRepairDue = LocationFailureRepairDue(
+                    locationFailurePending,
+                    DateTime.UtcNow,
+                    locationFailureDebounceUntilUtc,
+                    locationFailureObservationUntilUtc,
+                    locationFailureCircuitUntilUtc);
                 bool healthRepairDue = compliantMainRunning &&
-                    HealthRepairDue(healthFailureChecks, locationFailurePending) &&
+                    (locationFailureRepairDue || HealthRepairDue(healthFailureChecks, false)) &&
                     healthRepairAttempts < MaxRepairAttempts;
                 if (CanStartRepair(healthRepairDue, launcherRunning, repairInProgress,
                     DateTime.UtcNow, nextHealthRepairUtc, repairCooldownUntilUtc))
                 {
-                    string healthReason = locationFailurePending ?
+                    bool locationRecovery = locationFailureRepairDue;
+                    string healthReason = locationRecovery ?
                         "proxy_location_failure" : "proxy_network_failure";
                     Log("health_recovery_started reason=" + healthReason);
                     repairInProgress = true;
@@ -666,6 +755,7 @@ internal static class AntigravityAccountWatcher
                     repairInProgress = false;
                     healthFailureChecks = 0;
                     locationFailurePending = false;
+                    locationFailureDebounceUntilUtc = DateTime.MinValue;
                     languageLogPosition = CurrentLanguageLogLength();
                     if (repaired)
                     {
@@ -673,16 +763,54 @@ internal static class AntigravityAccountWatcher
                         nextHealthRepairUtc = DateTime.MinValue;
                         repairCooldownUntilUtc = DateTime.UtcNow.AddSeconds(HealthRepairCooldownSeconds);
                         nextHealthCheckUtc = repairCooldownUntilUtc;
+                        if (locationRecovery)
+                        {
+                            DateTime recoveryFinishedUtc = DateTime.UtcNow;
+                            if (locationFailureRecoveryWindowStartUtc == DateTime.MinValue ||
+                                recoveryFinishedUtc >= locationFailureRecoveryWindowStartUtc.AddSeconds(LocationCircuitBreakerSeconds))
+                            {
+                                locationFailureRecoveryWindowStartUtc = recoveryFinishedUtc;
+                                locationFailureRecoveryCount = 0;
+                                locationFailureCircuitUntilUtc = DateTime.MinValue;
+                            }
+                            locationFailureRecoveryCount++;
+                            locationFailureObservationUntilUtc = recoveryFinishedUtc.AddSeconds(LocationStabilityWindowSeconds);
+                            if (LocationFailureCircuitShouldOpen(
+                                locationFailureRecoveryCount,
+                                recoveryFinishedUtc,
+                                locationFailureRecoveryWindowStartUtc))
+                            {
+                                locationFailureCircuitUntilUtc = recoveryFinishedUtc.AddSeconds(LocationCircuitBreakerSeconds);
+                                Log("proxy_location_failure_circuit_open recoveries=" +
+                                    locationFailureRecoveryCount + " retry_after_seconds=" +
+                                    LocationCircuitBreakerSeconds);
+                            }
+                            else
+                            {
+                                Log("proxy_location_failure_observation_started seconds=" +
+                                    LocationStabilityWindowSeconds);
+                            }
+                        }
                         Log("health_recovery_succeeded reason=" + healthReason);
                     }
                     else
                     {
-                        if (healthReason == "proxy_location_failure") locationFailurePending = true;
+                        if (healthReason == "proxy_location_failure")
+                        {
+                            locationFailurePending = true;
+                            locationFailureDebounceUntilUtc = DateTime.MinValue;
+                        }
                         else healthFailureChecks = HealthFailureThreshold;
                         healthRepairAttempts++;
                         if (healthRepairAttempts >= MaxRepairAttempts)
                         {
                             nextHealthRepairUtc = DateTime.UtcNow.AddSeconds(ExhaustedHealthRetrySeconds);
+                            if (healthReason == "proxy_location_failure")
+                            {
+                                locationFailureCircuitUntilUtc = DateTime.UtcNow.AddSeconds(LocationCircuitBreakerSeconds);
+                                Log("proxy_location_failure_circuit_open reason=repair_attempts_exhausted retry_after_seconds=" +
+                                    LocationCircuitBreakerSeconds);
+                            }
                             healthRepairAttempts = 0;
                             Log("repair_retry_cycle_exhausted reason=" + healthReason +
                                 " retry_after_seconds=" + ExhaustedHealthRetrySeconds);
