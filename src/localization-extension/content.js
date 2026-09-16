@@ -13,9 +13,7 @@
         'button[data-testid^="open-editor"]',
         'button[data-testid="editor-loading"]',
         'a[data-testid="install-editor"]',
-        'a[data-testid^="open-editor"]',
-        'div:has(> button[data-testid="install-editor"])',
-        'div:has(> a[data-testid="install-editor"])'
+        'a[data-testid^="open-editor"]'
       ].join(',\n') + ' { display: none !important; }';
       (document.head || document.documentElement).appendChild(style);
     }

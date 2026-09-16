@@ -75,9 +75,7 @@ async def hide_install_ide(ws, seq_holder):
                 button[data-testid^="open-editor"],
                 button[data-testid="editor-loading"],
                 a[data-testid="install-editor"],
-                a[data-testid^="open-editor"],
-                div:has(> button[data-testid="install-editor"]),
-                div:has(> a[data-testid="install-editor"]) { display: none !important; }
+                a[data-testid^="open-editor"] { display: none !important; }
             `;
             (document.head || document.documentElement).appendChild(style);
         }
