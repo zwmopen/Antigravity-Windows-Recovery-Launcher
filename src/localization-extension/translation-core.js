@@ -1827,6 +1827,14 @@
   [
     "No groups yet",
     "暂无分组"
+  ],
+  [
+    "Collapse queued messages",
+    "折叠排队消息"
+  ],
+  [
+    "Expand queued messages",
+    "展开排队消息"
   ]
 ]);
 
@@ -4486,6 +4494,70 @@
   [
     "Are you sure you want to delete this conversation? This action cannot be undone.",
     "您确定要删除此对话吗？此操作无法撤销。"
+  ],
+  [
+    "Collapse queued messages",
+    "折叠排队消息"
+  ],
+  [
+    "Expand queued messages",
+    "展开排队消息"
+  ],
+  [
+    "Cancel (Ctrl+D)",
+    "取消 (Ctrl+D)"
+  ],
+  [
+    "Maximize Pane",
+    "最大化面板"
+  ],
+  [
+    "Restore Pane",
+    "还原面板"
+  ],
+  [
+    "Overview",
+    "概览"
+  ],
+  [
+    "Overview tab",
+    "概览标签页"
+  ],
+  [
+    "Review tab",
+    "审查标签页"
+  ],
+  [
+    "Terminal tab",
+    "终端标签页"
+  ],
+  [
+    "Scroll to Bottom",
+    "滚动到底部"
+  ],
+  [
+    "Stop execution",
+    "停止执行"
+  ],
+  [
+    "View Usage",
+    "查看用量明细"
+  ],
+  [
+    "Skills Used",
+    "已使用的技能"
+  ],
+  [
+    "Uncommitted",
+    "未提交"
+  ],
+  [
+    "Auxiliary Pane",
+    "辅助面板"
+  ],
+  [
+    "Custom tool call output is missing",
+    "自定义工具调用输出缺失"
   ]
 ]);
 
@@ -4559,7 +4631,14 @@
   }
 
   var DYNAMIC_PATTERNS = Object.freeze([
-    { pattern: /^Thought for (\d+)\s*s(?:econds?)?$/i, replace: function (_m, n) { return '深度思考 ' + n + ' 秒'; } },
+    { pattern: /^(?:Thought for|深度思考)\s*(\d+)\s*m(?:in(?:utes?)?)?(?:\s*(\d+)\s*s(?:econds?)?)?$/i, replace: function (_m, mins, secs) { return '深度思考 ' + mins + ' 分钟' + (secs ? ' ' + secs + ' 秒' : ''); } },
+    { pattern: /^(?:Thought for|深度思考)\s*(\d+)\s*s(?:econds?)?$/i, replace: function (_m, n) { return '深度思考 ' + n + ' 秒'; } },
+    { pattern: /^(?:Thought for|深度思考)\s*(\d+)\s*h(?:ours?)?$/i, replace: function (_m, n) { return '深度思考 ' + n + ' 小时'; } },
+    { pattern: /^(\d+)\s+files?\s+changed$/i, replace: function (_m, n) { return n + ' 个修改的文件'; } },
+    { pattern: /^Send now:\s*(.+)$/i, replace: function (_m, text) { return '立即发送：' + text; } },
+    { pattern: /^Delete:\s*(.+)$/i, replace: function (_m, text) { return '删除：' + text; } },
+    { pattern: /^Edit:\s*(.+)$/i, replace: function (_m, text) { return '编辑：' + text; } },
+    { pattern: /^Opens external link:\s*(.+)$/i, replace: function (_m, text) { return '打开外部链接：' + text; } },
     { pattern: /^Running (\d+)\s*commands?$/i, replace: function (_m, n) { return '正在运行 ' + n + ' 个命令'; } },
     { pattern: /^Queued Messages?$/i, replace: function () { return '已排队消息'; } },
     { pattern: /Requesting permission to (read access to this path|write access to this path|reading this URL|executing actions on this URL|running this command outside the sandbox|running this command|using this MCP tool) (.+)/i, replace: function (_m, action, target) {
@@ -4621,7 +4700,10 @@
     { pattern: /^Select model, current:\s*(.+)$/i, replace: function (_m, model) { return '选择模型，当前：' + model; } },
     { pattern: /^Autocomplete Speed:\s*(.+)$/i, replace: function (_m, speed) { return '补全速度：' + speed; } },
     { pattern: /^Send feedback as\s+(.+)$/i, replace: function (_m, account) { return '以 ' + account + ' 身份发送反馈'; } },
-    { pattern: /^Gemini\s+(.+?)\s+\((High|Medium|Low)\)$/i, replace: function (_m, model, effort) { return 'Gemini ' + model.trim() + '（' + ({ high: '高', medium: '中', low: '低' }[effort.toLowerCase()] || effort) + '）'; } },
+    { pattern: /^(.+?)\s*\((Thinking|High|Medium|Low)\)$/i, replace: function (_m, model, effort) {
+        var dict = { thinking: '思考模式', high: '高', medium: '中', low: '低' };
+        return model.trim() + '（' + (dict[effort.toLowerCase()] || effort) + '）';
+      } },
     { pattern: /^Select (Next|Previous) Conversation$/i, replace: function (_m, direction) { return '选择' + (direction.toLowerCase() === 'next' ? '下一个' : '上一个') + '对话'; } }
   ]);
 
@@ -4638,6 +4720,10 @@
     var leading = (value.match(/^\s*/) || [''])[0];
     var trailing = (value.match(/\s*$/) || [''])[0];
     var body = value.slice(leading.length, value.length - trailing.length || value.length);
+    var exactKey = body.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(uiLookup, exactKey)) {
+      return leading + uiLookup[exactKey] + trailing;
+    }
     var translated = applyDynamic(translatePhrases(body));
     var key = translated.toLowerCase();
     if (translated && Object.prototype.hasOwnProperty.call(uiLookup, key)) translated = uiLookup[key];

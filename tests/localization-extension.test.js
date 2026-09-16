@@ -157,4 +157,24 @@ assert.strictEqual(
   '您确定要删除此对话吗？此操作无法撤销。'
 );
 
+assert.strictEqual(core.translateUiText('Collapse queued messages'), '折叠排队消息');
+assert.strictEqual(core.translateUiText('Expand queued messages'), '展开排队消息');
+assert.strictEqual(core.translateUiText('Cancel (Ctrl+D)'), '取消 (Ctrl+D)');
+assert.strictEqual(core.translateUiText('Maximize Pane'), '最大化面板');
+assert.strictEqual(core.translateUiText('Restore Pane'), '还原面板');
+assert.strictEqual(core.translateUiText('Overview'), '概览');
+assert.strictEqual(core.translateUiText('Overview tab'), '概览标签页');
+assert.strictEqual(core.translateUiText('Review tab'), '审查标签页');
+assert.strictEqual(core.translateUiText('Terminal tab'), '终端标签页');
+assert.strictEqual(core.translateUiText('Scroll to Bottom'), '滚动到底部');
+assert.strictEqual(core.translateUiText('Stop execution'), '停止执行');
+assert.strictEqual(core.translateUiText('View Usage'), '查看用量明细');
+assert.strictEqual(core.translateUiText('Skills Used'), '已使用的技能');
+assert.strictEqual(core.translateUiText('Uncommitted'), '未提交');
+assert.strictEqual(core.translateUiText('Auxiliary Pane'), '辅助面板');
+assert.strictEqual(core.translateUiText('Thought for 1m'), '深度思考 1 分钟');
+assert.strictEqual(core.translateUiText('Thought for 2m 15s'), '深度思考 2 分钟 15 秒');
+assert.strictEqual(core.translateUiText('4 files changed'), '4 个修改的文件');
+assert.strictEqual(core.translateUiText('Claude Sonnet 4.6 (Thinking)'), 'Claude Sonnet 4.6（思考模式）');
+
 console.log('localization-extension.test.js: PASS');
