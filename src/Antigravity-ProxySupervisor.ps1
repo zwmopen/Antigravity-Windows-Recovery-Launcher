@@ -20,6 +20,10 @@ $LocalizationExtensionPath = Join-Path $ScriptRoot 'localization-extension'
 $LocalizationManifestPath = Join-Path $LocalizationExtensionPath 'manifest.json'
 $LocalizationLoaderPath = Join-Path $ScriptRoot 'Antigravity-CdpLocalizationLoader.exe'
 $AgyPath = Join-Path $ScriptRoot 'tools\agy\agy.exe'
+if (-not (Test-Path -LiteralPath $AgyPath)) {
+    $canonicalAgy = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\tools\agy\agy.exe'
+    if (Test-Path -LiteralPath $canonicalAgy) { $AgyPath = $canonicalAgy }
+}
 $LocalizationDisabledMarkerPath = Join-Path $RuntimeRoot 'localization-extension-disabled.flag'
 $LocalizationPendingMarkerPath = Join-Path $RuntimeRoot 'localization-extension-pending.flag'
 $MihomoPath = ''
@@ -1289,14 +1293,60 @@ function Get-CandidateNodeDefinitions {
     return @($ordered)
 }
 
+function Resolve-PythonPath {
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python310\python.exe'),
+        'python.exe'
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath $c) { return $c }
+    }
+    return 'python.exe'
+}
+
 function Update-ClashSubscriptionProfiles {
     [CmdletBinding()]
     param([int]$TimeoutSeconds = 12)
 
     if (-not (Test-Path -LiteralPath $ProfilesIndex)) { return $false }
     Write-SafeLog -Event 'subscription_update_started'
+
+    # 1. 优先使用 Python 引擎进行高可靠订阅刷新并触发 profiles.yaml 保存
+    $pyScript = Join-Path $ScriptRoot 'antigravity_smart_switch.py'
+    if (-not (Test-Path -LiteralPath $pyScript)) {
+        $canonicalScript = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\antigravity_smart_switch.py'
+        if (Test-Path -LiteralPath $canonicalScript) { $pyScript = $canonicalScript }
+    }
+    if (Test-Path -LiteralPath $pyScript) {
+        $pyExe = Resolve-PythonPath
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $pyExe
+            $psi.Arguments = "`"$pyScript`" --update-subscriptions"
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+            $p = [System.Diagnostics.Process]::Start($psi)
+            if ($p.WaitForExit($TimeoutSeconds * 1000 * 2)) {
+                if ($p.ExitCode -eq 0) {
+                    Write-SafeLog -Event 'subscription_update_finished' -Values @{ method = 'python'; updated_count = 1 }
+                    return $true
+                }
+            } else {
+                try { $p.Kill() } catch { }
+            }
+        } catch { }
+    }
+
+    # 2. 原生 PowerShell 网络抓取保底
     $updatedCount = 0
     try {
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+        try {
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+        } catch { }
         $indexContent = Get-Content -LiteralPath $ProfilesIndex -Raw -Encoding UTF8
         $matches = [regex]::Matches($indexContent, '(?ms)^\s*-\s*uid:\s*(?<uid>\S+).*?type:\s*remote.*?file:\s*(?<file>\S+).*?url:\s*(?<url>\S+)')
         foreach ($m in $matches) {
@@ -1326,7 +1376,7 @@ function Update-ClashSubscriptionProfiles {
     } catch {
         Write-SafeLog -Event 'subscription_update_error' -Values @{ error = $_.Exception.Message }
     }
-    Write-SafeLog -Event 'subscription_update_finished' -Values @{ updated_count = $updatedCount }
+    Write-SafeLog -Event 'subscription_update_finished' -Values @{ method = 'powershell'; updated_count = $updatedCount }
     return ($updatedCount -gt 0)
 }
 
@@ -2452,7 +2502,31 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
 }
 
 if (-not $fastStartupPassed) {
+    # 自动按需刷新机场订阅：若有订阅过期、处于冷启动且超过6小时未更新、或本地节点库为空，则自动拉取最新节点
+    $shouldUpdateSubs = $false
+    $indexedProfiles = @(Get-IndexedRemoteProfiles)
+    if ($indexedProfiles.Count -gt 0) {
+        $usableProfiles = @($indexedProfiles | Where-Object { Test-IndexedProfileUsable -Profile $_ })
+        if ($usableProfiles.Count -lt $indexedProfiles.Count) {
+            $shouldUpdateSubs = $true
+        } elseif ($RecoveryReason -eq 'Startup') {
+            $minUpdate = ($usableProfiles | Where-Object { $null -ne $_.UpdatedAt } | Measure-Object -Property UpdatedAt -Minimum).Minimum
+            if ($null -eq $minUpdate -or ((Get-Date).ToUniversalTime() - $minUpdate).TotalHours -gt 6) {
+                $shouldUpdateSubs = $true
+            }
+        }
+    }
+    if ($shouldUpdateSubs) {
+        try { $null = Update-ClashSubscriptionProfiles -TimeoutSeconds 10 } catch { }
+    }
+
     $candidates = @(Get-CandidateNodeDefinitions)
+    if ($candidates.Count -eq 0) {
+        try {
+            $null = Update-ClashSubscriptionProfiles -TimeoutSeconds 12
+            $candidates = @(Get-CandidateNodeDefinitions)
+        } catch { }
+    }
     $script:DiscoveredCandidateCount = $candidates.Count
     if ($candidates.Count -eq 0) {
         Stop-WithMessage -Event 'target_node_not_found'
@@ -2475,6 +2549,17 @@ if (-not $fastStartupPassed) {
     Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
     if ($includeCooldown -and $cooldownIds.Count -gt 0) {
         Write-SafeLog -Event 'manual_startup_cooldown_bypass' -Values @{ candidate_count = $orderedCandidates.Count }
+    }
+    if ($orderedCandidates.Count -eq 0) {
+        # 自愈闭环：若现有节点全在冷却期，自动刷新订阅获取全新节点并重置冷却
+        Write-SafeLog -Event 'cooldown_recovery_subscription_refresh'
+        try {
+            $null = Update-ClashSubscriptionProfiles -TimeoutSeconds 12
+            $candidates = @(Get-CandidateNodeDefinitions)
+            $cooldownIds = @()
+            $failoverState.cooldown_nodes = @()
+            $orderedCandidates = @(Get-OrderedCandidates -Candidates $candidates -State $failoverState -CooldownIds $cooldownIds -IncludeCooldown:$true -RecoveryReason $RecoveryReason)
+        } catch { }
     }
     if ($orderedCandidates.Count -eq 0) {
         Save-FailoverState -State $failoverState
