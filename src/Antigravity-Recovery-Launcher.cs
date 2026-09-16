@@ -1022,14 +1022,14 @@ namespace AntigravityLauncher
             settingsButton.Click += delegate
             {
                 StopTimer();
-                btnActivate.ButtonText = "回到编辑器";
+                btnActivate.ButtonText = "打开继续使用";
                 using (var sf = new LauncherSettingsForm())
                 {
                     sf.ShowDialog(this);
                 }
             };
 
-            btnActivate = new HotLaunchButton("回到编辑器 (3s)")
+            btnActivate = new HotLaunchButton("打开继续使用 (3s)")
             {
                 Location = new Point(20, 78),
                 Size = new Size(212, 46)
@@ -1041,7 +1041,7 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnRepair = new HotLaunchButton("⚡ 刷新专线 / 换节点")
+            btnRepair = new HotLaunchButton("⚡ 网络自愈重连")
             {
                 Location = new Point(248, 78),
                 Size = new Size(212, 46)
@@ -1080,7 +1080,7 @@ namespace AntigravityLauncher
                 }
                 else
                 {
-                    btnActivate.ButtonText = "回到编辑器 (" + remainingSeconds + "s)";
+                    btnActivate.ButtonText = "打开继续使用 (" + remainingSeconds + "s)";
                 }
             };
             countdownTimer.Start();
