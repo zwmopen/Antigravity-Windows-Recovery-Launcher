@@ -1,5 +1,5 @@
 #define MyAppName "Antigravity 智能启动器"
-#define MyAppVersion "1.6.5"
+#define MyAppVersion "1.6.13"
 #define MyAppPublisher "zwmopen"
 #define MyAppURL "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher"
 #define MyAppExeName "Antigravity-Recovery-Launcher.exe"
