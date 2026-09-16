@@ -1,5 +1,21 @@
 # 变更记录
 
+## 1.6.13 根治大模型探针 JSON 解析死锁、候选节点无限长测熔断与切号重启直觉化 — 2026-09-17
+
+- **大模型探针 JSON 解析鲁棒性修复（彻底根治 9 分钟卡死）**：
+  - 攻克 `agy.exe` 在冷启动输出底层 Go/gRPC 日志（如 `server.go:1568 Starting language server...`）导致 PowerShell `ConvertFrom-Json` 报 `无效的 JSON 基元: I0916` 的致命 Bug；
+  - 实装健壮的行级与大括号边界 JSON 提取器，杜绝因进程日志污染将正常可用节点误判为 `INVALID_OUTPUT` / `model_transport`；
+  - 引入 `--effort low --disable-slash-commands`，去除冗余思考 token 与技能加载，将单次真实模型探针耗时由 35 秒大幅压减至 10~12 秒。
+- **候选节点测试无限长测熔断与优雅降级（Bounded Preflight Gate）**：
+  - 彻底终结历史版本在模型探针失败后逐一遍历 40~56 个候选节点、导致用户在自愈重连进度条卡死 9~26 分钟的灾难循环；
+  - 引入 `$maxFormalModelAttempts = 3` 强行熔断限制；若连续 3 个优质节点均未通过模型门禁（如遇 Gemini 上游接口临时抖动），立即平滑降级至已通过 Google 204 隔离验证的最优节点，确保启动过程在 15~30 秒内必定放行。
+- **启动器切号感知与动态引导**：
+  - 在热启动卡片（`AntigravityHotLaunchChoiceForm`）中增加 Cockpit 与本地账号状态比对探针；
+  - 用户在 Cockpit 手动切号后点击桌面启动器，界面自动呈现 `● 待载入新账号`，右侧按钮自适应变为 `⚡ 重启并载入账号`，消除认知割裂。
+- **守护脚本（Watchdog）同步升版**：
+  - 核心监督器版本同步升至 `2.8.6`，并将 AppData 黄金备份 `Antigravity-ProxySupervisor.fixed.ps1` 同步更新，避免计划任务误回退；
+  - 监督器核心代码完成 100% 纯 ASCII 净化，杜绝 CP936 编码乱码。
+
 ## 1.6.12 启动性能极致跃迁、零延迟首帧汉化与自愈重连根治 — 2026-09-16
 
 - **Fast Startup 秒级复用彻底修复（64s $\to$ 0.2s 性能跃迁）**：

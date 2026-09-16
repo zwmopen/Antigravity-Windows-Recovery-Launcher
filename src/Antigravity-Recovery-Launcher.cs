@@ -1042,6 +1042,30 @@ namespace AntigravityLauncher
                 Location = new Point(248, 78),
                 Size = new Size(212, 46)
             };
+            try
+            {
+                string cockpitAccountFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".antigravity_cockpit", "current_account.json");
+                string watcherAccountFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity", "private-proxy", "watcher-current-account.txt");
+                string cockpitEmail = "";
+                string activeIdOrEmail = "";
+                if (File.Exists(cockpitAccountFile))
+                {
+                    string cjson = File.ReadAllText(cockpitAccountFile);
+                    var mEmail = System.Text.RegularExpressions.Regex.Match(cjson, "\"email\"\\s*:\\s*\"([^\"]+)\"");
+                    if (mEmail.Success) cockpitEmail = mEmail.Groups[1].Value.Trim().ToLowerInvariant();
+                }
+                if (File.Exists(watcherAccountFile))
+                {
+                    activeIdOrEmail = File.ReadAllText(watcherAccountFile).Trim().ToLowerInvariant();
+                }
+                if (!string.IsNullOrEmpty(cockpitEmail) && !activeIdOrEmail.Contains(cockpitEmail))
+                {
+                    statusBadgeText = "● 待载入新账号";
+                    subtitleText = "检测到账号或网络已变更 · 点击立即重启载入新凭据";
+                    btnRepair.ButtonText = "⚡ 重启并载入账号";
+                }
+            }
+            catch { }
             btnRepair.Click += delegate
             {
                 StopTimer();

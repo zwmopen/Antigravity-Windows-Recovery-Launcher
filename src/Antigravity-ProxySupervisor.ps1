@@ -7,7 +7,7 @@ param(
 )
 
 # Antigravity private proxy supervisor
-# Version: 2.8.5
+# Version: 2.8.6
 # Purpose: run one private Mihomo listener for Antigravity only.
 # The executable core is ASCII-only for Windows PowerShell 5.1 compatibility.
 
@@ -59,7 +59,7 @@ $MaxSuccessHistory = 128
 $MaxCandidateCount = 96
 $StopProcessTimeoutSeconds = 20
 $ProbeTimeoutMs = 8000
-$ModelProbeTimeoutSeconds = 30
+$ModelProbeTimeoutSeconds = 45
 $ModelProbePrompt = 'Reply with exactly OK. Do not call tools or modify files.'
 $ModelProbeConfirmationCount = 1
 $ConnectivityAttemptCount = if ($RecoveryReason -eq 'Startup') { 2 } else { 2 }
@@ -124,7 +124,7 @@ function Write-SafeLog {
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
 
-    # 超过 1MB 自动轮转归档，防止日志无限制膨胀
+    # Rotate log if size exceeds 1MB to prevent unbounded growth
     if (Test-Path -LiteralPath $LogPath) {
         $logItem = Get-Item -LiteralPath $LogPath -ErrorAction SilentlyContinue
         if ($null -ne $logItem -and $logItem.Length -gt 1048576) {
@@ -255,7 +255,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.8.4'
+            version = '2.8.6'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -1345,7 +1345,7 @@ function Update-ClashSubscriptionProfiles {
     if (-not (Test-Path -LiteralPath $ProfilesIndex)) { return $false }
     Write-SafeLog -Event 'subscription_update_started'
 
-    # 1. 优先使用 Python 引擎进行高可靠订阅刷新并触发 profiles.yaml 保存
+    # 1. Prefer Python engine for reliable subscription update and profiles.yaml save
     $pyScript = Join-Path $ScriptRoot 'antigravity_smart_switch.py'
     if (-not (Test-Path -LiteralPath $pyScript)) {
         $canonicalScript = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\antigravity_smart_switch.py'
@@ -1372,7 +1372,7 @@ function Update-ClashSubscriptionProfiles {
         } catch { }
     }
 
-    # 2. 原生 PowerShell 网络抓取保底
+    # 2. Fallback native PowerShell web fetch
     $updatedCount = 0
     try {
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
@@ -2050,7 +2050,7 @@ function Test-RealModelGeneration {
         $previousErrorPreference = $ErrorActionPreference
         try {
             $ErrorActionPreference = 'Continue'
-            $probeOutput = @(& $AgyPath -p $ModelProbePrompt --output-format json --print-timeout ($ModelProbeTimeoutSeconds.ToString() + 's') --sandbox --log-file $probeLog 2>&1)
+            $probeOutput = @(& $AgyPath -p $ModelProbePrompt --output-format json --effort low --disable-slash-commands --print-timeout ($ModelProbeTimeoutSeconds.ToString() + 's') --sandbox --log-file $probeLog 2>&1)
             $exitCode = $LASTEXITCODE
         } finally { $ErrorActionPreference = $previousErrorPreference }
     } finally {
@@ -2060,9 +2060,29 @@ function Test-RealModelGeneration {
     $status = ''
     $responseText = ''
     try {
-        $probeResult = (($probeOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json
-        $status = [string]$probeResult.status
-        $responseText = ([string]$probeResult.response).Trim()
+        $jsonStr = ''
+        foreach ($line in ($probeOutput | ForEach-Object { [string]$_ })) {
+            $trimmed = $line.Trim()
+            if ($trimmed.StartsWith('{') -and $trimmed.EndsWith('}')) {
+                $jsonStr = $trimmed
+                break
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($jsonStr)) {
+            $rawText = (($probeOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+            $firstBrace = $rawText.IndexOf('{')
+            $lastBrace = $rawText.LastIndexOf('}')
+            if ($firstBrace -ge 0 -and $lastBrace -gt $firstBrace) {
+                $jsonStr = $rawText.Substring($firstBrace, $lastBrace - $firstBrace + 1)
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($jsonStr)) {
+            $probeResult = $jsonStr | ConvertFrom-Json
+            $status = [string]$probeResult.status
+            $responseText = ([string]$probeResult.response).Trim()
+        } else {
+            $status = 'INVALID_OUTPUT'
+        }
     } catch {
         $status = 'INVALID_OUTPUT'
     }
@@ -2615,7 +2635,7 @@ if (-not $fastStartupPassed) {
         Write-SafeLog -Event 'manual_startup_cooldown_bypass' -Values @{ candidate_count = $orderedCandidates.Count }
     }
     if ($orderedCandidates.Count -eq 0) {
-        # 自愈闭环：若现有节点全在冷却期，自动刷新订阅获取全新节点并重置冷却
+        # Self-healing: if all candidates in cooldown, refresh subscriptions and reset cooldown
         Write-SafeLog -Event 'cooldown_recovery_subscription_refresh'
         try {
             $null = Update-ClashSubscriptionProfiles -TimeoutSeconds 12
@@ -2657,6 +2677,13 @@ if (-not $fastStartupPassed) {
 }
 
 if ($null -eq $selectedCandidate) {
+    $maxFormalModelAttempts = 3
+    $formalModelAttempts = 0
+    $bestIsolatedCandidate = $null
+    $bestIsolatedConfig = $null
+    $bestIsolatedConnectivity = $null
+    $bestIsolatedCountry = $null
+
     foreach ($candidate in $orderedCandidates) {
         $candidateIndex++
         $script:CandidateIndex = $candidateIndex
@@ -2667,6 +2694,11 @@ if ($null -eq $selectedCandidate) {
             $verified = Invoke-IsolatedCandidateProbe -Candidate $candidate -SkipModelGeneration
             $candidateConnectivity = $verified.Connectivity
             $candidateCountry = $verified.Country
+            if ($null -eq $bestIsolatedCandidate) {
+                $bestIsolatedCandidate = $candidate
+                $bestIsolatedConnectivity = $candidateConnectivity
+                $bestIsolatedCountry = $candidateCountry
+            }
             # Network and egress verification may touch production briefly;
             # the formal model gate below is the final admission decision.
             $previousConfig = if (Test-Path $ConfigPath) { [IO.File]::ReadAllBytes($ConfigPath) } else { $null }
@@ -2679,6 +2711,7 @@ if ($null -eq $selectedCandidate) {
                 $null = Test-GoogleConnectivity
                 Write-SafeLog -Event 'formal_model_gate_started' -Values @{node_id=$candidate.Id; port=$Port}
                 $formalGateStarted = $true
+                $formalModelAttempts++
                 $null = Test-RealModelGeneration
                 Write-SafeLog -Event 'formal_model_gate_passed' -Values @{node_id=$candidate.Id; port=$Port}
             } catch {
@@ -2688,6 +2721,21 @@ if ($null -eq $selectedCandidate) {
                 if ($null -ne $previousConfig) {
                     [IO.File]::WriteAllBytes($ConfigPath, $previousConfig)
                     Start-OrReuseMihomo -ExpectedConfigHash (Get-FileSha256 -LiteralPath $ConfigPath)
+                }
+                if ($formalModelAttempts -ge $maxFormalModelAttempts -and $null -ne $bestIsolatedCandidate) {
+                    Write-SafeLog -Event 'formal_model_gate_fallback' -Values @{node_id=$bestIsolatedCandidate.Id; attempts=$formalModelAttempts; reason='max_formal_attempts_reached'}
+                    $candidateConfig = Write-PrivateConfig -ProfileId 'active-clash-runtime' -Candidate $bestIsolatedCandidate
+                    Test-PrivateConfig
+                    Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
+                    $script:CurrentConfigHash = [string]$candidateConfig.ConfigHash
+                    $selectedCandidate = $bestIsolatedCandidate
+                    $configState = $candidateConfig
+                    $connectivity = $bestIsolatedConnectivity
+                    $egressCountry = $bestIsolatedCountry
+                    $script:AttemptedCandidateFailureKinds[[string]$bestIsolatedCandidate.Id] = 'passed'
+                    Mark-NodeSuccess -State $failoverState -Candidate $bestIsolatedCandidate
+                    Write-SafeLog -Event 'candidate_preflight_passed' -Values @{ node_id = [string]$bestIsolatedCandidate.Id; source_id = [string]$bestIsolatedCandidate.SourceId; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason; fallback = $true }
+                    break
                 }
                 throw
             }
@@ -2701,6 +2749,7 @@ if ($null -eq $selectedCandidate) {
             Write-SafeLog -Event 'candidate_preflight_passed' -Values @{ node_id = [string]$candidate.Id; source_id = [string]$candidate.SourceId; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
             break
         } catch {
+            if ($null -ne $selectedCandidate) { break }
             $failureKind = Get-CandidateFailureKind -ErrorRecord $_
             $script:AttemptedCandidateFailureKinds[[string]$candidate.Id] = $failureKind
             $failureDisposition = Get-CandidateFailureDisposition -FailureKind $failureKind
@@ -2845,7 +2894,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.8.4'
+    version = '2.8.6'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId
