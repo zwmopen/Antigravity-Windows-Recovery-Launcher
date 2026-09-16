@@ -4558,6 +4558,54 @@
   [
     "Custom tool call output is missing",
     "自定义工具调用输出缺失"
+  ],
+  [
+    "Drag to select a region to comment",
+    "拖拽框选区域以添加批注"
+  ],
+  [
+    "Untitled Conversation",
+    "未命名对话"
+  ],
+  [
+    "CLI Project",
+    "命令行项目"
+  ],
+  [
+    "Sends after agent finishes working",
+    "智能体结束工作后发送"
+  ],
+  [
+    "Error Verification Required",
+    "错误：需要完成验证"
+  ],
+  [
+    "Verification Required",
+    "需要完成验证"
+  ],
+  [
+    "Working",
+    "工作中"
+  ],
+  [
+    "Exploring",
+    "探索中"
+  ],
+  [
+    "Analyzed",
+    "已分析"
+  ],
+  [
+    "Preview",
+    "预览"
+  ],
+  [
+    "Raw",
+    "源码"
+  ],
+  [
+    "Uploads",
+    "上传文件"
   ]
 ]);
 
@@ -4634,12 +4682,21 @@
     { pattern: /^(?:Thought for|深度思考)\s*(\d+)\s*m(?:in(?:utes?)?)?(?:\s*(\d+)\s*s(?:econds?)?)?$/i, replace: function (_m, mins, secs) { return '深度思考 ' + mins + ' 分钟' + (secs ? ' ' + secs + ' 秒' : ''); } },
     { pattern: /^(?:Thought for|深度思考)\s*(\d+)\s*s(?:econds?)?$/i, replace: function (_m, n) { return '深度思考 ' + n + ' 秒'; } },
     { pattern: /^(?:Thought for|深度思考)\s*(\d+)\s*h(?:ours?)?$/i, replace: function (_m, n) { return '深度思考 ' + n + ' 小时'; } },
-    { pattern: /^(\d+)\s+files?\s+changed$/i, replace: function (_m, n) { return n + ' 个修改的文件'; } },
+    { pattern: /^(\d+)\s+files?\s+changed(?:\s*([+-]\d+.*))?$/i, replace: function (_m, n, diff) { return n + ' 个修改的文件' + (diff ? ' ' + diff : ''); } },
     { pattern: /^Send now:\s*(.+)$/i, replace: function (_m, text) { return '立即发送：' + text; } },
     { pattern: /^Delete:\s*(.+)$/i, replace: function (_m, text) { return '删除：' + text; } },
     { pattern: /^Edit:\s*(.+)$/i, replace: function (_m, text) { return '编辑：' + text; } },
     { pattern: /^Opens external link:\s*(.+)$/i, replace: function (_m, text) { return '打开外部链接：' + text; } },
-    { pattern: /^Running (\d+)\s*commands?$/i, replace: function (_m, n) { return '正在运行 ' + n + ' 个命令'; } },
+    { pattern: /^(?:Running|正在运行)\s*(\d+)\s*(?:commands?|条命令|个命令)$/i, replace: function (_m, n) { return '正在运行 ' + n + ' 条命令'; } },
+    { pattern: /^(?:Ran|已运行)\s*(\d+)\s*(?:commands?|条命令|个命令)$/i, replace: function (_m, n) { return '已运行 ' + n + ' 条命令'; } },
+    { pattern: /^(?:Explored|已探索)\s*(\d+)\s*(?:search(?:es)?|次搜索)$/i, replace: function (_m, n) { return '已探索 ' + n + ' 次搜索'; } },
+    { pattern: /^(?:Explored|已探索)\s*(\d+)\s*(?:tasks?|个任务)$/i, replace: function (_m, n) { return '已探索 ' + n + ' 个任务'; } },
+    { pattern: /^(\d+)\s+tasks?\s+running$/i, replace: function (_m, n) { return n + ' 个任务正在运行'; } },
+    { pattern: /^(\d+)\s+search(?:es)?$/i, replace: function (_m, n) { return n + ' 次搜索'; } },
+    { pattern: /^(\d+)\s+commands?$/i, replace: function (_m, n) { return n + ' 条命令'; } },
+    { pattern: /^(\d+)\s+tasks?$/i, replace: function (_m, n) { return n + ' 个任务'; } },
+    { pattern: /^(\d+)\s+files?$/i, replace: function (_m, n) { return n + ' 个文件'; } },
+    { pattern: /^(\d+)\s+files?,\s*(\d+)\s+tasks?$/i, replace: function (_m, f, t) { return f + ' 个文件，' + t + ' 个任务'; } },
     { pattern: /^Queued Messages?$/i, replace: function () { return '已排队消息'; } },
     { pattern: /Requesting permission to (read access to this path|write access to this path|reading this URL|executing actions on this URL|running this command outside the sandbox|running this command|using this MCP tool) (.+)/i, replace: function (_m, action, target) {
         var labels = { 'read access to this path': '读取此路径', 'write access to this path': '写入此路径', 'reading this URL': '读取此 URL', 'executing actions on this URL': '在此 URL 上执行操作', 'running this command outside the sandbox': '在沙盒外运行此命令', 'running this command': '运行此命令', 'using this MCP tool': '使用此 MCP 工具' };
@@ -4713,10 +4770,13 @@
     return translated;
   }
 
-  function translateText(value) { return translatePhrases(value); }
+  function translateText(value) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 20000) return value;
+    return translatePhrases(value);
+  }
 
   function translateUiText(value) {
-    if (typeof value !== 'string' || value.length === 0) return value;
+    if (typeof value !== 'string' || value.length === 0 || value.length > 5000) return value;
     var leading = (value.match(/^\s*/) || [''])[0];
     var trailing = (value.match(/\s*$/) || [''])[0];
     var body = value.slice(leading.length, value.length - trailing.length || value.length);

@@ -176,5 +176,24 @@ assert.strictEqual(core.translateUiText('Thought for 1m'), '深度思考 1 分�
 assert.strictEqual(core.translateUiText('Thought for 2m 15s'), '深度思考 2 分钟 15 秒');
 assert.strictEqual(core.translateUiText('4 files changed'), '4 个修改的文件');
 assert.strictEqual(core.translateUiText('Claude Sonnet 4.6 (Thinking)'), 'Claude Sonnet 4.6（思考模式）');
+assert.strictEqual(core.translateUiText('Sends after agent finishes working'), '智能体结束工作后发送');
+assert.strictEqual(core.translateUiText('Error Verification Required'), '错误：需要完成验证');
+assert.strictEqual(core.translateUiText('Verification Required'), '需要完成验证');
+assert.strictEqual(core.translateUiText('Drag to select a region to comment'), '拖拽框选区域以添加批注');
+assert.strictEqual(core.translateUiText('Untitled Conversation'), '未命名对话');
+assert.strictEqual(core.translateUiText('CLI Project'), '命令行项目');
+assert.strictEqual(core.translateUiText('Working'), '工作中');
+assert.strictEqual(core.translateUiText('Exploring'), '探索中');
+assert.strictEqual(core.translateUiText('Analyzed'), '已分析');
+assert.strictEqual(core.translateUiText('Preview'), '预览');
+assert.strictEqual(core.translateUiText('Raw'), '源码');
+assert.strictEqual(core.translateUiText('Uploads'), '上传文件');
+assert.strictEqual(core.translateUiText('1 search'), '1 次搜索');
+assert.strictEqual(core.translateUiText('2 commands'), '2 条命令');
+assert.strictEqual(core.translateUiText('1 task'), '1 个任务');
+assert.strictEqual(core.translateUiText('4 commands'), '4 条命令');
+assert.strictEqual(core.translateUiText('1 file, 2 tasks'), '1 个文件，2 个任务');
+assert.strictEqual(core.translateUiText('Running 2 commands'), '正在运行 2 条命令');
+assert.strictEqual(core.translateUiText('Ran 4 commands'), '已运行 4 条命令');
 
 console.log('localization-extension.test.js: PASS');

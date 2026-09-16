@@ -25,7 +25,12 @@
   // every React update traverse the page more than once.
   var core = globalThis.AntigravityZhCore;
   if (!core) return;
-  if (globalThis.__AntigravityZhContentInstalled) return;
+  if (globalThis.__AntigravityZhContentInstalled) {
+    if (typeof globalThis.__AntigravityZhForceTranslate === 'function') {
+      globalThis.__AntigravityZhForceTranslate();
+    }
+    return;
+  }
   globalThis.__AntigravityZhContentInstalled = true;
 
   var DEBOUNCE_MS = 80;
@@ -110,21 +115,35 @@
     return isSettingsSurface(el) || isUiTextElement(el);
   }
 
+  function isToolOrStatusPillText(text) {
+    if (!text || typeof text !== 'string') return false;
+    var trimmed = text.trim();
+    if (/^(?:Sends after agent finishes working|Error Verification Required|Verification Required|Drag to select a region to comment|Untitled Conversation|CLI Project|Working|Exploring|Analyzed|Preview|Raw)$/i.test(trimmed)) return true;
+    if (/^\d+\s+tasks?\s+running$/i.test(trimmed)) return true;
+    if (/^\d+\s+files?\s+changed(?:\s*[+-]\d+.*)?$/i.test(trimmed)) return true;
+    if (/^(?:Running|Ran|Explored|正在运行|已运行|已探索)?\s*\d+\s*(?:search(?:es)?|commands?|tasks?|files?|条命令|次搜索|个任务|个文件)(?:,\s*\d+\s*(?:search(?:es)?|commands?|tasks?|files?|条命令|次搜索|个任务|个文件))*$/i.test(trimmed)) return true;
+    return false;
+  }
+
   function shouldTranslateTextNode(node) {
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.parentElement) return false;
-    var val = (node.nodeValue || '').trim();
+    var raw = node.nodeValue;
+    if (!raw || raw.length > 5000) return false;
+    var val = raw.trim();
     if (val === 'Queued Messages' || val === 'Queued Message' || val === 'Queued') return true;
+    if (isToolOrStatusPillText(val)) return true;
     if (!isProtectedTextElement(node.parentElement)) return true;
     var row = closest(node.parentElement, '[data-testid="conversation-row-sidebar"]');
-    return !!row && /^\s*\d+\s*(?:[smhd]|seconds?|minutes?|hours?|days?)\s*$/i.test(node.nodeValue || '');
+    return !!row && /^\s*\d+\s*(?:[smhd]|seconds?|minutes?|hours?|days?)\s*$/i.test(val);
   }
 
   function translateTextNode(node) {
     if (!shouldTranslateTextNode(node)) return 0;
     var oldValue = node.nodeValue;
     var rowTimestamp = closest(node.parentElement, '[data-testid="conversation-row-sidebar"]');
+    var isPill = isToolOrStatusPillText(oldValue);
     var useUiTranslation = isUiTextElement(node.parentElement) ||
-      isSettingsSurface(node.parentElement) || rowTimestamp;
+      isSettingsSurface(node.parentElement) || rowTimestamp || isPill;
     var previous = lastTextValues.get(node);
     if (previous && previous.value === oldValue && previous.useUi === !!useUiTranslation) return 0;
     var newValue = useUiTranslation
@@ -186,6 +205,13 @@
     }
     return changed;
   }
+
+  globalThis.__AntigravityZhForceTranslate = function () {
+    core = globalThis.AntigravityZhCore || core;
+    lastTextValues = new WeakMap();
+    lastAttributeValues = new WeakMap();
+    if (document.body) translateSubtree(document.body);
+  };
 
   function contains(ancestor, node) {
     if (!ancestor || !node) return false;
