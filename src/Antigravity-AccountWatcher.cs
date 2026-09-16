@@ -44,7 +44,7 @@ internal static class AntigravityAccountWatcher
     // account/client keeps receiving the same upstream policy response.
     internal const int LocationFailureDebounceSeconds = 30;
     internal const int LocationStabilityWindowSeconds = 120;
-    internal const int LocationCircuitBreakerSeconds = 900;
+    internal const int LocationCircuitBreakerSeconds = 180;
     internal const int MaxLocationRecoveriesPerWindow = 2;
 
     internal static string ReadHandledAccountId()

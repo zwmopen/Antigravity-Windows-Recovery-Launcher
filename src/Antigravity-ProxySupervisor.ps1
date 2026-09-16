@@ -1306,6 +1306,38 @@ function Resolve-PythonPath {
     return 'python.exe'
 }
 
+function Show-ProxyNotification {
+    param(
+        [Parameter(Mandatory = $true)][string]$Event,
+        [hashtable]$Values = @{}
+    )
+
+    try {
+        $pyScript = Join-Path $ScriptRoot 'antigravity_smart_switch.py'
+        if (-not (Test-Path -LiteralPath $pyScript)) {
+            $canonicalScript = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\antigravity_smart_switch.py'
+            if (Test-Path -LiteralPath $canonicalScript) { $pyScript = $canonicalScript }
+        }
+        if (Test-Path -LiteralPath $pyScript) {
+            $pyExe = Resolve-PythonPath
+            $argsList = @(
+                "`"$pyScript`"",
+                "--notify-event", $Event
+            )
+            if ($Values.ContainsKey('region')) { $argsList += @('--notify-region', [string]$Values['region']) }
+            if ($Values.ContainsKey('node')) { $argsList += @('--notify-node', ('"' + [string]$Values['node'] + '"')) }
+            if ($Values.ContainsKey('rtt')) { $argsList += @('--notify-rtt', [string]$Values['rtt']) }
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $pyExe
+            $psi.Arguments = ($argsList -join ' ')
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+            [System.Diagnostics.Process]::Start($psi) | Out-Null
+        }
+    } catch { }
+}
+
 function Update-ClashSubscriptionProfiles {
     [CmdletBinding()]
     param([int]$TimeoutSeconds = 12)
@@ -2502,16 +2534,16 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
 }
 
 if (-not $fastStartupPassed) {
-    # 自动按需刷新机场订阅：若有订阅过期、处于冷启动且超过6小时未更新、或本地节点库为空，则自动拉取最新节点
+    # 自动按需刷新机场订阅：若有订阅过期、距离上次更新超 1 小时、或本地节点库为空，自动增量拉取最新节点
     $shouldUpdateSubs = $false
     $indexedProfiles = @(Get-IndexedRemoteProfiles)
     if ($indexedProfiles.Count -gt 0) {
         $usableProfiles = @($indexedProfiles | Where-Object { Test-IndexedProfileUsable -Profile $_ })
         if ($usableProfiles.Count -lt $indexedProfiles.Count) {
             $shouldUpdateSubs = $true
-        } elseif ($RecoveryReason -eq 'Startup') {
+        } else {
             $minUpdate = ($usableProfiles | Where-Object { $null -ne $_.UpdatedAt } | Measure-Object -Property UpdatedAt -Minimum).Minimum
-            if ($null -eq $minUpdate -or ((Get-Date).ToUniversalTime() - $minUpdate).TotalHours -gt 6) {
+            if ($null -eq $minUpdate -or ((Get-Date).ToUniversalTime() - $minUpdate).TotalHours -ge 1) {
                 $shouldUpdateSubs = $true
             }
         }
@@ -2540,6 +2572,7 @@ if (-not $fastStartupPassed) {
         [string]$_.Id -eq [string]$failoverState.active_node_id
     } | Select-Object -First 1)
     if ($RecoveryReason -in @('NetworkFailure', 'LocationFailure', 'UserRequestedRepair', 'Force') -and -not [string]::IsNullOrWhiteSpace([string]$failoverState.active_node_id)) {
+        Show-ProxyNotification -Event 'recovery_started'
         Add-NodeCooldown -State $failoverState -NodeId ([string]$failoverState.active_node_id) -Reason $RecoveryReason
     }
     $cooldownIds = @(Get-ActiveCooldownEntries -State $failoverState | Select-Object -ExpandProperty node_id)
@@ -2563,6 +2596,7 @@ if (-not $fastStartupPassed) {
     }
     if ($orderedCandidates.Count -eq 0) {
         Save-FailoverState -State $failoverState
+        Show-ProxyNotification -Event 'cooldown_warning'
         Stop-WithMessage -Event 'all_candidates_in_cooldown'
     }
 
@@ -2683,6 +2717,10 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
     # Existing Antigravity editor remains completely uninterrupted.
     $antigravityPid = [int]$existingAntigravity[0].ProcessId
     Write-SafeLog -Event 'antigravity_live_seamless_attached' -Values @{ pid = $antigravityPid; port = $Port; recovery = $RecoveryReason }
+    if ($RecoveryReason -in @('NetworkFailure', 'LocationFailure', 'UserRequestedRepair', 'Force', 'AccountChange', 'cockpit_account_changed')) {
+        $nodeName = if ($null -ne $selectedCandidate) { [string]$selectedCandidate.Name } else { '' }
+        Show-ProxyNotification -Event 'recovery_success' -Values @{ region = $egressCountry; node = $nodeName; rtt = $script:LastProbeRttMs }
+    }
 } else {
     Stop-ExistingAntigravity
 

@@ -1534,6 +1534,26 @@ def send_dual_notification(title, message, status="warning"):
     send_feishu_notification(title, message)
 
 
+def handle_notification_event(event_type, region="", node="", rtt=""):
+    """标准化反重力运行事件的桌面通知格式"""
+    if event_type == "recovery_success":
+        reg_map = {"JP": "日本东京", "US": "美国"}
+        reg_str = reg_map.get(region, region or "境外优质")
+        rtt_str = f" ({rtt}ms)" if rtt and str(rtt) != "0" else ""
+        node_str = f" {node}" if node else ""
+        title = "反重力专线已自愈就绪"
+        msg = f"已恢复连通！接入: {reg_str}{node_str}{rtt_str}，可继续对话。"
+        send_windows_notification(title, msg, status="info")
+    elif event_type == "recovery_started":
+        title = "反重力专线自愈中"
+        msg = "检测到网络节点受限或波动，正在秒级优选最佳专线..."
+        send_windows_notification(title, msg, status="warning")
+    elif event_type == "cooldown_warning":
+        title = "反重力专线提醒"
+        msg = "可用节点暂时处于保护冷却中，双击桌面「Antigravity 启动器」可随时强制重连。"
+        send_windows_notification(title, msg, status="warning")
+
+
 def _load_quota_pool_state():
     try:
         if os.path.exists(QUOTA_POOL_STATE_FILE):
@@ -2835,10 +2855,21 @@ def main():
     parser.add_argument("--resume-text", type=str, default="1", help="自动续接发送的内容 (默认: 1)")
     parser.add_argument("--resume-count", type=int, default=3, help="自动续接前排窗口数 (默认: 3)")
     parser.add_argument("--update-subscriptions", action="store_true", help="主动从机场提供商更新全部 Clash 订阅配置")
+    parser.add_argument("--notify", type=str, default="", help="发送 Windows 桌面气泡通知正文")
+    parser.add_argument("--notify-title", type=str, default="反重力网络专线", help="发送 Windows 桌面气泡通知标题")
+    parser.add_argument("--notify-status", type=str, default="info", help="通知级别: info, warning, error")
+    parser.add_argument("--notify-event", type=str, default="", help="标准化通知事件代码")
+    parser.add_argument("--notify-region", type=str, default="", help="节点所在区域")
+    parser.add_argument("--notify-node", type=str, default="", help="节点名称")
+    parser.add_argument("--notify-rtt", type=str, default="", help="延迟数值")
     
     args = parser.parse_args()
     
-    if args.stop_watch:
+    if args.notify_event:
+        handle_notification_event(args.notify_event, region=args.notify_region, node=args.notify_node, rtt=args.notify_rtt)
+    elif args.notify:
+        send_windows_notification(args.notify_title, args.notify, status=args.notify_status)
+    elif args.stop_watch:
         stop_watch_daemon()
     elif args.watch:
         run_watch_daemon(threshold=args.threshold, interval=args.interval)
