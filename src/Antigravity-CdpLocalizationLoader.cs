@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -51,16 +52,17 @@ internal static class AntigravityCdpLocalizationLoader
         return script;
     }
 
-    private static string ReadDevToolsTarget()
+    private static List<string> ReadDevToolsTargets()
     {
-        if (!File.Exists(DevToolsPortPath)) return "";
+        List<string> result = new List<string>();
+        if (!File.Exists(DevToolsPortPath)) return result;
         string[] lines = File.ReadAllLines(DevToolsPortPath);
-        if (lines.Length == 0) return "";
+        if (lines.Length == 0) return result;
 
         int port;
         if (!int.TryParse(lines[0].Trim(), out port) || port < 1 || port > 65535)
         {
-            return "";
+            return result;
         }
 
         HttpWebRequest request = null;
@@ -77,18 +79,34 @@ internal static class AntigravityCdpLocalizationLoader
             reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8);
             string json = reader.ReadToEnd();
 
-            Match pageMatch = Regex.Match(
+            MatchCollection pageMatches = Regex.Matches(
                 json,
                 "\\\"type\\\"\\s*:\\s*\\\"page\\\"[\\s\\S]*?\\\"webSocketDebuggerUrl\\\"\\s*:\\s*\\\"(ws:[^\\\"]+)\\\"",
                 RegexOptions.IgnoreCase);
-            if (!pageMatch.Success)
+            foreach (Match m in pageMatches)
             {
-                pageMatch = Regex.Match(
+                if (m.Success && !string.IsNullOrEmpty(m.Groups[1].Value))
+                {
+                    string ws = m.Groups[1].Value;
+                    if (!result.Contains(ws)) result.Add(ws);
+                }
+            }
+            if (result.Count == 0)
+            {
+                MatchCollection fallback = Regex.Matches(
                     json,
                     "\\\"webSocketDebuggerUrl\\\"\\s*:\\s*\\\"(ws:[^\\\"]+)\\\"",
                     RegexOptions.IgnoreCase);
+                foreach (Match m in fallback)
+                {
+                    if (m.Success && !string.IsNullOrEmpty(m.Groups[1].Value))
+                    {
+                        string ws = m.Groups[1].Value;
+                        if (!result.Contains(ws)) result.Add(ws);
+                    }
+                }
             }
-            return pageMatch.Success ? pageMatch.Groups[1].Value : "";
+            return result;
         }
         finally
         {
@@ -97,14 +115,14 @@ internal static class AntigravityCdpLocalizationLoader
         }
     }
 
-    private static string WaitForDevToolsTarget()
+    private static List<string> WaitForDevToolsTargets()
     {
         for (int attempt = 0; attempt < PollAttempts; attempt++)
         {
             try
             {
-                string target = ReadDevToolsTarget();
-                if (!string.IsNullOrEmpty(target)) return target;
+                List<string> targets = ReadDevToolsTargets();
+                if (targets != null && targets.Count > 0) return targets;
             }
             catch { }
             Thread.Sleep(250);
@@ -359,15 +377,32 @@ internal static class AntigravityCdpLocalizationLoader
         try
         {
             string script = LoadInjectionScript();
-            string target = WaitForDevToolsTarget();
-            using (CdpWebSocket socket = new CdpWebSocket(target))
+            List<string> targets = WaitForDevToolsTargets();
+            int injectedCount = 0;
+            foreach (string target in targets)
             {
-                socket.Connect();
-                socket.Call("Page.addScriptToEvaluateOnNewDocument", "{\"source\":" + JsonQuote(script) + "}");
-                socket.Call("Runtime.evaluate", "{\"expression\":" + JsonQuote(script) + "}");
+                try
+                {
+                    using (CdpWebSocket socket = new CdpWebSocket(target))
+                    {
+                        socket.Connect();
+                        socket.Call("Page.addScriptToEvaluateOnNewDocument", "{\"source\":" + JsonQuote(script) + "}");
+                        socket.Call("Runtime.evaluate", "{\"expression\":" + JsonQuote(script) + "}");
+                        injectedCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("target_injection_error", "target=" + target + " type=" + ex.GetType().Name);
+                }
             }
-            Log("injection_succeeded", "version=0.4.0");
-            return 0;
+            if (injectedCount > 0)
+            {
+                Log("injection_succeeded", "targets=" + injectedCount + " version=0.4.0");
+                return 0;
+            }
+            Log("injection_failed", "no_targets_succeeded");
+            return 1;
         }
         catch (Exception exception)
         {

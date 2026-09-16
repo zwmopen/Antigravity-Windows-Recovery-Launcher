@@ -2811,14 +2811,17 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 
     $readiness = Wait-AntigravityReady -MainPid $antigravityPid -LaunchTime $launchTime
 
-    if ($null -ne $loader) {
-        if (-not $loader.HasExited) {
-            $null = $loader.WaitForExit(5000)
-        }
-        if ($loader.HasExited -and $loader.ExitCode -eq 0) {
-            Write-SafeLog -Event 'localization_loader_succeeded'
-        } else {
-            Write-SafeLog -Event 'localization_loader_finished' -Values @{ exit_code = if ($loader.HasExited) { $loader.ExitCode } else { -1 } }
+    # Post-handshake: language server is ready and workspace page is loaded
+    if ($localizationEnabled -and $localizationMode -eq 'cdp-loader') {
+        try {
+            $postLoader = Start-Process -FilePath $LocalizationLoaderPath -WorkingDirectory $ScriptRoot -WindowStyle Hidden -Wait -PassThru
+            if ($postLoader.ExitCode -eq 0) {
+                Write-SafeLog -Event 'localization_loader_succeeded'
+            } else {
+                Write-SafeLog -Event 'localization_loader_warning' -Values @{ exit_code = $postLoader.ExitCode }
+            }
+        } catch {
+            Write-SafeLog -Event 'localization_loader_error' -Values @{ error = $_.Exception.Message }
         }
     }
 

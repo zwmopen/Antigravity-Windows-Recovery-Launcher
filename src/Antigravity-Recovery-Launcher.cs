@@ -148,11 +148,7 @@ namespace AntigravityLauncher
 
             // 4. 冷启动 / 重启修复：展示具备清晰通路与链路核验反馈的极简状态卡片
             TraceLog("Displaying AntigravityLaunchCapsuleForm...");
-            string resolvedReason = GetRecoveryReason(args);
-            if (string.IsNullOrEmpty(resolvedReason))
-            {
-                resolvedReason = forceLaunch ? "UserRequestedRepair" : "Startup";
-            }
+            string resolvedReason = forceLaunch ? "UserRequestedRepair" : GetRecoveryReason(args);
             var capsule = new AntigravityLaunchCapsuleForm(resolvedReason);
             Application.Run(capsule);
 
@@ -1636,7 +1632,11 @@ namespace AntigravityLauncher
                 Program.TraceLog("Supervisor mutex is currently held. Entering takeover monitor.");
                 if (WaitForExistingSupervisor(logStartOffset, ref displayedProgress))
                 {
-                    return;
+                    if (recoveryReason != "UserRequestedRepair")
+                    {
+                        return;
+                    }
+                    Program.TraceLog("Background supervisor completed, but user requested repair. Proceeding with full restart.");
                 }
                 logStartOffset = GetLogLength();
             }

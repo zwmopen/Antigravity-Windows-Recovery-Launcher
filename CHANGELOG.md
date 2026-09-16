@@ -1,15 +1,17 @@
 # 变更记录
 
-## 1.6.12 启动性能极致跃迁、零延迟首帧汉化与崩溃根因根治 — 2026-09-16
+## 1.6.12 启动性能极致跃迁、零延迟首帧汉化与自愈重连根治 — 2026-09-16
 
 - **Fast Startup 秒级复用彻底修复（64s $\to$ 0.2s 性能跃迁）**：
   - 根治 `Get-HttpStatusThroughProxy` 缺失 `-TimeoutMs` 参数导致的静默抛错崩溃与 `fastStartupPassed = $false` 误判问题，将探测超时调整至 3000ms；
   - 启动时直走极速秒开通道（毫秒级验证），彻底跳过长达 64 秒的机场全量拉取、6 个候选节点独立端口多进程隔离探测与 agy 大模型全链路生成耗时。
 - **机场订阅增量更新异步后台化**：
   - 本地已有可用节点时，启动流程绝不卡顿等待 16 秒拉取远程机场，改为后台静默异步刷新，用户双击启动器即刻秒开。
-- **首帧汉化并发注入与崩溃根除（彻底消灭 20 秒英文/IDE推广延迟）**：
-  - 根治 `Wait-AntigravityReady` 中 `Get-PrivateProxyConnectionCount` 未定义导致的致命抛错崩溃；
-  - 重构加载时序架构：将 `Antigravity-CdpLocalizationLoader.exe` 从过去的“同步等待后端 language_server 握手 15-20 秒后执行”重构为与 Antigravity 进程并发异步拉起，利用 DevTools 端口 500ms 即刻就绪的特性，在首帧 DOM 渲染前完成 `Page.addScriptToEvaluateOnNewDocument` 注入，彻底消灭“刚启动是英文和推广按钮、20秒后才突然生效”的竞态延迟。
+- **用户自愈重连（Repair）强制重启机制修复**：
+  - 根治启动器在用户点击“⚡ 网络自愈重连”时未正确传递 `UserRequestedRepair`、导致误入平滑附着（未实际杀死挂死窗口）的 Bug；修复后显式触发 `Stop-ExistingAntigravity`，彻底清除断连挂死进程并重拉健康实例。
+- **双阶段汉化注入与全页面目标覆盖（彻底消灭漏译与英文回退）**：
+  - `Antigravity-CdpLocalizationLoader.exe` 升级为全 Target 遍历注入（匹配所有 `type: page` 目标），杜绝多窗口/渲染容器漏译；
+  - 监督器构建“首帧并发挂载 + 语言服务就绪后 DOM 闭环锁定”双保险时序，彻底解决 Electron 页面冷启动导航导致前期注入被刷新冲掉的问题。
 
 ## 1.6.11 动态执行胶囊与排队状态汉化、超大文本安全防护与热更新闭环 — 2026-09-16
 

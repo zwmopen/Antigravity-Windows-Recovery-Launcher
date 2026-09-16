@@ -59,8 +59,9 @@
 - 2026-09-16 19:25 (v1.6.12) 现场复盘与性能大跃迁闭环：
   - **Fast Startup 根因修复（64s $\to$ 0.2s 性能跃升）**：排查发现 `Get-HttpStatusThroughProxy` 缺失 `[int]$TimeoutMs = 0` 参数声明，导致启动器在执行极速通道检查时每次均抛出未匹配参数异常并静默捕获，迫使启动器每次冷启动都误退化进入 64 秒漫长自愈排查链（包含 16 秒机场更新、6 轮多进程隔离探测与 15 秒 agy 大模型全链路生成）。增加参数后将检测超时调为 3000ms，热启动实测 1.4 秒（其中核心探测仅 0.2 秒）直接命中 `fast_startup_reused`；
   - **订阅刷新异步后台化**：本地已有可用节点时，启动脚本不再前台卡死等待 16 秒拉取远程订阅，改为后台异步刷新，用户双击启动器即刻秒开；
+  - **用户自愈重连（Repair）强制重启机制修复**：根治启动器在用户点击“⚡ 网络自愈重连”时因 `resolvedReason` 未声明为 `UserRequestedRepair` 导致误入平滑附着（未实际杀死挂死窗口）的 Bug；修复后显式触发 `Stop-ExistingAntigravity`，彻底清除断连挂死进程并重拉健康实例；
+  - **双阶段汉化注入与全页面目标覆盖**：`Antigravity-CdpLocalizationLoader.exe` 升级为全 Target 遍历注入（匹配所有 `type: page` 目标），监督器构建“首帧并发挂载 + 语言服务就绪后 DOM 闭环锁定”双保险时序，彻底解决 Electron 页面冷启动导航导致前期注入被刷新冲掉的问题；
   - **Wait-AntigravityReady 崩溃根除**：补齐之前缺失的 `Get-PrivateProxyConnectionCount` 函数定义，根除导致启动脚本以 ExitCode 1 崩溃并拦截后续汉化 loader 执行的致命隐患；
-  - **首帧汉化并发注入**：将 `Antigravity-CdpLocalizationLoader.exe` 从后端 `Wait-AntigravityReady` 之后前移至与 Electron 窗口进程并发拉起，利用 DevToolsActivePort 500ms 内就绪特性提前完成 `Page.addScriptToEvaluateOnNewDocument` 注入，彻底消灭“刚开软件是英文与推广按钮，20秒后才突变中文”的竞态延迟；
   - **实机验证**：无缝附着测试、PowerShell 5.1 语法解析测试、故障转移策略测试均 100% PASS，`safe_git_writeback.py` 提交并推送到远端仓库。
 - 2026-09-16 11:16–11:30 现场复盘：已部署监督器仍为 2.8.1；41 条候选中，基础预检通过者全部先进入 `language_server_wait_started`，15 秒后记录 `model_transport`，本轮没有 AGY 模型调用证据。watchdog 在 01:19、03:19、05:19、07:19、11:19 反复将 2.8.3 判为旧 bug 并还原 2.8.1，根因为扫描了候选隔离阶段合法的 `$ProbeTimeoutMs = 3000`。
 - 2026-09-16 2.8.4 修复：冷启动模型门禁改为跳过已有 language server 等待，由 AGY 自行启动/复用；候选隔离阶段不再调用模型，正式 `17897` 才执行一次真实 AGY。已加入冷启动门禁与 watchdog 版本回归测试，部署和真实 AGY 结果待本轮现场验收。
