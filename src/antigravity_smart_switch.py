@@ -336,8 +336,8 @@ def read_pending_switch():
         return None
 
 
-def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, target_title=None):
-    """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌，支持活动会话精准锚定)"""
+def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, target_title=None, interrupted_panes=None, running_sidebar_tasks=None):
+    """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌，支持智能断点感知精准续接)"""
     try:
         os.makedirs(os.path.dirname(PENDING_AUTO_RESUME_FILE), exist_ok=True)
         with open(PENDING_AUTO_RESUME_FILE, "w", encoding="utf-8") as f:
@@ -347,13 +347,20 @@ def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, ta
                 "max_windows": max_windows,
                 "target_href": target_href,
                 "target_title": target_title,
+                "interrupted_panes": interrupted_panes if interrupted_panes is not None else [],
+                "running_sidebar_tasks": running_sidebar_tasks if running_sidebar_tasks is not None else [],
                 "timestamp": time.time(),
                 "created_at": datetime.now().isoformat(),
                 "ttl_seconds": 300,
                 "status": "pending"
             }, f, indent=2)
         hint = f" (优先锚定会话: '{target_title or target_href}')" if (target_title or target_href) else ""
-        logger.info(f"已写入大任务断点自动续接凭据{hint} (前排 {max_windows} 个窗口，扣 '{text}')")
+        brk_hint = ""
+        if interrupted_panes:
+            brk_hint += f" [断点分屏列: {interrupted_panes}]"
+        if running_sidebar_tasks:
+            brk_hint += f" [侧边栏转圈任务: {len(running_sidebar_tasks)}个]"
+        logger.info(f"已写入大任务断点自动续接凭据{hint}{brk_hint} (前排 {max_windows} 个窗口，扣 '{text}')")
     except Exception as e:
         logger.warning(f"写入自动续接事务文件异常: {e}")
 
@@ -404,34 +411,119 @@ def get_devtools_active_port(wait_timeout=0):
     return None
 
 
-def get_current_active_conversation():
-    """在退出旧实例前通过 CDP 抓取当前处于前台活跃状态的会话，用于切号后优先精准续接"""
+def snapshot_active_and_running_tasks():
+    """在退出旧实例前通过 CDP 深度嗅探前台分屏窗格与侧边栏全局旋转状态，抓取全景断点任务清单"""
     port = get_devtools_active_port(wait_timeout=1)
     if not port or not websockets:
-        return None
+        return {
+            "has_running_tasks": False,
+            "interrupted_panes": [],
+            "running_sidebar_tasks": [],
+            "panes": [],
+            "active_href": "",
+            "active_title": ""
+        }
     try:
         req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
         pages = json.loads(req.read().decode("utf-8"))
         page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
         if not page:
-            return None
+            return {
+                "has_running_tasks": False,
+                "interrupted_panes": [],
+                "running_sidebar_tasks": [],
+                "panes": [],
+                "active_href": "",
+                "active_title": ""
+            }
         ws_url = page["webSocketDebuggerUrl"]
 
         async def _query():
-            async with websockets.connect(ws_url, ping_interval=None, close_timeout=2) as ws:
+            async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
                 js = """(() => {
                     const url = window.location.href;
-                    const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                    const activeRow = rows.find(r => {
+
+                    // 1. 侧边栏全局雷达扫描 (Sidebar Scanner: 侦测所有转圈会话)
+                    const sidebarRows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+                    const spinningSidebarTasks = [];
+                    let activeSidebarRow = null;
+
+                    for (let i = 0; i < sidebarRows.length; i++) {
+                        const r = sidebarRows[i];
                         const a = r.querySelector('a');
-                        return a && url.includes(a.getAttribute('href'));
-                    }) || rows.find(r => r.classList.contains('bg-sidebar-secondary'));
-                    const a = activeRow ? activeRow.querySelector('a') : null;
-                    const t = activeRow ? activeRow.querySelector('.truncate') : null;
+                        const href = a ? (a.getAttribute('href') || '') : '';
+                        const titleDiv = r.querySelector('.truncate');
+                        const title = titleDiv ? titleDiv.innerText.trim() : (r.innerText.split('\\n')[0] || '').trim();
+                        const isSpinning = !!r.querySelector('.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"], [class*="spin"]');
+
+                        if ((href && url.includes(href)) || r.classList.contains('bg-sidebar-secondary')) {
+                            activeSidebarRow = { href: href, title: title };
+                        }
+                        if (isSpinning) {
+                            spinningSidebarTasks.push({
+                                index: i,
+                                title: title || `会话-${i+1}`,
+                                href: href
+                            });
+                        }
+                    }
+
+                    // 2. 前台可见分屏窗格扫描 (Active Panes Scanner)
+                    const editors = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
+                    const visiblePanes = editors.map(ed => {
+                        const r = ed.getBoundingClientRect();
+                        return { el: ed, left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
+                    }).filter(ed => ed.width > 40 && ed.height > 10);
+                    visiblePanes.sort((a, b) => a.left - b.left);
+
+                    const allStopButtons = Array.from(document.querySelectorAll(
+                        'button[data-testid="stop-button"], button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="Cancel" i], button[aria-label*="取消" i]'
+                    )).filter(b => b.getBoundingClientRect().width > 0 && b.offsetParent !== null);
+
+                    const allSpins = Array.from(document.querySelectorAll(
+                        '.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"]'
+                    )).filter(s => s.getBoundingClientRect().width > 0 && s.offsetParent !== null);
+
+                    const panesStatus = visiblePanes.map((pane, idx) => {
+                        const colLeft = pane.left - 50;
+                        const colRight = pane.right + 50;
+
+                        const stopsInCol = allStopButtons.filter(b => {
+                            const r = b.getBoundingClientRect();
+                            return r.left >= colLeft && r.left <= colRight;
+                        });
+
+                        const spinsInCol = allSpins.filter(s => {
+                            const r = s.getBoundingClientRect();
+                            return r.left >= colLeft && r.left <= colRight;
+                        });
+
+                        // 嗅探该分屏列顶部标题
+                        const headers = Array.from(document.querySelectorAll('header, [data-testid*="header"], .truncate, h1, h2, h3')).filter(h => {
+                            const r = h.getBoundingClientRect();
+                            return r.top < 150 && r.left >= colLeft && r.left <= colRight && h.innerText && h.innerText.trim().length > 0;
+                        }).map(h => h.innerText.trim());
+
+                        const isRunning = stopsInCol.length > 0 || spinsInCol.length > 0;
+                        return {
+                            pane_index: idx,
+                            title: headers[1] || headers[0] || `分屏列-${idx+1}`,
+                            is_actively_running: isRunning,
+                            stops_labels: stopsInCol.map(b => b.getAttribute('aria-label') || b.innerText || 'Stop')
+                        };
+                    });
+
+                    const interruptedPanes = panesStatus.filter(p => p.is_actively_running).map(p => p.pane_index);
+
                     return {
                         url: url,
-                        href: a ? a.getAttribute('href') : '',
-                        title: t ? t.textContent.trim() : (document.title || '')
+                        active_href: activeSidebarRow ? activeSidebarRow.href : '',
+                        active_title: activeSidebarRow ? activeSidebarRow.title : (document.title || ''),
+                        total_panes: panesStatus.length,
+                        panes: panesStatus,
+                        interrupted_panes: interruptedPanes,
+                        running_sidebar_tasks: spinningSidebarTasks,
+                        has_running_tasks: interruptedPanes.length > 0 || spinningSidebarTasks.length > 0
                     };
                 })()"""
                 payload = {"id": 1, "method": "Runtime.evaluate", "params": {"expression": js, "returnByValue": True}}
@@ -439,10 +531,46 @@ def get_current_active_conversation():
                 resp = json.loads(await ws.recv())
                 return resp.get("result", {}).get("result", {}).get("value", {})
 
-        return asyncio.run(_query())
+        res = asyncio.run(_query())
+        if res:
+            logger.info(f"🔍 [CDP全景断点雷达] 检测到 {res.get('total_panes', 0)} 个前台分屏列 (运行中: {len(res.get('interrupted_panes', []))} 个), 侧边栏转圈任务: {len(res.get('running_sidebar_tasks', []))} 个")
+            if res.get("interrupted_panes"):
+                logger.info(f"   ▶ 前台运行中列: {res.get('interrupted_panes')}")
+            if res.get("running_sidebar_tasks"):
+                task_names = [t.get("title") for t in res.get("running_sidebar_tasks")]
+                logger.info(f"   ▶ 侧边栏转圈任务: {', '.join(task_names)}")
+            return res
+        return {
+            "has_running_tasks": False,
+            "interrupted_panes": [],
+            "running_sidebar_tasks": [],
+            "panes": [],
+            "active_href": "",
+            "active_title": ""
+        }
     except Exception as e:
-        logger.debug(f"抓取当前活动会话异常: {e}")
-        return None
+        logger.debug(f"抓取当前活动会话与断点任务异常: {e}")
+        return {
+            "has_running_tasks": False,
+            "interrupted_panes": [],
+            "running_sidebar_tasks": [],
+            "panes": [],
+            "active_href": "",
+            "active_title": ""
+        }
+
+
+def get_current_active_conversation():
+    """向后兼容接口：获取切号前当前处于前台活跃状态的会话"""
+    snapshot = snapshot_active_and_running_tasks()
+    return {
+        "url": snapshot.get("url", ""),
+        "href": snapshot.get("active_href", ""),
+        "title": snapshot.get("active_title", ""),
+        "is_generating": snapshot.get("has_running_tasks", False),
+        "interrupted_panes": snapshot.get("interrupted_panes", []),
+        "running_sidebar_tasks": snapshot.get("running_sidebar_tasks", [])
+    }
 
 
 def update_clash_subscriptions(timeout_seconds=12):
@@ -580,8 +708,8 @@ def _reload_clash_core(clash_dir, profiles_config):
         logger.warning(f"Clash 核心重载过程异常: {e}")
 
 
-async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_href=None, force_send=None):
-    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持活动会话精准锚定与草稿自愈提交)"""
+async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_href=None, force_send=None, interrupted_panes=None, running_sidebar_tasks=None):
+    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持智能断点感知与草稿自愈提交)"""
     if force_send is None:
         force_send = True
     if force_send:
@@ -645,14 +773,28 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
             screen_panes = scan_res.get("result", {}).get("result", {}).get("value") or []
 
             if screen_panes and len(screen_panes) > 0:
-                logger.info(f"🖥️ [多分屏原生感知模式] 检测到当前屏幕一字排开 {len(screen_panes)} 个分屏窗格！启用分屏专属原地续接引擎 (不碰侧边栏，完好保护分屏排布)...")
+                logger.info(f"🖥️ [多分屏原生感知模式] 检测到当前屏幕一字排开 {len(screen_panes)} 个分屏窗格！启用智能断点原地续接引擎 (不碰侧边栏，完好保护分屏排布)...")
+
+                # 智能断点感知：若切号前明确检测到前台所有分屏均为空闲态且侧边栏无转圈任务，彻底静默，0打扰
+                if interrupted_panes is not None and len(interrupted_panes) == 0 and not running_sidebar_tasks:
+                    logger.info("⏭ [智能断点感知] 切号前所有分屏窗口均处于空闲等待态，无需向任何窗口补发'继续'，100% 保持静默。")
+                    return {"success": True, "processed": 0, "success_count": 0, "results": [], "mode": "smart_idle_skip"}
+
                 results = []
                 target_count = min(len(screen_panes), int(max_windows))
 
                 for p_idx in range(target_count):
                     p_info = screen_panes[p_idx]
                     col_num = p_idx + 1
-                    logger.info(f"▶ 正在处理 [分屏列 {col_num}/{target_count}] (X={p_info['x']}, 宽度={p_info['w']})...")
+
+                    # 智能断点过滤：如果明确传入了中断列列表，非中断列一律保持静默跳过！
+                    if interrupted_panes is not None and len(interrupted_panes) > 0:
+                        if p_idx not in interrupted_panes:
+                            logger.info(f"⏭ [智能断点感知] 分屏列 [{col_num}] 切号前处于空闲待命态，跳过续接，保持原样静默。")
+                            results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "reason": "idle_skip"})
+                            continue
+
+                    logger.info(f"▶ 正在处理断点接力 [分屏列 {col_num}/{target_count}] (X={p_info['x']}, 宽度={p_info['w']})...")
 
                     # a. 聚焦并嗅探该列窗格的状态
                     prep_pane_js = f"""
@@ -822,15 +964,26 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
 
             logger.info(f"CDP 成功检索到 {len(all_convs)} 个侧边栏会话，准备智能优先续接 (最多 {max_windows} 个)...")
 
-            # 优先级重组：优先精准锚定切号前的活跃任务会话
+            # 优先级重组：优先精准锚定切号前的活跃任务会话与侧边栏转圈断点
             prioritized = []
+            if running_sidebar_tasks:
+                for r_task in running_sidebar_tasks:
+                    r_href = r_task.get("href", "")
+                    r_title = r_task.get("title", "")
+                    matched = next((c for c in all_convs if c.get("href") and (c["href"] in r_href or r_href in c["href"])), None)
+                    if not matched and r_title:
+                        matched = next((c for c in all_convs if c.get("title") == r_title), None)
+                    if matched and matched not in prioritized:
+                        prioritized.append(matched)
+                        logger.info(f"🎯 [侧边栏转圈断点命中] 优先续接: '{matched['title']}' ({matched['href']})")
+
             if target_href:
                 matched = next((c for c in all_convs if c.get("href") and (c["href"] in target_href or target_href in c["href"])), None)
                 if not matched:
                     m_uuid = re.search(r'[0-9a-fA-F-]{36}', target_href)
                     if m_uuid:
                         matched = next((c for c in all_convs if m_uuid.group(0) in c.get("href", "")), None)
-                if matched:
+                if matched and matched not in prioritized:
                     prioritized.append(matched)
                     logger.info(f"🎯 [切号前活跃任务精准定位] 优先续接: '{matched['title']}' ({matched['href']})")
 
@@ -1017,8 +1170,8 @@ def get_antigravity_main_pid():
     return 0
 
 
-def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_pids=None, target_href=None):
-    """执行前排任务窗口打标与自动续接 (单飞互斥保护，支持活动会话精准锚定)"""
+def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_pids=None, target_href=None, interrupted_panes=None, running_sidebar_tasks=None):
+    """执行前排任务窗口打标与自动续接 (单飞互斥保护，支持智能断点感知与精准接力)"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
         return False
@@ -1035,6 +1188,10 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
             text = token.get("text", text)
             if not target_href:
                 target_href = token.get("target_href")
+            if interrupted_panes is None:
+                interrupted_panes = token.get("interrupted_panes")
+            if running_sidebar_tasks is None:
+                running_sidebar_tasks = token.get("running_sidebar_tasks")
             # 立即消费令牌，防止后续重复调用
             clear_pending_auto_resume()
 
@@ -1087,10 +1244,17 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
         logger.info("⏳ 等待 10 秒让热重启后页面完全稳定...")
         time.sleep(10.0)
 
-        logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行前排窗口打标与发送'{text}'续接...")
+        logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行断点自愈感知与发送'{text}'续接...")
         for retry in range(2):
             try:
-                result = asyncio.run(_cdp_execute_auto_resume(ws_url, max_windows=max_windows, text=text, target_href=target_href))
+                result = asyncio.run(_cdp_execute_auto_resume(
+                    ws_url,
+                    max_windows=max_windows,
+                    text=text,
+                    target_href=target_href,
+                    interrupted_panes=interrupted_panes,
+                    running_sidebar_tasks=running_sidebar_tasks
+                ))
                 logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
 
                 # 热重启后侧边栏可能尚未加载完成，no_conversations_found 时等 30 秒自动重试一次
@@ -2259,30 +2423,52 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         logger.info("[DryRun 演练模式] 未执行实际退出与切号操作。")
         return "dry_run"
     
-    # 0. 优先探测抓取切号前当前处于活跃前台的会话窗口，用于精准续接
-    active_conv = get_current_active_conversation()
-    target_href = active_conv.get("href") if active_conv else None
-    target_title = active_conv.get("title") if active_conv else None
+    # 0. 优先深度探测抓取切号前当前处于活跃前台的会话窗口与侧边栏全局断点任务
+    task_snapshot = snapshot_active_and_running_tasks()
+    target_href = task_snapshot.get("active_href")
+    target_title = task_snapshot.get("active_title")
+    interrupted_panes = task_snapshot.get("interrupted_panes", [])
+    running_sidebar_tasks = task_snapshot.get("running_sidebar_tasks", [])
+    has_running_tasks = task_snapshot.get("has_running_tasks", False)
 
     # 1. 记录切号待办事务与断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
     write_pending_switch(best_acc)
     # 读取启动器设置，判断是否启用自动续接
     _settings_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Antigravity", "private-proxy", "launcher-settings.json")
-    _auto_resume_enabled = False
+    _auto_resume_enabled = None
     try:
         if os.path.exists(_settings_path):
             import re as _re
             _sj = open(_settings_path, encoding="utf-8").read()
             _m = _re.search(r'"auto_resume_enabled"\s*:\s*(true|false)', _sj)
             if _m:
-                _auto_resume_enabled = _m.group(1) == "true"
+                _auto_resume_enabled = (_m.group(1) == "true")
     except Exception:
         pass
-    if _auto_resume_enabled:
-        write_pending_auto_resume(max_windows=3, text="继续", target_href=target_href, target_title=target_title)
-        logger.info("✅ [设置] 自动续接已启用，切号后将在前 3 个窗口发送'继续'")
+
+    # 智能断点自愈策略：
+    # 若用户在设置中显式关闭（false），则遵从用户意愿关闭；
+    # 若开启（true）或默认状态且检测到有任务在运行/转圈，自适应激活智能断点接力
+    should_resume = (_auto_resume_enabled is True) or (_auto_resume_enabled is not False and has_running_tasks)
+    if should_resume:
+        max_w = max(task_snapshot.get("total_panes", 0), 4)
+        write_pending_auto_resume(
+            max_windows=max_w,
+            text="继续",
+            target_href=target_href,
+            target_title=target_title,
+            interrupted_panes=interrupted_panes,
+            running_sidebar_tasks=running_sidebar_tasks
+        )
+        if interrupted_panes:
+            logger.info(f"✅ [智能断点续接已就绪] 切号后将精准接力 {len(interrupted_panes)} 个运行中分屏列: {interrupted_panes} (闲置列保持静默)")
+        elif running_sidebar_tasks:
+            logger.info(f"✅ [智能断点续接已就绪] 切号后将接力侧边栏转圈任务: {[t['title'] for t in running_sidebar_tasks]}")
+        else:
+            logger.info("✅ [智能断点感知] 自动续接已就绪 (若切号前全闲置则自动保持静默)")
     else:
         logger.info("⏭ [设置] 自动续接已关闭（可在启动器设置中开启）")
+
     try:
         os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
         with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
@@ -2292,7 +2478,18 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     # 2. 剩余 5% 触发切号：按规则【只发桌面通知，不发飞书】
     notif_title = "Antigravity 额度预警 (剩余 <= 5%)"
-    active_info = f"\n📌 保护中活动任务: {target_title}" if target_title else ""
+    active_names = []
+    if interrupted_panes:
+        for p in task_snapshot.get("panes", []):
+            if p.get("pane_index") in interrupted_panes:
+                active_names.append(p.get("title", f"列{p.get('pane_index')+1}"))
+    for t in running_sidebar_tasks:
+        if t.get("title") and t.get("title") not in active_names:
+            active_names.append(t.get("title"))
+    if not active_names and target_title:
+        active_names.append(target_title)
+
+    active_info = f"\n📌 保护中断点任务: {', '.join(active_names)}" if active_names else ""
     notif_msg = (
         f"当前在用账号 [{curr_email}] 额度剩余 <= 5% (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)\n"
         f"🎯 优选满血接力: {best_acc['email']} (5h: {best_acc['gemini_5h']}%, 周: {best_acc['gemini_weekly']}%){active_info}\n"
@@ -2681,11 +2878,14 @@ def run_watch_daemon(threshold=5.0, interval=30):
     # 检查是否存在待自动续接的事务凭据
     pending_resume = read_pending_auto_resume()
     if pending_resume and is_antigravity_running():
-        logger.info("发现切号后待自动续接的事务凭据，正在执行前排窗口自动发送'继续'续接...")
+        logger.info("发现切号后待自动续接的事务凭据，正在执行智能断点自愈接力...")
         execute_auto_resume(
             max_windows=pending_resume.get("max_windows", 4),
             text=pending_resume.get("text", "继续"),
-            wait_timeout=15
+            wait_timeout=15,
+            target_href=pending_resume.get("target_href"),
+            interrupted_panes=pending_resume.get("interrupted_panes"),
+            running_sidebar_tasks=pending_resume.get("running_sidebar_tasks")
         )
     
     # 启动时若 Antigravity 正在运行，主动确保中文汉化包就绪
