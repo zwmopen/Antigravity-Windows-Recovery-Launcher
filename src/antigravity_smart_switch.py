@@ -2435,7 +2435,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     write_pending_switch(best_acc)
     # 读取启动器设置，判断是否启用自动续接
     _settings_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Antigravity", "private-proxy", "launcher-settings.json")
-    _auto_resume_enabled = None
+    _auto_resume_enabled = True
     try:
         if os.path.exists(_settings_path):
             import re as _re
@@ -2446,10 +2446,8 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     except Exception:
         pass
 
-    # 智能断点自愈策略：
-    # 若用户在设置中显式关闭（false），则遵从用户意愿关闭；
-    # 若开启（true）或默认状态且检测到有任务在运行/转圈，自适应激活智能断点接力
-    should_resume = (_auto_resume_enabled is True) or (_auto_resume_enabled is not False and has_running_tasks)
+    # 智能断点自愈策略：默认开启（具备零误触保护：空闲会话绝不打扰，仅接力被中断任务）
+    should_resume = _auto_resume_enabled
     if should_resume:
         max_w = max(task_snapshot.get("total_panes", 0), 4)
         write_pending_auto_resume(
@@ -2570,14 +2568,16 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     resume_exclude_pids = None if hot_restart_success else ([old_pid] if old_pid else None)
     # 热重启成功时语言服务已就绪，等待时间可大幅缩短
     resume_wait_timeout = 45 if hot_restart_success else 180
-    if _auto_resume_enabled:
-        logger.info("🎯 [步骤 5/5] 自动续接：正在等待语言服务就绪，并在前 3 个对话窗口发送'继续' (优先切号前活跃任务)...")
+    if should_resume:
+        logger.info("🎯 [步骤 5/5] 智能断点续接：正在等待语言服务就绪，定向接力未完成任务...")
         execute_auto_resume(
-            max_windows=3,
+            max_windows=max(task_snapshot.get("total_panes", 0), 4),
             text="继续",
             wait_timeout=resume_wait_timeout,
             exclude_pids=resume_exclude_pids,
-            target_href=target_href
+            target_href=target_href,
+            interrupted_panes=interrupted_panes,
+            running_sidebar_tasks=running_sidebar_tasks
         )
     else:
         logger.info("⏭ [步骤 5/5] 自动续接已关闭，跳过发送'继续'（可在启动器设置中开启）")
@@ -2587,7 +2587,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     # 6. 切换成功：按规则【发桌面也发飞书】
     mode_desc = "无缝热重启（编辑器窗口未关闭）" if hot_restart_success else "完整重启"
     succ_title = "Antigravity 切换成功"
-    resume_desc = "前 3 个对话窗口已自动发送'继续'续接完成！" if _auto_resume_enabled else "自动续接已关闭"
+    resume_desc = "智能断点任务已自动发送'继续'无缝接力！" if should_resume else "自动续接已关闭"
     succ_msg = (
         f"✅ 账号已成功切换至: {best_acc['email']}\n"
         f"🔥 切换模式: {mode_desc}\n"
@@ -3051,8 +3051,8 @@ def main():
     parser.add_argument("--watch", action="store_true", help="启动无人值守看门狗守护进程模式")
     parser.add_argument("--interval", type=int, default=30, help="守护巡检轮询间隔秒数 (默认: 30)")
     parser.add_argument("--stop-watch", action="store_true", help="停止正在运行的看门狗守护进程")
-    parser.add_argument("--auto-resume", action="store_true", help="立即执行前排窗口打标与扣1自动续接")
-    parser.add_argument("--resume-text", type=str, default="1", help="自动续接发送的内容 (默认: 1)")
+    parser.add_argument("--auto-resume", action="store_true", help="立即执行前排窗口打标与自动续接")
+    parser.add_argument("--resume-text", type=str, default="继续", help="自动续接发送的内容 (默认: 继续)")
     parser.add_argument("--resume-count", type=int, default=3, help="自动续接前排窗口数 (默认: 3)")
     parser.add_argument("--update-subscriptions", action="store_true", help="主动从机场提供商更新全部 Clash 订阅配置")
     parser.add_argument("--notify", type=str, default="", help="发送 Windows 桌面气泡通知正文")
