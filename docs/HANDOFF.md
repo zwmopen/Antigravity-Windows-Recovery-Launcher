@@ -56,6 +56,12 @@
 
 ## 测试和当前验收
 
+- 2026-09-17 (v1.6.14) 全维度智能断点感知续接引擎上线：
+  - **侧边栏全局雷达（Sidebar Global Scanner）**：通过 CDP 深度遍历 `[data-testid="conversation-row-sidebar"]`，扫描是否存在 `.animate-spin`、`svg.lucide-loader` 等转圈动画，突破桌面多列分屏展示限制，全局纳管所有在后台运行脚本/写代码的会话；
+  - **前台分屏执行打断特征感知（Active Panes Scanner）**：扫描各可见 Lexical 编辑器分屏列的水平 X 轴空间，检测是否存在打断控件（`Stop Task`、`取消 (Ctrl+D)`、`停止执行`、`button[data-testid="stop-button"]`）或命令执行中徽标，精准区分运行态列（`is_actively_running: True`）与空闲待命列（`is_actively_running: False`）；
+  - **断点账本与自愈闭环**：升级 `write_pending_auto_resume`，记录 `interrupted_panes` 与 `running_sidebar_tasks` 并设置 5 分钟安全 TTL；
+  - **原地智能接力**：切号或 429 热重启后，仅针对切号前处于运行/打断态的分屏列自动补发“继续”，对空闲待命窗口 100% 保持静默，0 次盲目打扰；
+  - **实机验证**：在 4 分屏与后台任务并行场景下进行全流程测试，成功精准捕获运行中列（Pane 0）与侧边栏转圈任务，单元测试及 Git 同步 100% PASS。
 - 2026-09-16 19:25 (v1.6.12) 现场复盘与性能大跃迁闭环：
   - **Fast Startup 根因修复（64s $\to$ 0.2s 性能跃升）**：排查发现 `Get-HttpStatusThroughProxy` 缺失 `[int]$TimeoutMs = 0` 参数声明，导致启动器在执行极速通道检查时每次均抛出未匹配参数异常并静默捕获，迫使启动器每次冷启动都误退化进入 64 秒漫长自愈排查链（包含 16 秒机场更新、6 轮多进程隔离探测与 15 秒 agy 大模型全链路生成）。增加参数后将检测超时调为 3000ms，热启动实测 1.4 秒（其中核心探测仅 0.2 秒）直接命中 `fast_startup_reused`；
   - **订阅刷新异步后台化**：本地已有可用节点时，启动脚本不再前台卡死等待 16 秒拉取远程订阅，改为后台异步刷新，用户双击启动器即刻秒开；
