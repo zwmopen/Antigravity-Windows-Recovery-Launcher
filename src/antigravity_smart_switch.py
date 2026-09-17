@@ -890,6 +890,8 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
     if target_href:
         target_href = normalize_target_path(target_href)
 
+    wait_enter_sec = 5.0 if (force_send or is_beta_mode()) else 0.5
+
     import websockets
     try:
         async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
@@ -1266,35 +1268,64 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         await asyncio.sleep(2.0)
 
                         bg_prep_js = """
-                        (() => {
-                            const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                        (async () => {
+                            let ed = null;
+                            for (let r = 0; r < 15; r++) {
+                                ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                if (ed) break;
+                                await new Promise(res => setTimeout(res, 200));
+                            }
                             if (!ed) return { status: "no_editor" };
+
+                            let container = ed.parentElement;
+                            for (let s = 0; s < 8; s++) {
+                                if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i]'))) break;
+                                if (container && container.parentElement) container = container.parentElement;
+                            }
+                            const stopBtn = container ? container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : null;
+                            if (stopBtn) return { status: "already_generating" };
+
                             ed.focus();
                             try {
                                 const sel = window.getSelection();
-                                const range = document.createRange();
+                                range = document.createRange();
                                 range.selectNodeContents(ed);
                                 range.collapse(false);
                                 sel.removeAllRanges();
                                 sel.addRange(range);
+                                ed.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                                ed.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
                                 ed.dispatchEvent(new MouseEvent('click', { bubbles: true }));
                             } catch(e) {}
                             return { status: "ready" };
                         })()
                         """
-                        await cdp_call("Runtime.evaluate", {"expression": bg_prep_js})
+                        bg_prep_res = await cdp_call("Runtime.evaluate", {"expression": bg_prep_js, "awaitPromise": True, "returnByValue": True})
+                        bg_prep_val = bg_prep_res.get("result", {}).get("result", {}).get("value") or {}
+                        if bg_prep_val.get("status") == "already_generating":
+                            logger.info(f"分屏列 [{col_num}] 正在生成中，无需打标，保持原样。")
+                            resumed_cids.add(col_cid)
+                            continue
+
                         await cdp_call("Input.insertText", {"text": str(text)})
                         await asyncio.sleep(wait_enter_sec)
 
                         bg_send_js = """
-                        (() => {
+                        (async () => {
                             const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
                             let container = ed ? ed.parentElement : null;
                             for (let s = 0; s < 8; s++) {
                                 if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i]'))) break;
                                 if (container && container.parentElement) container = container.parentElement;
                             }
-                            const btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
+                            let btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
+                            for (let retry = 0; retry < 15; retry++) {
+                                if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') break;
+                                await new Promise(r => setTimeout(r, 100));
+                                if (container) {
+                                    btn = container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary');
+                                }
+                            }
                             if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
                                 btn.click();
                                 return true;
@@ -1302,7 +1333,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             return false;
                         })()
                         """
-                        bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "returnByValue": True})
+                        bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "awaitPromise": True, "returnByValue": True})
                         bg_sent = bg_send_res.get("result", {}).get("result", {}).get("value")
                         if not bg_sent or force_send:
                             await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
@@ -1348,9 +1379,23 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             await asyncio.sleep(2.0)
 
                             bg_prep_js = """
-                            (() => {
-                                const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                            (async () => {
+                                let ed = null;
+                                for (let r = 0; r < 15; r++) {
+                                    ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                    if (ed) break;
+                                    await new Promise(res => setTimeout(res, 200));
+                                }
                                 if (!ed) return { status: "no_editor" };
+
+                                let container = ed.parentElement;
+                                for (let s = 0; s < 8; s++) {
+                                    if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i]'))) break;
+                                    if (container && container.parentElement) container = container.parentElement;
+                                }
+                                const stopBtn = container ? container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : null;
+                                if (stopBtn) return { status: "already_generating" };
+
                                 ed.focus();
                                 try {
                                     const sel = window.getSelection();
@@ -1359,24 +1404,44 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                                     range.collapse(false);
                                     sel.removeAllRanges();
                                     sel.addRange(range);
+                                    ed.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                                    ed.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
                                     ed.dispatchEvent(new MouseEvent('click', { bubbles: true }));
                                 } catch(e) {}
                                 return { status: "ready" };
                             })()
                             """
-                            await cdp_call("Runtime.evaluate", {"expression": bg_prep_js})
+                            bg_prep_res = await cdp_call("Runtime.evaluate", {"expression": bg_prep_js, "awaitPromise": True, "returnByValue": True})
+                            bg_prep_val = bg_prep_res.get("result", {}).get("result", {}).get("value") or {}
+                            if bg_prep_val.get("status") == "already_generating":
+                                logger.info(f"后台任务 '{s_title}' 正在生成中，无需打标，保持原样。")
+                                resumed_cids.add(s_cid)
+                                succ_cnt += 1
+                                continue
+                            elif bg_prep_val.get("status") != "ready":
+                                logger.warning(f"后台任务 '{s_title}' 输入框未就绪 ({bg_prep_val.get('status')})，跳过...")
+                                continue
+
                             await cdp_call("Input.insertText", {"text": str(text)})
+                            logger.info(f"已向后台任务 '{s_title}' 键入 '{text}'，等待 {wait_enter_sec:.1f} 秒待沉淀...")
                             await asyncio.sleep(wait_enter_sec)
 
                             bg_send_js = """
-                            (() => {
+                            (async () => {
                                 const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
                                 let container = ed ? ed.parentElement : null;
                                 for (let s = 0; s < 8; s++) {
                                     if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i]'))) break;
                                     if (container && container.parentElement) container = container.parentElement;
                                 }
-                                const btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
+                                let btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
+                                for (let retry = 0; retry < 15; retry++) {
+                                    if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') break;
+                                    await new Promise(r => setTimeout(r, 100));
+                                    if (container) {
+                                        btn = container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary');
+                                    }
+                                }
                                 if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
                                     btn.click();
                                     return true;
@@ -1384,7 +1449,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                                 return false;
                             })()
                             """
-                            bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "returnByValue": True})
+                            bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "awaitPromise": True, "returnByValue": True})
                             bg_sent = bg_send_res.get("result", {}).get("result", {}).get("value")
                             if not bg_sent or force_send:
                                 await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
