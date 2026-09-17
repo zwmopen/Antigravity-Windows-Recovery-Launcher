@@ -1,5 +1,19 @@
 # 变更记录
 
+## 1.6.14 多分屏精准定位、侧边栏断点自愈雷达与无损接力发送闭环 — 2026-09-17
+
+- **根治多列分屏“右边分屏位置识别不到 / 继续没发”的渲染竞态**：
+  - 排查实机切号日志（20:41:51），定位到 Electron 热重启后 React 多列分屏存在异步水合时延，旧逻辑仅单次查询且取 `min(len(screen_panes), 4) = 1`，导致仅扫描第 0 列（闲置跳过）并直接抛弃第 1、3 列中断任务；
+  - 引入 `expected_pane_count` 渐进式挂载轮询引擎（最多等待 12 秒，每 0.8 秒探测一次），确保 4 列分屏 DOM 100% 挂载就绪；
+  - 绑定 Antigravity 物理布局容器 `.group/pane`（`[class*="group/pane"]`），建立 X 坐标与分屏索引物理硬绑定，消除编辑器因遮挡或未挂载时的索引错位；
+  - 针对分屏列处于非编辑器状态（如被代码查看器、Diff 面板、图片标签页覆盖）的情况，实装自动 **CID 深层穿透中继**：直接通过 TanStack Router 瞬切会话 (`/c/{cid}`) 扣动“继续”，全量接力完成后原路返航复原多列分屏布局 (`full_url`)，达成 100% 零漏发。
+- **攻克“侧边栏任务识别不到 / 0 个任务”的 DOM 虚拟化与停转痛点**：
+  - 攻克 Antigravity 侧边栏列表虚拟化（DOM 仅保留视口内 ~30 项）以及 429 额度耗尽时前端转圈动画提前停转的问题；
+  - 新增底层会话日志雷达 `get_recent_brain_active_conversations`：毫秒级全量嗅探 `~/.gemini/antigravity/brain/*/transcript.jsonl`，穿透 DOM 虚拟化精准锁定 180 秒内被额度打断的后台真实任务，与前台分屏列三位一体融合落盘。
+- **参数闭环与单飞令牌透传**：
+  - 贯通 `full_url` 与 `panes` 数据流，覆盖 `snapshot_active_and_running_tasks`、`write_pending_auto_resume`、`execute_auto_resume`、`run_smart_switch` 与 `run_watch_daemon`；
+  - 优化续接结果统计逻辑，彻底排除 `idle_skip` 与 `already_generating` 造成的虚假“已成功唤醒”日志，确保现场输出 100% 真实客观。
+
 ## 1.6.13 根治大模型探针 JSON 解析死锁、候选节点无限长测熔断与切号重启直觉化 — 2026-09-17
 
 - **大模型探针 JSON 解析鲁棒性修复（彻底根治 9 分钟卡死）**：

@@ -336,7 +336,7 @@ def read_pending_switch():
         return None
 
 
-def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, target_title=None, interrupted_panes=None, running_sidebar_tasks=None):
+def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, target_title=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None):
     """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌，支持智能断点感知精准续接)"""
     try:
         os.makedirs(os.path.dirname(PENDING_AUTO_RESUME_FILE), exist_ok=True)
@@ -349,6 +349,8 @@ def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, ta
                 "target_title": target_title,
                 "interrupted_panes": interrupted_panes if interrupted_panes is not None else [],
                 "running_sidebar_tasks": running_sidebar_tasks if running_sidebar_tasks is not None else [],
+                "full_url": full_url,
+                "panes": panes if panes is not None else [],
                 "timestamp": time.time(),
                 "created_at": datetime.now().isoformat(),
                 "ttl_seconds": 300,
@@ -411,6 +413,51 @@ def get_devtools_active_port(wait_timeout=0):
     return None
 
 
+def get_recent_brain_active_conversations(exclude_cids=None, max_age_seconds=180):
+    """从本地 ~/.gemini/antigravity/brain 毫秒级嗅探近期处于活动或被中断态的会话清单（解决侧边栏虚拟滚动与429停转丢失）"""
+    exclude = set(exclude_cids or [])
+    brain_dir = os.path.expanduser(r"~/.gemini/antigravity/brain")
+    now = time.time()
+    recent = []
+    if not os.path.exists(brain_dir):
+        return recent
+    try:
+        for entry in os.scandir(brain_dir):
+            if entry.is_dir() and len(entry.name) == 36 and entry.name not in exclude:
+                t_path = os.path.join(entry.path, ".system_generated", "logs", "transcript.jsonl")
+                if os.path.exists(t_path):
+                    try:
+                        mtime = os.path.getmtime(t_path)
+                        age = now - mtime
+                        if age < max_age_seconds:
+                            with open(t_path, "rb") as f:
+                                f.seek(max(0, os.path.getsize(t_path) - 4096))
+                                tail = f.read().decode("utf-8", errors="ignore").strip().splitlines()
+                                last_line = tail[-1] if tail else ""
+                                data = json.loads(last_line) if last_line else {}
+                                is_active = False
+                                if data.get("source") == "MODEL":
+                                    is_active = True
+                                elif data.get("source") == "system" and "server restart" in str(data.get("content", "")):
+                                    is_active = True
+                                elif data.get("type") in ("PLANNER_RESPONSE", "GENERIC"):
+                                    is_active = True
+
+                                if is_active:
+                                    recent.append({
+                                        "conv_id": entry.name,
+                                        "href": f"/c/{entry.name}",
+                                        "title": f"后台断点-{entry.name[:8]}",
+                                        "age_sec": round(age, 1)
+                                    })
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.debug(f"扫描活跃 brain 会话异常: {e}")
+    recent.sort(key=lambda x: x["age_sec"])
+    return recent
+
+
 def snapshot_active_and_running_tasks():
     """在退出旧实例前通过 CDP 深度嗅探前台分屏窗格与侧边栏全局旋转状态，抓取全景断点任务清单"""
     port = get_devtools_active_port(wait_timeout=1)
@@ -471,7 +518,13 @@ def snapshot_active_and_running_tasks():
                         }
                     });
 
-                    // 2. 前台可见分屏窗格扫描 (Active Panes Scanner)
+                    // 2. 前台分屏布局容器与编辑器扫描 (Active Panes Scanner)
+                    const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {
+                        const r = el.getBoundingClientRect();
+                        return r.width > 150 && r.height > 200;
+                    });
+                    paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
                     const editors = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
                     const visiblePanes = editors.map(ed => {
                         const r = ed.getBoundingClientRect();
@@ -507,7 +560,7 @@ def snapshot_active_and_running_tasks():
                         return null;
                     }).filter(Boolean);
 
-                    const totalCount = Math.max(urlConvIds.length, visiblePanes.length);
+                    const totalCount = Math.max(urlConvIds.length, paneContainers.length, visiblePanes.length);
                     const panesStatus = [];
                     const interruptedPanes = [];
 
@@ -520,7 +573,18 @@ def snapshot_active_and_running_tasks():
                         let isSpinInCol = false;
                         let stopLabels = [];
 
-                        if (idx < visiblePanes.length) {
+                        if (idx < paneContainers.length) {
+                            const pRect = paneContainers[idx].getBoundingClientRect();
+                            const colLeft = pRect.left - 20;
+                            const colRight = pRect.right + 20;
+
+                            const stops = allStopButtons.filter(b => b.left >= colLeft && b.right <= colRight);
+                            const spins = paneSpins.filter(s => s.left >= colLeft && s.right <= colRight);
+
+                            isStopInCol = stops.length > 0;
+                            isSpinInCol = spins.length > 0;
+                            stopLabels = stops.map(b => b.label);
+                        } else if (idx < visiblePanes.length) {
                             const pane = visiblePanes[idx];
                             const colLeft = pane.left - 40;
                             const colRight = pane.right + 40;
@@ -567,12 +631,29 @@ def snapshot_active_and_running_tasks():
 
         res = asyncio.run(_query())
         if res:
+            # 融合 Brain 本地近 3 分钟活跃后台任务，补全因侧边栏虚拟滚动或 429 提前停转而丢失的任务
+            foreground_cids = [p.get("conv_id") for p in res.get("panes", []) if p.get("conv_id")]
+            sidebar_cids = [t.get("href", "").replace("/c/", "").split("?")[0] for t in res.get("running_sidebar_tasks", [])]
+            known_cids = set(foreground_cids + sidebar_cids)
+
+            brain_tasks = get_recent_brain_active_conversations(exclude_cids=known_cids, max_age_seconds=180)
+            if brain_tasks:
+                for bt in brain_tasks:
+                    res.setdefault("running_sidebar_tasks", []).append({
+                        "index": 999,
+                        "title": bt.get("title", f"后台断点-{bt['conv_id'][:8]}"),
+                        "href": bt["href"],
+                        "conv_id": bt["conv_id"],
+                        "source": "brain_transcript"
+                    })
+                res["has_running_tasks"] = True
+
             logger.info(f"🔍 [CDP全景断点雷达] 检测到 {res.get('total_panes', 0)} 个前台分屏列 (运行中: {len(res.get('interrupted_panes', []))} 个), 侧边栏转圈任务: {len(res.get('running_sidebar_tasks', []))} 个")
             if res.get("interrupted_panes"):
                 logger.info(f"   ▶ 前台运行中列: {res.get('interrupted_panes')}")
             if res.get("running_sidebar_tasks"):
                 task_names = [t.get("title") for t in res.get("running_sidebar_tasks")]
-                logger.info(f"   ▶ 侧边栏转圈任务: {', '.join(task_names)}")
+                logger.info(f"   ▶ 侧边栏/后台任务: {', '.join(task_names)}")
             return res
         return {
             "has_running_tasks": False,
@@ -603,7 +684,8 @@ def get_current_active_conversation():
         "title": snapshot.get("active_title", ""),
         "is_generating": snapshot.get("has_running_tasks", False),
         "interrupted_panes": snapshot.get("interrupted_panes", []),
-        "running_sidebar_tasks": snapshot.get("running_sidebar_tasks", [])
+        "running_sidebar_tasks": snapshot.get("running_sidebar_tasks", []),
+        "panes": snapshot.get("panes", [])
     }
 
 
@@ -742,8 +824,8 @@ def _reload_clash_core(clash_dir, profiles_config):
         logger.warning(f"Clash 核心重载过程异常: {e}")
 
 
-async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_href=None, force_send=None, interrupted_panes=None, running_sidebar_tasks=None):
-    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持智能断点感知与草稿自愈提交)"""
+async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_href=None, force_send=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None):
+    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持智能断点感知、全景分屏对齐与深层侧边栏接力)"""
     if force_send is None:
         force_send = True
     if force_send:
@@ -767,13 +849,62 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         return data
 
             # =========================================================================
+            # 0. 【多分屏 URL 预对齐与挂载轮询】
+            # 若切号前处于多列分屏布局 (/c/ID1+ID2+...)，优先对齐 URL 并等待多列 DOM 完全渲染挂载
+            # =========================================================================
+            if full_url and ("+" in full_url or "%2B" in full_url):
+                align_url_js = f"""
+                (() => {{
+                    const cur = window.location.href;
+                    const target = {json.dumps(full_url)};
+                    if (cur !== target) {{
+                        if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                            window.__TSR_ROUTER__.navigate({{ href: target }});
+                        }} else {{
+                            window.location.href = target;
+                        }}
+                        return true;
+                    }}
+                    return false;
+                }})()
+                """
+                align_res = await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
+                if align_res.get("result", {}).get("result", {}).get("value"):
+                    logger.info("🧭 [工作台对齐] 正在对齐恢复切号前的多分屏工作台布局...")
+                    await asyncio.sleep(2.5)
+
+            # =========================================================================
             # 1. 【优先模式】：多分屏原生直连感知（Multi-Pane Native Direct Mode）
-            # 针对用户在同一个窗口内分屏开启多个对话列（2列、3列、4列、6列...）的场景：
-            # 屏幕上的每个窗格都已具备独立的输入框与发送按钮，直接从左到右原地精准续接，
-            # 绝对不触碰侧边栏，绝对不触发路由切换，100% 完好保护用户排布好的多列分屏布局！
             # =========================================================================
             scan_panes_js = """
             (() => {
+                const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 150 && r.height > 200;
+                });
+                paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+                if (paneContainers.length > 0) {
+                    return paneContainers.map((p, i) => {
+                        const r = p.getBoundingClientRect();
+                        const ed = p.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                        const isGen = !!p.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                        const sendBtn = p.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary');
+                        return {
+                            index: i,
+                            x: Math.round(r.left),
+                            y: Math.round(r.top),
+                            w: Math.round(r.width),
+                            h: Math.round(r.height),
+                            has_editor: !!ed,
+                            text: ed ? (ed.innerText || '').trim() : '',
+                            is_generating: isGen,
+                            has_send: !!sendBtn,
+                            can_send: !!sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true'
+                        };
+                    });
+                }
+
                 const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
                 const visible = all.filter(el => {
                     const r = el.getBoundingClientRect();
@@ -784,17 +915,18 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     const r = el.getBoundingClientRect();
                     let container = el.parentElement;
                     for (let s = 0; s < 8; s++) {
-                        if (container && container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i]')) break;
+                        if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i]'))) break;
                         if (container && container.parentElement) container = container.parentElement;
                     }
                     const isGen = container ? !!container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : false;
-                    const sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i]') : null;
+                    const sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
                     return {
                         index: i,
                         x: Math.round(r.left),
                         y: Math.round(r.top),
                         w: Math.round(r.width),
                         h: Math.round(r.height),
+                        has_editor: true,
                         text: (el.innerText || '').trim(),
                         is_generating: isGen,
                         has_send: !!sendBtn,
@@ -803,11 +935,19 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 });
             })()
             """
-            scan_res = await cdp_call("Runtime.evaluate", {"expression": scan_panes_js, "returnByValue": True})
-            screen_panes = scan_res.get("result", {}).get("result", {}).get("value") or []
+
+            # 轮询等待编辑器窗格挂载（最多等待 12 秒）
+            expected_pane_count = max(len(panes or []), (max(interrupted_panes) + 1 if interrupted_panes else 1))
+            screen_panes = []
+            for wait_i in range(12):
+                scan_res = await cdp_call("Runtime.evaluate", {"expression": scan_panes_js, "returnByValue": True})
+                screen_panes = scan_res.get("result", {}).get("result", {}).get("value") or []
+                if len(screen_panes) >= expected_pane_count or (len(screen_panes) > 0 and expected_pane_count <= 1):
+                    break
+                await asyncio.sleep(0.8)
 
             if screen_panes and len(screen_panes) > 0:
-                logger.info(f"🖥️ [多分屏原生感知模式] 检测到当前屏幕一字排开 {len(screen_panes)} 个分屏窗格！启用智能断点原地续接引擎 (不碰侧边栏，完好保护分屏排布)...")
+                logger.info(f"🖥️ [多分屏原生感知模式] 检测到当前屏幕一字排开 {len(screen_panes)} 个分屏窗格 (预期 {expected_pane_count} 列)！启用智能断点原地续接引擎...")
 
                 # 智能断点感知：若切号前明确检测到前台所有分屏均为空闲态且侧边栏无转圈任务，彻底静默，0打扰
                 if interrupted_panes is not None and len(interrupted_panes) == 0 and not running_sidebar_tasks:
@@ -815,227 +955,327 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     return {"success": True, "processed": 0, "success_count": 0, "results": [], "mode": "smart_idle_skip"}
 
                 results = []
-                target_count = min(len(screen_panes), int(max_windows))
+                resumed_cids = set()
 
-                for p_idx in range(target_count):
-                    p_info = screen_panes[p_idx]
+                # 判定目标续接列：如果指定了 interrupted_panes，以其为精准目标；否则接力前排全部窗口
+                target_p_indices = interrupted_panes if interrupted_panes is not None else list(range(min(len(screen_panes), int(max_windows))))
+
+                for p_idx in target_p_indices:
                     col_num = p_idx + 1
+                    col_cid = panes[p_idx].get("conv_id") if (panes and p_idx < len(panes)) else None
 
-                    # 智能断点过滤：如果明确传入了中断列列表，非中断列一律保持静默跳过！
-                    if interrupted_panes is not None:
-                        if p_idx not in interrupted_panes:
-                            logger.info(f"⏭ [智能断点感知] 分屏列 [{col_num}] 切号前处于空闲待命态，跳过续接，保持原样静默。")
-                            results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "reason": "idle_skip"})
+                    # 1. 优先在屏幕可见分屏列中原地打标续接
+                    if p_idx < len(screen_panes):
+                        p_info = screen_panes[p_idx]
+                        logger.info(f"▶ 正在处理断点接力 [分屏列 {col_num}] (X={p_info['x']}, 宽度={p_info['w']}, 编辑器={p_info.get('has_editor', True)})...")
+
+                        prep_pane_js = f"""
+                        (() => {{
+                            const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {{
+                                const r = el.getBoundingClientRect();
+                                return r.width > 150 && r.height > 200;
+                            }});
+                            paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+                            let target = null;
+                            let container = null;
+                            if (paneContainers.length > {p_idx}) {{
+                                const colPane = paneContainers[{p_idx}];
+                                target = colPane.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                container = colPane;
+                            }}
+                            if (!target) {{
+                                const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
+                                const visible = all.filter(el => el.getBoundingClientRect().width > 40 && el.getBoundingClientRect().height > 10);
+                                visible.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                                target = visible[{p_idx}];
+                                container = target ? target.parentElement : null;
+                            }}
+                            if (!target) return {{ status: "pane_editor_missing" }};
+
+                            for (let s = 0; s < 8; s++) {{
+                                if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i]'))) break;
+                                if (container && container.parentElement) container = container.parentElement;
+                            }}
+                            const isGen = container ? !!container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : false;
+                            if (isGen && !{json.dumps(bool(force_send))}) return {{ status: "generating" }};
+
+                            target.focus();
+                            try {{
+                                const sel = window.getSelection();
+                                const range = document.createRange();
+                                range.selectNodeContents(target);
+                                range.collapse(false);
+                                sel.removeAllRanges();
+                                sel.addRange(range);
+                                target.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true }}));
+                                target.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true }}));
+                                target.dispatchEvent(new MouseEvent('click', {{ bubbles: true }}));
+                            }} catch(e) {{}}
+
+                            const curText = (target.innerText || '').trim();
+                            if (curText === {json.dumps(str(text))}) {{
+                                return {{ status: "ready_has_text" }};
+                            }} else if (curText.length > 0) {{
+                                return {{ status: "ready_custom_draft", text: curText }};
+                            }} else {{
+                                document.execCommand('selectAll', false, null);
+                                document.execCommand('delete', false, null);
+                                return {{ status: "ready" }};
+                            }}
+                        }})()
+                        """
+                        p_prep_res = await cdp_call("Runtime.evaluate", {"expression": prep_pane_js, "returnByValue": True})
+                        p_prep_val = p_prep_res.get("result", {}).get("result", {}).get("value") or {}
+                        p_status = p_prep_val.get("status")
+
+                        if p_status == "generating":
+                            logger.info(f"分屏列 [{col_num}] 正在模型流式生成中，无需打标，保持原样继续。")
+                            results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "reason": "already_generating"})
+                            if col_cid:
+                                resumed_cids.add(col_cid)
+                            continue
+                        elif p_status not in ("ready", "ready_has_text", "ready_custom_draft"):
+                            logger.warning(f"分屏列 [{col_num}] 屏幕直接聚焦不成功 (状态: {p_status})，尝试深层会话中继...")
+                        else:
+                            wait_enter_sec = 5.0 if (force_send or is_beta_mode()) else 0.5
+                            if p_status == "ready":
+                                await cdp_call("Input.insertText", {"text": str(text)})
+                                logger.info(f"已向分屏列 [{col_num}] 键入 '{text}'，等待 {wait_enter_sec:.1f} 秒待界面加载沉降后再提交...")
+                                await asyncio.sleep(wait_enter_sec)
+                            elif p_status in ("ready_has_text", "ready_custom_draft"):
+                                logger.info(f"分屏列 [{col_num}] 检测到已有草稿内容，等待 {wait_enter_sec:.1f} 秒待界面完全加载后再提交...")
+                                await asyncio.sleep(wait_enter_sec)
+
+                            # 点击该分屏列内部专属的发送按钮
+                            send_pane_js = f"""
+                            (async () => {{
+                                const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {{
+                                    const r = el.getBoundingClientRect();
+                                    return r.width > 150 && r.height > 200;
+                                }});
+                                paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+                                let target = null;
+                                let colContainer = null;
+                                if (paneContainers.length > {p_idx}) {{
+                                    colContainer = paneContainers[{p_idx}];
+                                    target = colContainer.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                }}
+                                if (!target) {{
+                                    const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
+                                    const visible = all.filter(el => el.getBoundingClientRect().width > 40 && el.getBoundingClientRect().height > 10);
+                                    visible.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                                    target = visible[{p_idx}];
+                                }}
+                                if (!target) return {{ success: false, reason: "pane_editor_missing" }};
+
+                                try {{ target.dispatchEvent(new Event('input', {{ bubbles: true }})); }} catch(e) {{}}
+
+                                let container = colContainer || target.parentElement;
+                                for (let s = 0; s < 8; s++) {{
+                                    if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i]'))) break;
+                                    if (container && container.parentElement) container = container.parentElement;
+                                }}
+
+                                let sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
+                                for (let retry = 0; retry < 15; retry++) {{
+                                    if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
+                                    await new Promise(r => setTimeout(r, 100));
+                                }}
+                                if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {{
+                                    sendBtn.click();
+                                    return {{ success: true, method: "button_click" }};
+                                }}
+                                return {{ success: false, reason: "button_not_clickable" }};
+                            }})()
+                            """
+                            p_send_res = await cdp_call("Runtime.evaluate", {"expression": send_pane_js, "awaitPromise": True, "returnByValue": True})
+                            p_send_val = p_send_res.get("result", {}).get("result", {}).get("value") or {}
+                            p_is_sent = p_send_val.get("success", False)
+
+                            if not p_is_sent or force_send:
+                                await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
+                                await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
+                                await asyncio.sleep(0.35)
+
+                            sent_text = p_prep_val.get("text") if p_status == "ready_custom_draft" else text
+                            logger.info(f"✅ 分屏列 [{col_num}] 原生屏幕续接触发成功 (内容: '{sent_text}')")
+                            results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "text": sent_text})
+                            if col_cid:
+                                resumed_cids.add(col_cid)
+                            await asyncio.sleep(1.0)
                             continue
 
-                    logger.info(f"▶ 正在处理断点接力 [分屏列 {col_num}/{target_count}] (X={p_info['x']}, 宽度={p_info['w']})...")
+                    # 2. 若该列在屏幕上被标签页遮挡或未挂载，走 CID 深层路由穿透中继
+                    if col_cid and col_cid not in resumed_cids:
+                        logger.info(f"🧭 [分屏列穿透中继] 分屏列 [{col_num}] 屏幕直接交互未命中，瞬切至会话 (/c/{col_cid}) 进行保底续接...")
+                        nav_js = f"""
+                        (() => {{
+                            if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                                window.__TSR_ROUTER__.navigate({{ href: '/c/{col_cid}' }});
+                            }} else {{
+                                window.location.href = '/c/{col_cid}';
+                            }}
+                            return true;
+                        }})()
+                        """
+                        await cdp_call("Runtime.evaluate", {"expression": nav_js})
+                        await asyncio.sleep(2.0)
 
-                    # a. 聚焦并嗅探该列窗格的状态
-                    prep_pane_js = f"""
-                    (() => {{
-                        const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
-                        const visible = all.filter(el => el.getBoundingClientRect().width > 40 && el.getBoundingClientRect().height > 10);
-                        visible.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-                        const target = visible[{p_idx}];
-                        if (!target) return {{ status: "pane_not_found" }};
-
-                        let container = target.parentElement;
-                        for (let s = 0; s < 8; s++) {{
-                            if (container && container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i]')) break;
-                            if (container && container.parentElement) container = container.parentElement;
-                        }}
-                        const isGen = container ? !!container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : false;
-                        if (isGen && !{json.dumps(bool(force_send))}) return {{ status: "generating" }};
-
-                        target.focus();
-                        const curText = (target.innerText || '').trim();
-                        if (curText === {json.dumps(str(text))}) {{
-                            return {{ status: "ready_has_text" }};
-                        }} else if (curText.length > 0) {{
-                            return {{ status: "ready_custom_draft", text: curText }};
-                        }} else {{
-                            document.execCommand('selectAll', false, null);
-                            document.execCommand('delete', false, null);
-                            return {{ status: "ready" }};
-                        }}
-                    }})()
-                    """
-                    p_prep_res = await cdp_call("Runtime.evaluate", {"expression": prep_pane_js, "returnByValue": True})
-                    p_prep_val = p_prep_res.get("result", {}).get("result", {}).get("value") or {}
-                    p_status = p_prep_val.get("status")
-
-                    if p_status == "generating":
-                        logger.info(f"分屏列 [{col_num}] 正在模型流式生成中，无需打标，保持原样继续。")
-                        results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "reason": "already_generating"})
-                        continue
-                    elif p_status not in ("ready", "ready_has_text", "ready_custom_draft"):
-                        logger.warning(f"分屏列 [{col_num}] 聚焦准备失败 (状态: {p_status})，跳过此列。")
-                        results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": False, "reason": p_status})
-                        continue
-
-                    wait_enter_sec = 5.0 if (force_send or is_beta_mode()) else 0.5
-                    if p_status == "ready":
+                        bg_prep_js = """
+                        (() => {
+                            const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                            if (!ed) return { status: "no_editor" };
+                            ed.focus();
+                            try {
+                                const sel = window.getSelection();
+                                const range = document.createRange();
+                                range.selectNodeContents(ed);
+                                range.collapse(false);
+                                sel.removeAllRanges();
+                                sel.addRange(range);
+                                ed.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                            } catch(e) {}
+                            return { status: "ready" };
+                        })()
+                        """
+                        await cdp_call("Runtime.evaluate", {"expression": bg_prep_js})
                         await cdp_call("Input.insertText", {"text": str(text)})
-                        logger.info(f"已向分屏列 [{col_num}] 键入 '{text}'，等待 {wait_enter_sec:.1f} 秒待界面加载沉降后再提交...")
-                        await asyncio.sleep(wait_enter_sec)
-                    elif p_status in ("ready_has_text", "ready_custom_draft"):
-                        logger.info(f"分屏列 [{col_num}] 检测到已有草稿内容，等待 {wait_enter_sec:.1f} 秒待界面完全加载后再提交...")
                         await asyncio.sleep(wait_enter_sec)
 
-                    # b. 点击该分屏列内部专属的发送按钮
-                    send_pane_js = f"""
-                    (async () => {{
-                        const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
-                        const visible = all.filter(el => el.getBoundingClientRect().width > 40 && el.getBoundingClientRect().height > 10);
-                        visible.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-                        const target = visible[{p_idx}];
-                        if (!target) return {{ success: false, reason: "pane_not_found" }};
+                        bg_send_js = """
+                        (() => {
+                            const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                            let container = ed ? ed.parentElement : null;
+                            for (let s = 0; s < 8; s++) {
+                                if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i]'))) break;
+                                if (container && container.parentElement) container = container.parentElement;
+                            }
+                            const btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
+                            if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
+                                btn.click();
+                                return true;
+                            }
+                            return false;
+                        })()
+                        """
+                        bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "returnByValue": True})
+                        bg_sent = bg_send_res.get("result", {}).get("result", {}).get("value")
+                        if not bg_sent or force_send:
+                            await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
+                            await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
 
-                        try {{ target.dispatchEvent(new Event('input', {{ bubbles: true }})); }} catch(e) {{}}
-
-                        let container = target.parentElement;
-                        for (let s = 0; s < 8; s++) {{
-                            if (container && container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i]')) break;
-                            if (container && container.parentElement) container = container.parentElement;
-                        }}
-
-                        let sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i]') : null;
-                        for (let retry = 0; retry < 15; retry++) {{
-                            if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
-                            await new Promise(r => setTimeout(r, 100));
-                        }}
-                        if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {{
-                            sendBtn.click();
-                            return {{ success: true, method: "button_click" }};
-                        }}
-                        return {{ success: false, reason: "button_not_clickable" }};
-                    }})()
-                    """
-                    p_send_res = await cdp_call("Runtime.evaluate", {"expression": send_pane_js, "awaitPromise": True, "returnByValue": True})
-                    p_send_val = p_send_res.get("result", {}).get("result", {}).get("value") or {}
-                    p_is_sent = p_send_val.get("success", False)
-
-                    if not p_is_sent or force_send:
-                        # 原生 Enter 键保底派发
-                        await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                        await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                        await asyncio.sleep(0.35)
-
-                    sent_text = p_prep_val.get("text") if p_status == "ready_custom_draft" else text
-                    logger.info(f"✅ 分屏列 [{col_num}] 续接触发成功 (内容: '{sent_text}') [原生多分屏直连]")
-                    results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "text": sent_text, "force_sent": bool(force_send)})
-                    await asyncio.sleep(1.0)
+                        logger.info(f"✅ 分屏列 [{col_num}] 穿透保底续接触发成功 (/c/{col_cid})！")
+                        results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "text": text, "relay": True})
+                        resumed_cids.add(col_cid)
+                        await asyncio.sleep(1.0)
 
                 succ_cnt = sum(1 for item in results if item.get("success"))
                 logger.info(f"🖥️ 多分屏原生直连续接处理完毕: 共处理 {len(results)} 个并排分屏列，成功触发: {succ_cnt} 个")
 
                 # =====================================================================
-                # 2. 【后台侧边栏转圈任务深度接力】：
-                # 若切号前侧边栏有转圈任务，且该任务未出现在前台可见分屏中：
-                # 记录原前台多列分屏 URL，通过客户端路由跳转至该后台会话发送"继续"，随后原路返回复原多列分屏！
+                # 2. 【后台侧边栏与 Brain 记录转圈任务深度接力】
                 # =====================================================================
                 if running_sidebar_tasks:
-                    try:
-                        get_panes_cids_js = """
-                        (() => {
-                            const urlPath = decodeURIComponent(window.location.pathname);
-                            const match = urlPath.match(/\/c\/([a-zA-Z0-9_\\-+]+)/);
-                            const urlConvIds = match ? match[1].split('+').filter(Boolean) : [];
-                            return {
-                                originalHref: window.location.href,
-                                cids: urlConvIds
-                            };
-                        })()
-                        """
-                        pane_cids_res = await cdp_call("Runtime.evaluate", {"expression": get_panes_cids_js, "returnByValue": True})
-                        pane_cids_val = pane_cids_res.get("result", {}).get("result", {}).get("value") or {}
-                        orig_href = pane_cids_val.get("originalHref", "")
-                        active_cids = pane_cids_val.get("cids", [])
+                    unresumed_tasks = []
+                    for st in running_sidebar_tasks:
+                        s_cid = st.get("conv_id") or st.get("href", "").replace("/c/", "").split("?")[0].strip()
+                        if s_cid and s_cid not in resumed_cids:
+                            unresumed_tasks.append(st)
 
-                        unresumed_tasks = []
-                        for st in running_sidebar_tasks:
-                            s_href = st.get("href", "")
-                            s_cid = s_href.replace("/c/", "").split("?")[0].strip()
-                            if s_cid and s_cid not in active_cids:
-                                unresumed_tasks.append(st)
-
-                        if unresumed_tasks:
-                            logger.info(f"🧭 [后台侧边栏断点接力] 发现 {len(unresumed_tasks)} 个后台运行中会话不在前台分屏中，即将逐一定向接力...")
-                            for st in unresumed_tasks:
-                                s_href = st.get("href", "")
-                                s_title = st.get("title", "")
-                                s_cid = s_href.replace("/c/", "").split("?")[0].strip()
-                                if not s_cid:
-                                    continue
-                                logger.info(f"▶ 正在唤醒后台断点会话: '{s_title}' (/c/{s_cid})...")
-                                nav_js = f"""
-                                (() => {{
-                                    if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
-                                        window.__TSR_ROUTER__.navigate({{ href: '/c/{s_cid}' }});
-                                        return true;
-                                    }}
+                    if unresumed_tasks:
+                        logger.info(f"🧭 [后台断点接力] 发现 {len(unresumed_tasks)} 个后台任务未在前台被唤醒，逐一启动深度接力...")
+                        for st in unresumed_tasks:
+                            s_title = st.get("title", "")
+                            s_cid = st.get("conv_id") or st.get("href", "").replace("/c/", "").split("?")[0].strip()
+                            if not s_cid or s_cid in resumed_cids:
+                                continue
+                            logger.info(f"▶ 正在唤醒后台断点任务: '{s_title}' (/c/{s_cid})...")
+                            nav_js = f"""
+                            (() => {{
+                                if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                                    window.__TSR_ROUTER__.navigate({{ href: '/c/{s_cid}' }});
+                                }} else {{
                                     window.location.href = '/c/{s_cid}';
+                                }}
+                                return true;
+                            }})()
+                            """
+                            await cdp_call("Runtime.evaluate", {"expression": nav_js})
+                            await asyncio.sleep(2.0)
+
+                            bg_prep_js = """
+                            (() => {
+                                const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                if (!ed) return { status: "no_editor" };
+                                ed.focus();
+                                try {
+                                    const sel = window.getSelection();
+                                    const range = document.createRange();
+                                    range.selectNodeContents(ed);
+                                    range.collapse(false);
+                                    sel.removeAllRanges();
+                                    sel.addRange(range);
+                                    ed.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                                } catch(e) {}
+                                return { status: "ready" };
+                            })()
+                            """
+                            await cdp_call("Runtime.evaluate", {"expression": bg_prep_js})
+                            await cdp_call("Input.insertText", {"text": str(text)})
+                            await asyncio.sleep(wait_enter_sec)
+
+                            bg_send_js = """
+                            (() => {
+                                const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                let container = ed ? ed.parentElement : null;
+                                for (let s = 0; s < 8; s++) {
+                                    if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i]'))) break;
+                                    if (container && container.parentElement) container = container.parentElement;
+                                }
+                                const btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
+                                if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
+                                    btn.click();
                                     return true;
-                                }})()
-                                """
-                                await cdp_call("Runtime.evaluate", {"expression": nav_js})
-                                await asyncio.sleep(2.0)
+                                }
+                                return false;
+                            })()
+                            """
+                            bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "returnByValue": True})
+                            bg_sent = bg_send_res.get("result", {}).get("result", {}).get("value")
+                            if not bg_sent or force_send:
+                                await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
+                                await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
 
-                                bg_prep_js = """
-                                (() => {
-                                    const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                                    if (!ed) return { status: "no_editor" };
-                                    ed.focus();
-                                    return { status: "ready" };
-                                })()
-                                """
-                                await cdp_call("Runtime.evaluate", {"expression": bg_prep_js})
-                                await cdp_call("Input.insertText", {"text": str(text)})
-                                await asyncio.sleep(wait_enter_sec)
+                            logger.info(f"✅ 后台任务 '{s_title}' 续接触发成功！")
+                            resumed_cids.add(s_cid)
+                            succ_cnt += 1
+                            await asyncio.sleep(1.0)
 
-                                bg_send_js = """
-                                (() => {
-                                    const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                                    let container = ed ? ed.parentElement : null;
-                                    for (let s = 0; s < 8; s++) {
-                                        if (container && container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i]')) break;
-                                        if (container && container.parentElement) container = container.parentElement;
-                                    }
-                                    const btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i]') : null;
-                                    if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
-                                        btn.click();
-                                        return true;
-                                    }
-                                    return false;
-                                })()
-                                """
-                                bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "returnByValue": True})
-                                bg_sent = bg_send_res.get("result", {}).get("result", {}).get("value")
-                                if not bg_sent or force_send:
-                                    await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                                    await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                                logger.info(f"✅ 后台会话 '{s_title}' 续接触发成功！")
-                                succ_cnt += 1
-                                await asyncio.sleep(1.0)
-
-                            # 全部后台任务接力完成后，原路返航复原前台分屏工作台
-                            if orig_href:
-                                logger.info(f"🔙 正在返航原路复原前台多分屏工作台 ({len(active_cids)} 列)...")
-                                restore_nav_js = f"""
-                                (() => {{
-                                    if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
-                                        window.__TSR_ROUTER__.navigate({{ href: '{orig_href}' }});
-                                        return true;
-                                    }}
-                                    window.location.href = '{orig_href}';
-                                    return true;
-                                }})()
-                                """
-                                await cdp_call("Runtime.evaluate", {"expression": restore_nav_js})
-                                await asyncio.sleep(1.5)
-                                ensure_chinese_localization_injected()
-                    except Exception as e:
-                        logger.warning(f"后台侧边栏会话接力过程异常: {e}")
+                # =====================================================================
+                # 3. 【无缝返航复原多列分屏布局】
+                # =====================================================================
+                restore_url = full_url or target_href
+                if restore_url:
+                    logger.info(f"🔙 正在返航原路复原前台多分屏工作台布局 ({restore_url})...")
+                    restore_nav_js = f"""
+                    (() => {{
+                        const target = {json.dumps(restore_url)};
+                        if (window.location.href !== target) {{
+                            if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                                window.__TSR_ROUTER__.navigate({{ href: target }});
+                            }} else {{
+                                window.location.href = target;
+                            }}
+                            return true;
+                        }}
+                        return false;
+                    }})()
+                    """
+                    await cdp_call("Runtime.evaluate", {"expression": restore_nav_js})
+                    await asyncio.sleep(1.5)
+                    ensure_chinese_localization_injected()
 
                 return {"success": succ_cnt > 0, "processed": len(results), "success_count": succ_cnt, "results": results, "mode": "multi_pane_direct"}
 
@@ -1313,7 +1553,7 @@ def get_antigravity_main_pid():
     return 0
 
 
-def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_pids=None, target_href=None, interrupted_panes=None, running_sidebar_tasks=None):
+def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_pids=None, target_href=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None):
     """执行前排任务窗口打标与自动续接 (单飞互斥保护，支持智能断点感知与精准接力)"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
@@ -1335,6 +1575,10 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
                 interrupted_panes = token.get("interrupted_panes")
             if running_sidebar_tasks is None:
                 running_sidebar_tasks = token.get("running_sidebar_tasks")
+            if full_url is None:
+                full_url = token.get("full_url")
+            if panes is None:
+                panes = token.get("panes")
             # 立即消费令牌，防止后续重复调用
             clear_pending_auto_resume()
 
@@ -1396,7 +1640,9 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
                     text=text,
                     target_href=target_href,
                     interrupted_panes=interrupted_panes,
-                    running_sidebar_tasks=running_sidebar_tasks
+                    running_sidebar_tasks=running_sidebar_tasks,
+                    full_url=full_url,
+                    panes=panes
                 ))
                 logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
 
@@ -1419,10 +1665,12 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
 
                 clear_pending_auto_resume()
 
-                success_items = [r for r in result.get("results", []) if r.get("success")]
+                success_items = [r for r in result.get("results", []) if r.get("success") and r.get("reason") not in ("idle_skip", "already_generating")]
                 count_sent = len(success_items)
                 if count_sent > 0:
-                    logger.info(f"✅ 已成功唤醒 {count_sent} 个任务窗口（优先续接活跃会话）")
+                    logger.info(f"✅ 已成功向 {count_sent} 个任务窗口补发'继续'无缝接力！")
+                elif result.get("mode") == "smart_idle_skip":
+                    logger.info("ℹ️ 切号前全部窗口均处于空闲状态，未触发补发。")
                 return True
             except Exception as e:
                 logger.warning(f"执行自动续接尝试 {retry + 1} 发生异常: {e}")
@@ -2599,7 +2847,9 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
             target_href=target_href,
             target_title=target_title,
             interrupted_panes=interrupted_panes,
-            running_sidebar_tasks=running_sidebar_tasks
+            running_sidebar_tasks=running_sidebar_tasks,
+            full_url=task_snapshot.get("url"),
+            panes=task_snapshot.get("panes", [])
         )
         if interrupted_panes:
             logger.info(f"✅ [智能断点续接已就绪] 切号后将精准接力 {len(interrupted_panes)} 个运行中分屏列: {interrupted_panes} (闲置列保持静默)")
@@ -2720,7 +2970,9 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
             exclude_pids=resume_exclude_pids,
             target_href=target_href,
             interrupted_panes=interrupted_panes,
-            running_sidebar_tasks=running_sidebar_tasks
+            running_sidebar_tasks=running_sidebar_tasks,
+            full_url=task_snapshot.get("url"),
+            panes=task_snapshot.get("panes", [])
         )
     else:
         logger.info("⏭ [步骤 5/5] 自动续接已关闭，跳过发送'继续'（可在启动器设置中开启）")
@@ -3028,7 +3280,9 @@ def run_watch_daemon(threshold=5.0, interval=30):
             wait_timeout=15,
             target_href=pending_resume.get("target_href"),
             interrupted_panes=pending_resume.get("interrupted_panes"),
-            running_sidebar_tasks=pending_resume.get("running_sidebar_tasks")
+            running_sidebar_tasks=pending_resume.get("running_sidebar_tasks"),
+            full_url=pending_resume.get("full_url"),
+            panes=pending_resume.get("panes")
         )
     
     # 启动时若 Antigravity 正在运行，主动确保中文汉化包就绪
