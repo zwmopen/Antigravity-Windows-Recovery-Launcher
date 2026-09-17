@@ -3035,7 +3035,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     write_pending_switch(best_acc)
     # 读取启动器设置，判断是否启用自动续接
     _settings_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Antigravity", "private-proxy", "launcher-settings.json")
-    _auto_resume_enabled = True
+    _auto_resume_enabled = False
     try:
         if os.path.exists(_settings_path):
             import re as _re
