@@ -822,7 +822,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     col_num = p_idx + 1
 
                     # 智能断点过滤：如果明确传入了中断列列表，非中断列一律保持静默跳过！
-                    if interrupted_panes is not None and len(interrupted_panes) > 0:
+                    if interrupted_panes is not None:
                         if p_idx not in interrupted_panes:
                             logger.info(f"⏭ [智能断点感知] 分屏列 [{col_num}] 切号前处于空闲待命态，跳过续接，保持原样静默。")
                             results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "reason": "idle_skip"})
@@ -928,6 +928,115 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
 
                 succ_cnt = sum(1 for item in results if item.get("success"))
                 logger.info(f"🖥️ 多分屏原生直连续接处理完毕: 共处理 {len(results)} 个并排分屏列，成功触发: {succ_cnt} 个")
+
+                # =====================================================================
+                # 2. 【后台侧边栏转圈任务深度接力】：
+                # 若切号前侧边栏有转圈任务，且该任务未出现在前台可见分屏中：
+                # 记录原前台多列分屏 URL，通过客户端路由跳转至该后台会话发送"继续"，随后原路返回复原多列分屏！
+                # =====================================================================
+                if running_sidebar_tasks:
+                    try:
+                        get_panes_cids_js = """
+                        (() => {
+                            const urlPath = decodeURIComponent(window.location.pathname);
+                            const match = urlPath.match(/\/c\/([a-zA-Z0-9_\\-+]+)/);
+                            const urlConvIds = match ? match[1].split('+').filter(Boolean) : [];
+                            return {
+                                originalHref: window.location.href,
+                                cids: urlConvIds
+                            };
+                        })()
+                        """
+                        pane_cids_res = await cdp_call("Runtime.evaluate", {"expression": get_panes_cids_js, "returnByValue": True})
+                        pane_cids_val = pane_cids_res.get("result", {}).get("result", {}).get("value") or {}
+                        orig_href = pane_cids_val.get("originalHref", "")
+                        active_cids = pane_cids_val.get("cids", [])
+
+                        unresumed_tasks = []
+                        for st in running_sidebar_tasks:
+                            s_href = st.get("href", "")
+                            s_cid = s_href.replace("/c/", "").split("?")[0].strip()
+                            if s_cid and s_cid not in active_cids:
+                                unresumed_tasks.append(st)
+
+                        if unresumed_tasks:
+                            logger.info(f"🧭 [后台侧边栏断点接力] 发现 {len(unresumed_tasks)} 个后台运行中会话不在前台分屏中，即将逐一定向接力...")
+                            for st in unresumed_tasks:
+                                s_href = st.get("href", "")
+                                s_title = st.get("title", "")
+                                s_cid = s_href.replace("/c/", "").split("?")[0].strip()
+                                if not s_cid:
+                                    continue
+                                logger.info(f"▶ 正在唤醒后台断点会话: '{s_title}' (/c/{s_cid})...")
+                                nav_js = f"""
+                                (() => {{
+                                    if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                                        window.__TSR_ROUTER__.navigate({{ href: '/c/{s_cid}' }});
+                                        return true;
+                                    }}
+                                    window.location.href = '/c/{s_cid}';
+                                    return true;
+                                }})()
+                                """
+                                await cdp_call("Runtime.evaluate", {"expression": nav_js})
+                                await asyncio.sleep(2.0)
+
+                                bg_prep_js = """
+                                (() => {
+                                    const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                    if (!ed) return { status: "no_editor" };
+                                    ed.focus();
+                                    return { status: "ready" };
+                                })()
+                                """
+                                await cdp_call("Runtime.evaluate", {"expression": bg_prep_js})
+                                await cdp_call("Input.insertText", {"text": str(text)})
+                                await asyncio.sleep(wait_enter_sec)
+
+                                bg_send_js = """
+                                (() => {
+                                    const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                    let container = ed ? ed.parentElement : null;
+                                    for (let s = 0; s < 8; s++) {
+                                        if (container && container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i]')) break;
+                                        if (container && container.parentElement) container = container.parentElement;
+                                    }
+                                    const btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i]') : null;
+                                    if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
+                                        btn.click();
+                                        return true;
+                                    }
+                                    return false;
+                                })()
+                                """
+                                bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "returnByValue": True})
+                                bg_sent = bg_send_res.get("result", {}).get("result", {}).get("value")
+                                if not bg_sent or force_send:
+                                    await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
+                                    await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
+                                logger.info(f"✅ 后台会话 '{s_title}' 续接触发成功！")
+                                succ_cnt += 1
+                                await asyncio.sleep(1.0)
+
+                            # 全部后台任务接力完成后，原路返航复原前台分屏工作台
+                            if orig_href:
+                                logger.info(f"🔙 正在返航原路复原前台多分屏工作台 ({len(active_cids)} 列)...")
+                                restore_nav_js = f"""
+                                (() => {{
+                                    if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                                        window.__TSR_ROUTER__.navigate({{ href: '{orig_href}' }});
+                                        return true;
+                                    }}
+                                    window.location.href = '{orig_href}';
+                                    return true;
+                                }})()
+                                """
+                                await cdp_call("Runtime.evaluate", {"expression": restore_nav_js})
+                                await asyncio.sleep(1.5)
+                                ensure_chinese_localization_injected()
+                    except Exception as e:
+                        logger.warning(f"后台侧边栏会话接力过程异常: {e}")
+
                 return {"success": succ_cnt > 0, "processed": len(results), "success_count": succ_cnt, "results": results, "mode": "multi_pane_direct"}
 
             # =========================================================================
