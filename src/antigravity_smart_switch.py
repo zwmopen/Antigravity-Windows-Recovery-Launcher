@@ -336,9 +336,62 @@ def read_pending_switch():
         return None
 
 
+def normalize_target_path(url_or_path: str) -> str:
+    """将绝对 URL (含动态随机本地端口) 或相对路径统一净化为标准的相对路由路径 (/c/...)"""
+    if not url_or_path:
+        return ""
+    import urllib.parse
+    try:
+        parsed = urllib.parse.urlparse(url_or_path)
+        if parsed.path:
+            p = parsed.path
+            if parsed.query:
+                p += f"?{parsed.query}"
+            return p
+    except Exception:
+        pass
+    import re
+    cleaned = re.sub(r'^https?://[^/]+', '', url_or_path)
+    if not cleaned.startswith('/'):
+        cleaned = '/' + cleaned
+    return cleaned
+
+
+def find_live_web_server_port():
+    """查找当前存活的 Antigravity 本地 Web 服务器端口 (HTTPS)"""
+    import ssl
+    import urllib.request
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    candidate_ports = []
+    if psutil:
+        for p in psutil.process_iter(['pid', 'name']):
+            try:
+                name = (p.info.get('name') or '').lower()
+                if 'language_server' in name or 'antigravity' in name:
+                    for conn in p.net_connections():
+                        if conn.status == 'LISTEN' and conn.laddr.port:
+                            candidate_ports.append(conn.laddr.port)
+            except Exception:
+                pass
+    for port in sorted(set(candidate_ports)):
+        try:
+            req = urllib.request.urlopen(f'https://127.0.0.1:{port}/c', context=ctx, timeout=1.5)
+            if req.status in (200, 301, 302, 404):
+                return port
+        except Exception:
+            pass
+    return None
+
+
 def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, target_title=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None):
     """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌，支持智能断点感知精准续接)"""
     try:
+        if full_url:
+            full_url = normalize_target_path(full_url)
+        if target_href:
+            target_href = normalize_target_path(target_href)
         os.makedirs(os.path.dirname(PENDING_AUTO_RESUME_FILE), exist_ok=True)
         with open(PENDING_AUTO_RESUME_FILE, "w", encoding="utf-8") as f:
             json.dump({
@@ -489,7 +542,9 @@ def snapshot_active_and_running_tasks():
             async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
                 js = """(() => {
                     const url = window.location.href;
-                    const urlPath = decodeURIComponent(window.location.pathname);
+                    const urlPath = decodeURIComponent(window.location.pathname || '');
+                    const search = window.location.search || '';
+                    const relativeUrl = (urlPath || '/c') + search;
                     const match = urlPath.match(/\/c\/([a-zA-Z0-9_\-+]+)/);
                     const urlConvIds = match ? match[1].split('+').filter(Boolean) : [];
 
@@ -614,8 +669,8 @@ def snapshot_active_and_running_tasks():
                     }
 
                     return {
-                        url: url,
-                        active_href: activeSidebarRow ? activeSidebarRow.href : '',
+                        url: relativeUrl,
+                        active_href: activeSidebarRow ? (activeSidebarRow.href || '') : '',
                         active_title: activeSidebarRow ? activeSidebarRow.title : (document.title || ''),
                         total_panes: panesStatus.length,
                         panes: panesStatus,
@@ -830,6 +885,11 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
         force_send = True
     if force_send:
         logger.info("⚡ [全版本标准特性] 已启用强制续接策略：键入'继续'并沉淀 5 秒后回车提交，彻底杜绝回车吞噬！")
+    if full_url:
+        full_url = normalize_target_path(full_url)
+    if target_href:
+        target_href = normalize_target_path(target_href)
+
     import websockets
     try:
         async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
@@ -849,19 +909,43 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         return data
 
             # =========================================================================
+            # -1. 【白屏与错误页自动自愈防护 (Self-Healing from chrome-error://)】
+            # 彻底杜绝因端口切换未对齐导致的 ERR_CONNECTION_REFUSED 错误页/白屏假死
+            # =========================================================================
+            try:
+                chk_res = await cdp_call("Runtime.evaluate", {
+                    "expression": "(() => ({ href: window.location.href, title: document.title, bodyChildCount: document.body ? document.body.children.length : 0 }))()",
+                    "returnByValue": True
+                })
+                page_info = chk_res.get("result", {}).get("result", {}).get("value") or {}
+                cur_href = page_info.get("href", "")
+                if cur_href.startswith("chrome-error://") or "ERR_" in page_info.get("title", "") or page_info.get("bodyChildCount", 1) == 0:
+                    logger.warning(f"⚠️ [自愈引擎] 检测到页面处于白屏/错误页 ({cur_href})，启动端口嗅探自愈导航...")
+                    live_port = find_live_web_server_port()
+                    if live_port:
+                        target_route = normalize_target_path(full_url) or "/c"
+                        heal_url = f"https://127.0.0.1:{live_port}{target_route}"
+                        logger.info(f"🧭 [自愈引擎] 通过 CDP Page.navigate 将页面引导至存活地址: {heal_url}")
+                        await cdp_call("Page.navigate", {"url": heal_url})
+                        await asyncio.sleep(4.0)
+            except Exception as e:
+                logger.debug(f"自愈检测异常忽略: {e}")
+
+            # =========================================================================
             # 0. 【多分屏 URL 预对齐与挂载轮询】
-            # 若切号前处于多列分屏布局 (/c/ID1+ID2+...)，优先对齐 URL 并等待多列 DOM 完全渲染挂载
+            # 若切号前处于多列分屏布局 (/c/ID1+ID2+...)，优先纯相对路径对齐 URL 并等待多列 DOM 完全渲染挂载
             # =========================================================================
             if full_url and ("+" in full_url or "%2B" in full_url):
+                target_rel = normalize_target_path(full_url)
                 align_url_js = f"""
                 (() => {{
-                    const cur = window.location.href;
-                    const target = {json.dumps(full_url)};
-                    if (cur !== target) {{
+                    const curRel = (window.location.pathname || '') + (window.location.search || '');
+                    const target = {json.dumps(target_rel)};
+                    if (decodeURIComponent(curRel) !== decodeURIComponent(target) && !curRel.includes(target)) {{
                         if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
                             window.__TSR_ROUTER__.navigate({{ href: target }});
                         }} else {{
-                            window.location.href = target;
+                            window.location.href = window.location.origin + target;
                         }}
                         return true;
                     }}
@@ -878,6 +962,36 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
             # =========================================================================
             scan_panes_js = """
             (() => {
+                // 1. 优先通过 agent-input-box 容器定位各分屏列 (最精准)
+                const inputBoxes = Array.from(document.querySelectorAll('[data-testid="agent-input-box"]')).filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 100 && r.height > 20;
+                });
+                inputBoxes.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+                if (inputBoxes.length > 0) {
+                    return inputBoxes.map((box, i) => {
+                        const r = box.getBoundingClientRect();
+                        const ed = box.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                        const stopBtn = box.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                        const sendBtn = box.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i]');
+                        return {
+                            index: i,
+                            x: Math.round(r.left),
+                            y: Math.round(r.top),
+                            w: Math.round(r.width),
+                            h: Math.round(r.height),
+                            has_editor: !!ed,
+                            text: ed ? (ed.innerText || '').trim() : '',
+                            is_generating: !!stopBtn,
+                            stop_label: stopBtn ? (stopBtn.getAttribute('aria-label') || 'Stop') : '',
+                            has_send: !!sendBtn,
+                            can_send: !!sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true'
+                        };
+                    });
+                }
+
+                // 2. 后备：通过 pane 容器
                 const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {
                     const r = el.getBoundingClientRect();
                     return r.width > 150 && r.height > 200;
@@ -888,7 +1002,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     return paneContainers.map((p, i) => {
                         const r = p.getBoundingClientRect();
                         const ed = p.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                        const isGen = !!p.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                        const stopBtn = p.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
                         const sendBtn = p.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary');
                         return {
                             index: i,
@@ -898,13 +1012,15 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             h: Math.round(r.height),
                             has_editor: !!ed,
                             text: ed ? (ed.innerText || '').trim() : '',
-                            is_generating: isGen,
+                            is_generating: !!stopBtn,
+                            stop_label: stopBtn ? (stopBtn.getAttribute('aria-label') || 'Stop') : '',
                             has_send: !!sendBtn,
                             can_send: !!sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true'
                         };
                     });
                 }
 
+                // 3. 极简后备：直接查找可见的 lexical-editor
                 const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
                 const visible = all.filter(el => {
                     const r = el.getBoundingClientRect();
@@ -915,10 +1031,10 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     const r = el.getBoundingClientRect();
                     let container = el.parentElement;
                     for (let s = 0; s < 8; s++) {
-                        if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i]'))) break;
+                        if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i], button[aria-label*="取消" i]'))) break;
                         if (container && container.parentElement) container = container.parentElement;
                     }
-                    const isGen = container ? !!container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : false;
+                    const stopBtn = container ? container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : null;
                     const sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
                     return {
                         index: i,
@@ -928,7 +1044,8 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         h: Math.round(r.height),
                         has_editor: true,
                         text: (el.innerText || '').trim(),
-                        is_generating: isGen,
+                        is_generating: !!stopBtn,
+                        stop_label: stopBtn ? (stopBtn.getAttribute('aria-label') || 'Stop') : '',
                         has_send: !!sendBtn,
                         can_send: !!sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true'
                     };
@@ -971,18 +1088,28 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
 
                         prep_pane_js = f"""
                         (() => {{
-                            const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {{
+                            const inputBoxes = Array.from(document.querySelectorAll('[data-testid="agent-input-box"]')).filter(el => {{
                                 const r = el.getBoundingClientRect();
-                                return r.width > 150 && r.height > 200;
+                                return r.width > 100 && r.height > 20;
                             }});
-                            paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                            inputBoxes.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
 
                             let target = null;
                             let container = null;
-                            if (paneContainers.length > {p_idx}) {{
-                                const colPane = paneContainers[{p_idx}];
-                                target = colPane.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                                container = colPane;
+                            if (inputBoxes.length > {p_idx}) {{
+                                container = inputBoxes[{p_idx}];
+                                target = container.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                            }}
+                            if (!target) {{
+                                const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {{
+                                    const r = el.getBoundingClientRect();
+                                    return r.width > 150 && r.height > 200;
+                                }});
+                                paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                                if (paneContainers.length > {p_idx}) {{
+                                    container = paneContainers[{p_idx}];
+                                    target = container.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                }}
                             }}
                             if (!target) {{
                                 const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
@@ -994,10 +1121,11 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             if (!target) return {{ status: "pane_editor_missing" }};
 
                             for (let s = 0; s < 8; s++) {{
-                                if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i]'))) break;
+                                if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i], button[aria-label*="取消" i]'))) break;
                                 if (container && container.parentElement) container = container.parentElement;
                             }}
-                            const isGen = container ? !!container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : false;
+                            const stopBtn = container ? container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : null;
+                            const isGen = !!stopBtn;
                             if (isGen && !{json.dumps(bool(force_send))}) return {{ status: "generating" }};
 
                             target.focus();
@@ -1050,17 +1178,28 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             # 点击该分屏列内部专属的发送按钮
                             send_pane_js = f"""
                             (async () => {{
-                                const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {{
+                                const inputBoxes = Array.from(document.querySelectorAll('[data-testid="agent-input-box"]')).filter(el => {{
                                     const r = el.getBoundingClientRect();
-                                    return r.width > 150 && r.height > 200;
+                                    return r.width > 100 && r.height > 20;
                                 }});
-                                paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                                inputBoxes.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
 
                                 let target = null;
                                 let colContainer = null;
-                                if (paneContainers.length > {p_idx}) {{
-                                    colContainer = paneContainers[{p_idx}];
+                                if (inputBoxes.length > {p_idx}) {{
+                                    colContainer = inputBoxes[{p_idx}];
                                     target = colContainer.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                }}
+                                if (!target) {{
+                                    const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {{
+                                        const r = el.getBoundingClientRect();
+                                        return r.width > 150 && r.height > 200;
+                                    }});
+                                    paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                                    if (paneContainers.length > {p_idx}) {{
+                                        colContainer = paneContainers[{p_idx}];
+                                        target = colContainer.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
+                                    }}
                                 }}
                                 if (!target) {{
                                     const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
@@ -1074,7 +1213,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
 
                                 let container = colContainer || target.parentElement;
                                 for (let s = 0; s < 8; s++) {{
-                                    if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i]'))) break;
+                                    if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="取消" i]'))) break;
                                     if (container && container.parentElement) container = container.parentElement;
                                 }}
 
@@ -1082,6 +1221,9 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                                 for (let retry = 0; retry < 15; retry++) {{
                                     if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
                                     await new Promise(r => setTimeout(r, 100));
+                                    if (container) {{
+                                        sendBtn = container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary');
+                                    }}
                                 }}
                                 if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {{
                                     sendBtn.click();
@@ -1115,7 +1257,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
                                 window.__TSR_ROUTER__.navigate({{ href: '/c/{col_cid}' }});
                             }} else {{
-                                window.location.href = '/c/{col_cid}';
+                                window.location.href = window.location.origin + '/c/{col_cid}';
                             }}
                             return true;
                         }})()
@@ -1197,7 +1339,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                                 if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
                                     window.__TSR_ROUTER__.navigate({{ href: '/c/{s_cid}' }});
                                 }} else {{
-                                    window.location.href = '/c/{s_cid}';
+                                    window.location.href = window.location.origin + '/c/{s_cid}';
                                 }}
                                 return true;
                             }})()
@@ -1258,15 +1400,17 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 # =====================================================================
                 restore_url = full_url or target_href
                 if restore_url:
-                    logger.info(f"🔙 正在返航原路复原前台多分屏工作台布局 ({restore_url})...")
+                    restore_rel = normalize_target_path(restore_url)
+                    logger.info(f"🔙 正在返航原路复原前台多分屏工作台布局 ({restore_rel})...")
                     restore_nav_js = f"""
                     (() => {{
-                        const target = {json.dumps(restore_url)};
-                        if (window.location.href !== target) {{
+                        const curRel = (window.location.pathname || '') + (window.location.search || '');
+                        const target = {json.dumps(restore_rel)};
+                        if (decodeURIComponent(curRel) !== decodeURIComponent(target) && !curRel.includes(target)) {{
                             if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
                                 window.__TSR_ROUTER__.navigate({{ href: target }});
                             }} else {{
-                                window.location.href = target;
+                                window.location.href = window.location.origin + target;
                             }}
                             return true;
                         }}

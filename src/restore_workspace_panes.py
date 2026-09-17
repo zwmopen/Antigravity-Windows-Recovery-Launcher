@@ -20,6 +20,32 @@ if hasattr(sys.stdout, "reconfigure"):
 CONFIG_PATH = os.path.expandvars(r"%LOCALAPPDATA%\Antigravity\workspace_panes.json")
 DEVTOOLS_PORT_PATH = os.path.expandvars(r"%APPDATA%\Antigravity\DevToolsActivePort")
 
+def find_live_web_server_port():
+    import ssl
+    import psutil
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    candidate_ports = []
+    for p in psutil.process_iter(['pid', 'name']):
+        try:
+            name = (p.info.get('name') or '').lower()
+            if 'language_server' in name or 'antigravity' in name:
+                for conn in p.net_connections():
+                    if conn.status == 'LISTEN' and conn.laddr.port:
+                        candidate_ports.append(conn.laddr.port)
+        except Exception:
+            pass
+    for port in sorted(set(candidate_ports)):
+        try:
+            req = urllib.request.urlopen(f'https://127.0.0.1:{port}/c', context=ctx, timeout=1.5)
+            if req.status in (200, 301, 302, 404):
+                return port
+        except Exception:
+            pass
+    return None
+
+
 def get_devtools_ws_url():
     if not os.path.exists(DEVTOOLS_PORT_PATH):
         raise RuntimeError("未找到 Antigravity DevToolsActivePort，请确认客户端正在运行")
@@ -134,7 +160,11 @@ async def restore_layout():
     seq_holder = [100]
 
     parsed = urllib.parse.urlparse(page_url)
-    base_origin = f"{parsed.scheme}://{parsed.netloc}"
+    if parsed.netloc and "chrome-error" not in page_url:
+        base_origin = f"{parsed.scheme}://{parsed.netloc}"
+    else:
+        live_port = find_live_web_server_port()
+        base_origin = f"https://127.0.0.1:{live_port}" if live_port else "https://127.0.0.1:61658"
 
     combined_route = "+".join(columns)
     target_url = f"{base_origin}/c/{combined_route}?focused={focused}"
