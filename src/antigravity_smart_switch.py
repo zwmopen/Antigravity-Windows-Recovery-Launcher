@@ -442,14 +442,17 @@ def snapshot_active_and_running_tasks():
             async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
                 js = """(() => {
                     const url = window.location.href;
+                    const urlPath = decodeURIComponent(window.location.pathname);
+                    const match = urlPath.match(/\/c\/([a-zA-Z0-9_\-+]+)/);
+                    const urlConvIds = match ? match[1].split('+').filter(Boolean) : [];
 
-                    // 1. 侧边栏全局雷达扫描 (Sidebar Scanner: 侦测所有转圈会话)
+                    // 1. 侧边栏全局雷达扫描 (Sidebar Scanner: 侦测所有转圈会话并建立 ID 映射表)
                     const sidebarRows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                     const spinningSidebarTasks = [];
+                    const spinningMap = {};
                     let activeSidebarRow = null;
 
-                    for (let i = 0; i < sidebarRows.length; i++) {
-                        const r = sidebarRows[i];
+                    sidebarRows.forEach((r, i) => {
                         const a = r.querySelector('a');
                         const href = a ? (a.getAttribute('href') || '') : '';
                         const titleDiv = r.querySelector('.truncate');
@@ -459,14 +462,14 @@ def snapshot_active_and_running_tasks():
                         if ((href && url.includes(href)) || r.classList.contains('bg-sidebar-secondary')) {
                             activeSidebarRow = { href: href, title: title };
                         }
-                        if (isSpinning) {
-                            spinningSidebarTasks.push({
-                                index: i,
-                                title: title || `会话-${i+1}`,
-                                href: href
-                            });
+                        if (href) {
+                            const cid = href.replace('/c/', '');
+                            spinningMap[cid] = { isSpinning: isSpinning, title: title, index: i, href: href };
                         }
-                    }
+                        if (isSpinning) {
+                            spinningSidebarTasks.push({ index: i, title: title || `会话-${i+1}`, href: href });
+                        }
+                    });
 
                     // 2. 前台可见分屏窗格扫描 (Active Panes Scanner)
                     const editors = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
@@ -476,44 +479,75 @@ def snapshot_active_and_running_tasks():
                     }).filter(ed => ed.width > 40 && ed.height > 10);
                     visiblePanes.sort((a, b) => a.left - b.left);
 
-                    const allStopButtons = Array.from(document.querySelectorAll(
-                        'button[data-testid="stop-button"], button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="Cancel" i], button[aria-label*="取消" i]'
-                    )).filter(b => b.getBoundingClientRect().width > 0 && b.offsetParent !== null);
+                    // 3. 过滤真实的 Stop 按钮（精准匹配，彻底排除侧边栏取消固定等 pin 按钮）
+                    const allStopButtons = Array.from(document.querySelectorAll('button')).map(b => {
+                        const r = b.getBoundingClientRect();
+                        const aria = b.getAttribute('aria-label') || '';
+                        const testid = b.getAttribute('data-testid') || '';
+                        const text = (b.innerText || '').trim();
+                        if (aria.includes('固定') || aria.includes('pin') || testid.includes('pin')) return null;
+                        const isStop = testid === 'stop-button' ||
+                                       aria.toLowerCase().includes('stop') ||
+                                       aria.includes('停止') ||
+                                       (aria.includes('取消') && !aria.includes('固定')) ||
+                                       text.toLowerCase().includes('stop') ||
+                                       text.includes('停止');
+                        if (isStop && r.width > 0 && r.height > 0 && b.offsetParent !== null) {
+                            return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), label: aria || text || 'Stop' };
+                        }
+                        return null;
+                    }).filter(Boolean);
 
-                    const allSpins = Array.from(document.querySelectorAll(
-                        '.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"]'
-                    )).filter(s => s.getBoundingClientRect().width > 0 && s.offsetParent !== null);
+                    // 4. 过滤前台窗格内部的 Spinner（排除侧边栏 X < 250 区域）
+                    const paneSpins = Array.from(document.querySelectorAll('.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"]')).map(s => {
+                        const r = s.getBoundingClientRect();
+                        if (r.width > 0 && r.left >= 250) {
+                            return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top) };
+                        }
+                        return null;
+                    }).filter(Boolean);
 
-                    const panesStatus = visiblePanes.map((pane, idx) => {
-                        const colLeft = pane.left - 50;
-                        const colRight = pane.right + 50;
+                    const totalCount = Math.max(urlConvIds.length, visiblePanes.length);
+                    const panesStatus = [];
+                    const interruptedPanes = [];
 
-                        const stopsInCol = allStopButtons.filter(b => {
-                            const r = b.getBoundingClientRect();
-                            return r.left >= colLeft && r.left <= colRight;
-                        });
+                    for (let idx = 0; idx < totalCount; idx++) {
+                        const cid = urlConvIds[idx] || '';
+                        const sInfo = spinningMap[cid] || {};
+                        const isSpinningById = !!sInfo.isSpinning;
 
-                        const spinsInCol = allSpins.filter(s => {
-                            const r = s.getBoundingClientRect();
-                            return r.left >= colLeft && r.left <= colRight;
-                        });
+                        let isStopInCol = false;
+                        let isSpinInCol = false;
+                        let stopLabels = [];
 
-                        // 嗅探该分屏列顶部标题
-                        const headers = Array.from(document.querySelectorAll('header, [data-testid*="header"], .truncate, h1, h2, h3')).filter(h => {
-                            const r = h.getBoundingClientRect();
-                            return r.top < 150 && r.left >= colLeft && r.left <= colRight && h.innerText && h.innerText.trim().length > 0;
-                        }).map(h => h.innerText.trim());
+                        if (idx < visiblePanes.length) {
+                            const pane = visiblePanes[idx];
+                            const colLeft = pane.left - 40;
+                            const colRight = pane.right + 40;
 
-                        const isRunning = stopsInCol.length > 0 || spinsInCol.length > 0;
-                        return {
+                            const stops = allStopButtons.filter(b => b.left >= colLeft && b.right <= colRight);
+                            const spins = paneSpins.filter(s => s.left >= colLeft && s.right <= colRight);
+
+                            isStopInCol = stops.length > 0;
+                            isSpinInCol = spins.length > 0;
+                            stopLabels = stops.map(b => b.label);
+                        }
+
+                        // 综合判定：URL 会话 ID 转圈、分屏列 Stop 按钮、分屏列 Spin 图标三位一体
+                        const isRunning = isSpinningById || isStopInCol || isSpinInCol;
+                        if (isRunning) {
+                            interruptedPanes.push(idx);
+                        }
+
+                        panesStatus.push({
                             pane_index: idx,
-                            title: headers[1] || headers[0] || `分屏列-${idx+1}`,
+                            conv_id: cid,
+                            title: sInfo.title || `分屏列-${idx+1}`,
                             is_actively_running: isRunning,
-                            stops_labels: stopsInCol.map(b => b.getAttribute('aria-label') || b.innerText || 'Stop')
-                        };
-                    });
-
-                    const interruptedPanes = panesStatus.filter(p => p.is_actively_running).map(p => p.pane_index);
+                            reason: isSpinningById ? 'sidebar_spinning' : (isStopInCol ? 'stop_button' : (isSpinInCol ? 'pane_spin' : 'idle')),
+                            stops_labels: stopLabels
+                        });
+                    }
 
                     return {
                         url: url,
