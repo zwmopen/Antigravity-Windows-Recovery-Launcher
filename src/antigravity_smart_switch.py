@@ -934,30 +934,33 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 logger.debug(f"自愈检测异常忽略: {e}")
 
             # =========================================================================
-            # 0. 【多分屏 URL 预对齐与挂载轮询】
-            # 若切号前处于多列分屏布局 (/c/ID1+ID2+...)，优先纯相对路径对齐 URL 并等待多列 DOM 完全渲染挂载
+            # 0. 【工作台与真实会话 URL 预对齐】
+            # 无论是单窗口还是多分屏，若切号前处于某个真实会话 (/c/ID...)，优先纯相对路径对齐 URL，
+            # 彻底杜绝因热重启后窗口重置停留在主页或空白新对话 (/ 或 /c) 而将'继续'误发到新对话/主页的致命乌龙！
             # =========================================================================
-            if full_url and ("+" in full_url or "%2B" in full_url):
-                target_rel = normalize_target_path(full_url)
-                align_url_js = f"""
-                (() => {{
-                    const curRel = (window.location.pathname || '') + (window.location.search || '');
-                    const target = {json.dumps(target_rel)};
-                    if (decodeURIComponent(curRel) !== decodeURIComponent(target) && !curRel.includes(target)) {{
-                        if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
-                            window.__TSR_ROUTER__.navigate({{ href: target }});
-                        }} else {{
-                            window.location.href = window.location.origin + target;
+            target_dest = full_url or target_href
+            if target_dest:
+                target_rel = normalize_target_path(target_dest)
+                if target_rel and target_rel not in ("/", "/c", "/c/") and "/c/" in target_rel:
+                    align_url_js = f"""
+                    (() => {{
+                        const curRel = (window.location.pathname || '') + (window.location.search || '');
+                        const target = {json.dumps(target_rel)};
+                        if (decodeURIComponent(curRel) !== decodeURIComponent(target) && !curRel.includes(target)) {{
+                            if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                                window.__TSR_ROUTER__.navigate({{ href: target }});
+                            }} else {{
+                                window.location.href = window.location.origin + target;
+                            }}
+                            return true;
                         }}
-                        return true;
-                    }}
-                    return false;
-                }})()
-                """
-                align_res = await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
-                if align_res.get("result", {}).get("result", {}).get("value"):
-                    logger.info("🧭 [工作台对齐] 正在对齐恢复切号前的多分屏工作台布局...")
-                    await asyncio.sleep(2.5)
+                        return false;
+                    }})()
+                    """
+                    align_res = await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
+                    if align_res.get("result", {}).get("result", {}).get("value"):
+                        logger.info(f"🧭 [会话对齐] 正在对齐恢复切号前真实工作会话 ({target_rel})，杜绝误操作主页/空白新对话...")
+                        await asyncio.sleep(2.5)
 
             # =========================================================================
             # 1. 【优先模式】：多分屏原生直连感知（Multi-Pane Native Direct Mode）
@@ -1149,6 +1152,13 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                                 target.dispatchEvent(new MouseEvent('click', {{ bubbles: true }}));
                             }} catch(e) {{}}
 
+                            const curPath = window.location.pathname || '';
+                            const isBlankChat = curPath === '/' || curPath === '/c' || curPath === '/c/';
+                            const msgCount = document.querySelectorAll('[data-testid*="chat-turn"], [class*="message"], [data-testid*="user-message"], [data-testid*="assistant-message"]').length;
+                            if (isBlankChat && msgCount === 0) {{
+                                return {{ status: "blank_home_page_skip" }};
+                            }}
+
                             const curText = (target.innerText || '').trim();
                             if (curText === {json.dumps(str(text))}) {{
                                 return {{ status: "ready_has_text" }};
@@ -1165,7 +1175,10 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         p_prep_val = p_prep_res.get("result", {}).get("result", {}).get("value") or {}
                         p_status = p_prep_val.get("status")
 
-                        if p_status == "generating":
+                        if p_status == "blank_home_page_skip":
+                            logger.info(f"分屏列 [{col_num}] 处于空白新对话/主页初始态 (无历史消息)，绝不误发'继续'，安全跳过。")
+                            continue
+                        elif p_status == "generating":
                             logger.info(f"分屏列 [{col_num}] 正在模型流式生成中，无需打标，保持原样继续。")
                             results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "reason": "already_generating"})
                             if col_cid:
