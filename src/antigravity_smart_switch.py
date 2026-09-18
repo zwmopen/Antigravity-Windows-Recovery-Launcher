@@ -1068,16 +1068,22 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
             if screen_panes and len(screen_panes) > 0:
                 logger.info(f"🖥️ [多分屏原生感知模式] 检测到当前屏幕一字排开 {len(screen_panes)} 个分屏窗格 (预期 {expected_pane_count} 列)！启用智能断点原地续接引擎...")
 
-                # 智能断点感知：若切号前明确检测到前台所有分屏均为空闲态且侧边栏无转圈任务，彻底静默，0打扰
-                if interrupted_panes is not None and len(interrupted_panes) == 0 and not running_sidebar_tasks:
+                # 智能断点感知与目标选择：
+                # 1. 单窗口极简模式 (len(screen_panes) == 1)：始终接力当前主会话 (列 0)，
+                #    彻底解决 429 报错导致转圈停转、从而被误判为空闲跳过、出现“继续没有发”的根本病灶！
+                # 2. 多分屏模式：若明确检测到全部空闲且侧边栏无转圈任务，方执行静默跳过。
+                if len(screen_panes) == 1:
+                    target_p_indices = [0]
+                elif interrupted_panes and len(interrupted_panes) > 0:
+                    target_p_indices = interrupted_panes
+                elif interrupted_panes is not None and len(interrupted_panes) == 0 and not running_sidebar_tasks:
                     logger.info("⏭ [智能断点感知] 切号前所有分屏窗口均处于空闲等待态，无需向任何窗口补发'继续'，100% 保持静默。")
                     return {"success": True, "processed": 0, "success_count": 0, "results": [], "mode": "smart_idle_skip"}
+                else:
+                    target_p_indices = list(range(min(len(screen_panes), int(max_windows))))
 
                 results = []
                 resumed_cids = set()
-
-                # 判定目标续接列：如果指定了 interrupted_panes，以其为精准目标；否则接力前排全部窗口
-                target_p_indices = interrupted_panes if interrupted_panes is not None else list(range(min(len(screen_panes), int(max_windows))))
 
                 for p_idx in target_p_indices:
                     col_num = p_idx + 1
@@ -3035,7 +3041,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     write_pending_switch(best_acc)
     # 读取启动器设置，判断是否启用自动续接
     _settings_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Antigravity", "private-proxy", "launcher-settings.json")
-    _auto_resume_enabled = False
+    _auto_resume_enabled = True
     try:
         if os.path.exists(_settings_path):
             import re as _re
