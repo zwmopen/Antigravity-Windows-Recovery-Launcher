@@ -884,13 +884,13 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
     if force_send is None:
         force_send = True
     if force_send:
-        logger.info("⚡ [全版本标准特性] 已启用强制续接策略：键入'继续'并沉淀 5 秒后回车提交，彻底杜绝回车吞噬！")
+        logger.info("⚡ [极速响应] 已启用极速续接策略：键入'继续'沉淀 1.2 秒后提交，兼顾防吞车与秒级接力！")
     if full_url:
         full_url = normalize_target_path(full_url)
     if target_href:
         target_href = normalize_target_path(target_href)
 
-    wait_enter_sec = 5.0 if (force_send or is_beta_mode()) else 0.5
+    wait_enter_sec = 1.2 if (force_send or is_beta_mode()) else 0.5
 
     import websockets
     try:
@@ -960,7 +960,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     align_res = await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
                     if align_res.get("result", {}).get("result", {}).get("value"):
                         logger.info(f"🧭 [会话对齐] 正在对齐恢复切号前真实工作会话 ({target_rel})，杜绝误操作主页/空白新对话...")
-                        await asyncio.sleep(2.5)
+                        await asyncio.sleep(0.8)
 
             # =========================================================================
             # 1. 【优先模式】：多分屏原生直连感知（Multi-Pane Native Direct Mode）
@@ -1187,7 +1187,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         elif p_status not in ("ready", "ready_has_text", "ready_custom_draft"):
                             logger.warning(f"分屏列 [{col_num}] 屏幕直接聚焦不成功 (状态: {p_status})，尝试深层会话中继...")
                         else:
-                            wait_enter_sec = 5.0 if (force_send or is_beta_mode()) else 0.5
+                            wait_enter_sec = 1.2 if (force_send or is_beta_mode()) else 0.5
                             if p_status == "ready":
                                 await cdp_call("Input.insertText", {"text": str(text)})
                                 logger.info(f"已向分屏列 [{col_num}] 键入 '{text}'，等待 {wait_enter_sec:.1f} 秒待界面加载沉降后再提交...")
@@ -1267,7 +1267,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "text": sent_text})
                             if col_cid:
                                 resumed_cids.add(col_cid)
-                            await asyncio.sleep(1.0)
+                            await asyncio.sleep(0.4)
                             continue
 
                     # 2. 若该列在屏幕上被标签页遮挡或未挂载，走 CID 深层路由穿透中继
@@ -1284,7 +1284,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         }})()
                         """
                         await cdp_call("Runtime.evaluate", {"expression": nav_js})
-                        await asyncio.sleep(2.0)
+                        await asyncio.sleep(0.8)
 
                         bg_prep_js = """
                         (async () => {
@@ -1361,7 +1361,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         logger.info(f"✅ 分屏列 [{col_num}] 穿透保底续接触发成功 (/c/{col_cid})！")
                         results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "text": text, "relay": True})
                         resumed_cids.add(col_cid)
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(0.4)
 
                 succ_cnt = sum(1 for item in results if item.get("success"))
                 logger.info(f"🖥️ 多分屏原生直连续接处理完毕: 共处理 {len(results)} 个并排分屏列，成功触发: {succ_cnt} 个")
@@ -1395,7 +1395,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             }})()
                             """
                             await cdp_call("Runtime.evaluate", {"expression": nav_js})
-                            await asyncio.sleep(2.0)
+                            await asyncio.sleep(0.8)
 
                             bg_prep_js = """
                             (async () => {
@@ -1477,7 +1477,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                             logger.info(f"✅ 后台任务 '{s_title}' 续接触发成功！")
                             resumed_cids.add(s_cid)
                             succ_cnt += 1
-                            await asyncio.sleep(1.0)
+                            await asyncio.sleep(0.4)
 
                 # =====================================================================
                 # 3. 【无缝返航复原多列分屏布局】
@@ -1502,7 +1502,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     }})()
                     """
                     await cdp_call("Runtime.evaluate", {"expression": restore_nav_js})
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(0.8)
                     ensure_chinese_localization_injected()
 
                 return {"success": succ_cnt > 0, "processed": len(results), "success_count": succ_cnt, "results": results, "mode": "multi_pane_direct"}
@@ -1675,7 +1675,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": prep_status})
                     continue
 
-                wait_enter_sec = 5.0 if (force_send or is_beta_mode()) else 0.5
+                wait_enter_sec = 1.2 if (force_send or is_beta_mode()) else 0.5
                 if prep_status == "ready":
                     await cdp_call("Input.insertText", {"text": str(text)})
                     logger.info(f"已向会话 [{title}] 键入 '{text}'，等待 {wait_enter_sec:.1f} 秒待界面组件彻底加载沉降后再敲击回车提交...")
@@ -1723,10 +1723,10 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 sent_content = prep_val.get("text") if prep_status == "ready_custom_draft" else text
                 logger.info(f"✅ CDP 窗口 [{idx+1}] 发送成功: 会话='{title}' 成功触发发送 (内容: '{sent_content}')" + (" [测试版强制发送]" if force_send else ""))
                 results.append({"index": idx + 1, "title": title, "href": href, "success": True, "text": sent_content, "force_sent": bool(force_send)})
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.4)
 
             # 3. 切回首选窗口聚焦
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(0.6)
             if target_convs:
                 preferred_conv = next((item for item in results if item.get("success")), target_convs[0])
                 pref_idx = preferred_conv["index"] - 1 if "index" in preferred_conv and preferred_conv.get("index", 0) > 0 else preferred_conv.get("index", 0)
@@ -1855,9 +1855,9 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
 
         # 在连接 CDP 执行窗口切换与续接前，先确保中文语言包已注入生效
         ensure_chinese_localization_injected()
-        # 热重启后页面需要时间完成账号切换导航，等待 10 秒让侧边栏对话列表稳定加载
-        logger.info("⏳ 等待 10 秒让热重启后页面完全稳定...")
-        time.sleep(10.0)
+        # 热重启后页面基本立即可响应，给 1 秒确保 DOM 事件沉降即可
+        logger.info("⏳ 等待 1 秒待页面及语言包沉降...")
+        time.sleep(1.0)
 
         logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行断点自愈感知与发送'{text}'续接...")
         for retry in range(2):
@@ -1874,10 +1874,10 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
                 ))
                 logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
 
-                # 热重启后侧边栏可能尚未加载完成，no_conversations_found 时等 30 秒自动重试一次
+                # 热重启后若侧边栏尚未加载完成，短等 3 秒重试一次
                 if not result.get("success") and result.get("reason") == "no_conversations_found" and retry == 0:
-                    logger.warning(f"⏳ [续接重试] 侧边栏对话列表暂未加载，等待 30 秒后自动重试 (第 {retry + 1}/2 次)...")
-                    time.sleep(30.0)
+                    logger.warning(f"⏳ [续接重试] 侧边栏对话列表暂未加载，等待 3 秒后自动重试 (第 {retry + 1}/2 次)...")
+                    time.sleep(3.0)
                     # 重新刷新 ws_url（以防热重启后端口变化）
                     port = get_devtools_active_port(wait_timeout=5)
                     if port:
