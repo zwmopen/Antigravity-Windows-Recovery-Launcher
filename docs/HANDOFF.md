@@ -1,8 +1,8 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：1.6.13
-> 最后核对：2026-09-17。
+> 对应版本：1.6.19
+> 最后核对：2026-09-18。
 
 ## 项目定位和范围
 
@@ -41,7 +41,7 @@
 
 ## 版本、构建、发布和回滚
 
-- 当前源码恢复链版本：1.6.8；监督器 2.8.4、AccountWatcher 0.6.0、启动器 1.6.8。安装目录与源码副本必须用哈希分别核对，不能仅凭文件时间判断已经生效。
+- 当前源码恢复链版本：1.6.19；监督器 2.8.6、AccountWatcher 0.6.0、启动器 1.6.19。安装目录与源码副本必须用哈希分别核对，不能仅凭文件时间判断已经生效。
 - 独立分享版仍为 0.4.0，且不包含监控组件、节点池或代理配置。
 - 构建：Windows .NET Framework 4.0 C# 编译器生成两个 winexe，脚本执行语法检查。
 - 发布：本地只更新 `releases/current` 并安装验证；远端 CI 生成 Setup/ZIP 并上传 Release。Setup 可安装到用户选择目录，ZIP 默认复制到 `%LOCALAPPDATA%\Antigravity\launcher`。桌面快捷方式和开机监控始终指向稳定运行目录，不依赖源码目录路径。
@@ -55,6 +55,9 @@
 - 回滚：恢复 `shortcut-backups` 中的快捷方式，删除 HKCU Run 的 `AntigravityAccountWatcher` 值并停止本项目监控器；不删除用户数据。
 
 ## 测试和当前验收
+
+- 2026-09-18 现场修复：Antigravity 2.14 冷启动时，`language_server.exe` 不一定是 `Antigravity.exe` 的直接子进程，旧判定因此在语言服务已初始化后仍超时并杀掉新窗口。1.6.19 改为按启动时间和 Antigravity 二进制路径发现新语言服务，并移除不可靠的主窗口句柄硬门禁；新增 `tests/startup-health-discovery.test.ps1`。
+- 2026-09-18 登录前冷启动修复：旧流程在官方客户端尚未打开时先执行 `agy` 真实模型门禁；遇到 `You are not logged into Antigravity` 会让用户长时间看不到可登录窗口。前台 C# 启动器现在显式传入 `-PrelaunchClient`，监督器在 `17897` 基础连通后先拉起官方客户端，再执行模型门禁；后台 AccountWatcher 不带该开关，保持静默。新增 `tests/startup-login-prelaunch.test.ps1`，并完成稳定目录哈希对齐、桌面双击、冷启动窗口、`antigravity_ready` 和中文 Loader 验收。
 
 - 2026-09-17 (v1.6.14) 全维度智能断点感知续接引擎上线：
   - **侧边栏全局雷达（Sidebar Global Scanner）**：通过 CDP 深度遍历 `[data-testid="conversation-row-sidebar"]`，扫描是否存在 `.animate-spin`、`svg.lucide-loader` 等转圈动画，突破桌面多列分屏展示限制，全局纳管所有在后台运行脚本/写代码的会话；
@@ -272,3 +275,10 @@
 
 架构、数据源、目录、持久化、发布流程、重要业务规则或已知风险变化时，必须同步更新本文档。
 
+---
+
+## 📝 变更记录
+
+| 日期 (时间) | 执行者 | 记录 |
+|---|---|---|
+| 2026-09-18 23:41 | 反重力 | make antigravity cold startup enterable before login |

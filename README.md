@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-1.6.8-blue.svg" alt="版本 1.6.8" />
+  <img src="https://img.shields.io/badge/版本-1.6.19-blue.svg" alt="版本 1.6.19" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线调度-内存级无感热漂移-orange.svg" alt="专线调度" />
   <img src="https://img.shields.io/badge/界面汉化-首帧微任务零闪直译-blueviolet.svg" alt="界面汉化" />
@@ -76,6 +76,7 @@
 3. 双击 `Antigravity-Recovery-Launcher.exe`（或 `Install.cmd`）：
    - 首次启动会自动在桌面创建 **`Antigravity 启动器.lnk`** 快捷方式；
    - 自动在后台接入 `Antigravity-AccountWatcher` 开机自愈守卫；
+   - 冷启动会先打开官方客户端窗口，再进行真实模型通路核验；首次使用或账号退出时可先完成登录，不会被模型门禁挡在客户端之外；
 4. **之后每天只需双击桌面的 `Antigravity 启动器` 图标即可！** 如需绕过恢复门禁直接打开官方客户端，可使用同时维护的 `Antigravity 原版` 桌面快捷方式。
 
 ### 选项 B：标准 Windows 安装向导版（适合小白用户）
@@ -159,4 +160,5 @@
 
 | 日期 (时间) | 执行者 | 记录 |
 |---|---|---|
+| 2026-09-18 23:41 | 反重力 | make antigravity cold startup enterable before login |
 | 2026-09-17 23:11 | 💻 本地 PC / 反重力 | 初始化创建文档并补齐变更记录历史 |

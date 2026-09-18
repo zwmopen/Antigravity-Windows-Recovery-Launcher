@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.6.8.0")]
-[assembly: AssemblyFileVersion("1.6.8.0")]
-[assembly: AssemblyInformationalVersion("1.6.8")]
+[assembly: AssemblyVersion("1.6.19.0")]
+[assembly: AssemblyFileVersion("1.6.19.0")]
+[assembly: AssemblyInformationalVersion("1.6.19")]
 
 namespace AntigravityLauncher
 {
@@ -1668,7 +1668,7 @@ namespace AntigravityLauncher
             var psi = new ProcessStartInfo
             {
                 FileName = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-                Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + Program.ScriptPath + "\" -RecoveryReason " + recoveryReason,
+                Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + Program.ScriptPath + "\" -RecoveryReason " + recoveryReason + " -PrelaunchClient",
                 WorkingDirectory = Program.AppDirectory,
                 UseShellExecute = false,
                 CreateNoWindow = true,

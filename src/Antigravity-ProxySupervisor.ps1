@@ -3,6 +3,7 @@ param(
     [string]$TargetNodeOverride = '',
     [string]$ExpectedEgressCountryOverride = '',
     [string]$RecoveryReason = 'Startup',
+    [switch]$PrelaunchClient,
     [switch]$PolicyTest
 )
 
@@ -103,6 +104,7 @@ $script:LastRunStatus = 'running'
 $script:RunFinishedAt = $null
 $script:LastProbeRttMs = 0
 $script:LastSmartScore = 0
+$script:PrelaunchedAntigravityPid = 0
 
 function Write-SafeLog {
     param(
@@ -2134,6 +2136,60 @@ function Test-RealModelGeneration {
     throw $failureKind
 }
 
+function Start-AntigravityBeforeModelGate {
+    if (-not $PrelaunchClient) { return 0 }
+
+    $normalizedAntigravityPath = [System.IO.Path]::GetFullPath($AntigravityPath)
+    $existing = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -ieq 'Antigravity.exe' -and
+        -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
+        [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedAntigravityPath
+    })
+    if ($existing.Count -gt 0) {
+        return [int]$existing[0].ProcessId
+    }
+
+    $previousEnvironment = @{}
+    foreach ($name in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')) {
+        $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
+
+    try {
+        $env:HTTP_PROXY = $ProxyUrl
+        $env:HTTPS_PROXY = $ProxyUrl
+        $env:ALL_PROXY = $ProxyUrl
+        $env:NO_PROXY = 'localhost,127.0.0.1,::1'
+        $arguments = @(
+            '--proxy-server=' + $ProxyUrl,
+            '--proxy-bypass-list=localhost;127.0.0.1;[::1]'
+        )
+        if (-not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath) -and (Test-Path -LiteralPath $LocalizationLoaderPath)) {
+            # Keep the login window on the same supported localization path as
+            # the normal post-gate launch. The loader itself is non-destructive.
+            $arguments += '--antigravity-localization-loader'
+        }
+        $process = Start-Process -FilePath $AntigravityPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $AntigravityPath) -PassThru
+        if ($null -eq $process) { return 0 }
+        $script:PrelaunchedAntigravityPid = [int]$process.Id
+        Write-SafeLog -Event 'antigravity_prelaunched_before_model_gate' -Values @{ pid = $process.Id; recovery = $RecoveryReason }
+
+        if (Test-Path -LiteralPath $LocalizationLoaderPath) {
+            try {
+                $loader = Start-Process -FilePath $LocalizationLoaderPath -WorkingDirectory $ScriptRoot -WindowStyle Hidden -PassThru
+                Write-SafeLog -Event 'localization_loader_prelaunched' -Values @{ loader_pid = $loader.Id }
+            } catch {
+                Write-SafeLog -Event 'localization_loader_prelaunch_failed' -Values @{ error = $_.Exception.GetType().Name }
+            }
+        }
+        return $script:PrelaunchedAntigravityPid
+    } catch {
+        Write-SafeLog -Event 'antigravity_prelaunch_failed' -Values @{ error = $_.Exception.GetType().Name }
+        return 0
+    } finally {
+        Restore-ProcessEnvironment -Previous $previousEnvironment
+    }
+}
+
 function Sync-AntigravityProxySetting {
     if (-not (Test-Path -LiteralPath $SettingsPath)) {
         Stop-WithMessage -Event 'settings_missing'
@@ -2355,6 +2411,67 @@ function Get-PrivateProxyConnectionCount {
     }
 }
 
+function Get-LaunchedLanguageServerProcess {
+    param(
+        [Parameter(Mandatory = $true)][int]$MainPid,
+        [Parameter(Mandatory = $true)][datetime]$LaunchTime
+    )
+
+    # Antigravity 2.14 can place language_server.exe behind an Electron
+    # utility process instead of making it a direct child of Antigravity.exe.
+    # Match the fresh Antigravity binary and retain the direct-child path for
+    # older builds; otherwise a healthy cold start is misclassified as dead.
+    $minimumCreation = $LaunchTime.AddSeconds(-5)
+    $languageMatches = @()
+    foreach ($candidate in @(Get-CimInstance Win32_Process -Filter "Name = 'language_server.exe'" -ErrorAction SilentlyContinue)) {
+        $createdAt = $null
+        try {
+            # Get-CimInstance exposes CreationDate as System.DateTime on the
+            # current Windows PowerShell runtime; avoid converting that value
+            # back to DMTF text, which raises and drops healthy processes.
+            $createdAt = [datetime]$candidate.CreationDate
+        } catch {
+            continue
+        }
+        if ($createdAt -lt $minimumCreation) { continue }
+
+        $isDirectChild = ([int]$candidate.ParentProcessId -eq $MainPid)
+        $commandLine = [string]$candidate.CommandLine
+        $isAntigravityBinary = $commandLine -match '(?i)(\\|/)antigravity(\\|/).*language_server\.exe'
+        if ($isDirectChild -or $isAntigravityBinary) {
+            $languageMatches += $candidate
+        }
+    }
+
+    return @($languageMatches | Sort-Object CreationDate -Descending | Select-Object -First 1)
+}
+
+function Test-LanguageServerInitializedAfter {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogPath,
+        [Parameter(Mandatory = $true)][datetime]$LaunchTime
+    )
+
+    if (-not (Test-Path -LiteralPath $LogPath)) { return $false }
+    try {
+        $markers = @(Select-String -LiteralPath $LogPath -Pattern 'initialized server successfully' -SimpleMatch -ErrorAction SilentlyContinue)
+        foreach ($marker in $markers) {
+            $stamp = [regex]::Match([string]$marker.Line, 'I(?<month>\d{2})(?<day>\d{2}) (?<clock>\d{2}:\d{2}:\d{2}(?:\.\d+)?)')
+            if (-not $stamp.Success) { continue }
+            $markerTime = [datetime]::ParseExact(
+                ('{0}/{1}/{2} {3}' -f $LaunchTime.Year, $stamp.Groups['month'].Value, $stamp.Groups['day'].Value, $stamp.Groups['clock'].Value),
+                'yyyy/MM/dd HH:mm:ss.FFFFFFF',
+                [Globalization.CultureInfo]::InvariantCulture)
+            if ($markerTime -ge $LaunchTime.AddSeconds(-2) -and $markerTime -le (Get-Date).AddSeconds(2)) {
+                return $true
+            }
+        }
+    } catch {
+        return $false
+    }
+    return $false
+}
+
 function Wait-AntigravityReady {
     param(
         [Parameter(Mandatory = $true)][int]$MainPid,
@@ -2373,13 +2490,12 @@ function Wait-AntigravityReady {
         if (Test-Path -LiteralPath $languageLog) {
             $logItem = Get-Item -LiteralPath $languageLog -ErrorAction SilentlyContinue
             if ($null -ne $logItem -and $logItem.LastWriteTime -ge $LaunchTime.AddSeconds(-2)) {
-                $tail = @(Get-Content -LiteralPath $languageLog -Tail 300 -ErrorAction SilentlyContinue)
-                $initialized = [bool]($tail -match 'initialized server successfully')
+                $initialized = Test-LanguageServerInitializedAfter -LogPath $languageLog -LaunchTime $LaunchTime
             }
         }
 
-        if ($initialized -and $main.MainWindowHandle -ne 0 -and $main.Responding) {
-            $languageServer = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $MainPid) -ErrorAction SilentlyContinue | Where-Object { $_.Name -ieq 'language_server.exe' } | Select-Object -First 1)
+        if ($initialized -and $main.Responding) {
+            $languageServer = @(Get-LaunchedLanguageServerProcess -MainPid $MainPid -LaunchTime $LaunchTime)
             if ($languageServer.Count -gt 0) {
                 $proxyConnections = Get-PrivateProxyConnectionCount -ProcessId ([int]$languageServer[0].ProcessId)
                 if ($proxyConnections.Count -gt 0 -or $i -ge 15) {
@@ -2709,6 +2825,7 @@ if ($null -eq $selectedCandidate) {
                 Test-PrivateConfig
                 Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
                 $null = Test-GoogleConnectivity
+                $null = Start-AntigravityBeforeModelGate
                 Write-SafeLog -Event 'formal_model_gate_started' -Values @{node_id=$candidate.Id; port=$Port}
                 $formalGateStarted = $true
                 $formalModelAttempts++
