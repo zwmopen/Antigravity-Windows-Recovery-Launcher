@@ -2483,7 +2483,15 @@ function Wait-AntigravityReady {
         Start-Sleep -Seconds 1
         $main = Get-Process -Id $MainPid -ErrorAction SilentlyContinue
         if ($null -eq $main) {
-            Stop-WithMessage -Event 'antigravity_exited_during_startup'
+            # Electron bootstrapping or single-instance delegation may shift the main PID.
+            # Check if any active Antigravity.exe is still alive before assuming startup crash.
+            $aliveInstances = @(Get-CimInstance Win32_Process -Filter "Name = 'Antigravity.exe'" -ErrorAction SilentlyContinue)
+            if ($aliveInstances.Count -gt 0) {
+                $MainPid = [int]$aliveInstances[0].ProcessId
+                $main = Get-Process -Id $MainPid -ErrorAction SilentlyContinue
+            } else {
+                Stop-WithMessage -Event 'antigravity_exited_during_startup'
+            }
         }
 
         $initialized = $false

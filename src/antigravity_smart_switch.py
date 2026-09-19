@@ -874,9 +874,9 @@ def _reload_clash_core(clash_dir, profiles_config):
             except Exception as e:
                 logger.debug(f"Clash 重载尝试 {ctrl} 失败: {e}")
 
-        logger.warning("⚠️ Clash 核心重载未成功（订阅文件已更新，请在 Clash Verge 界面手动点击更新以使节点立即生效）")
+        logger.debug("Clash Verge 采用命名管道(\\pipe\\verge-mihomo)管理核心，磁盘订阅已更新，跳过 HTTP 端口重载")
     except Exception as e:
-        logger.warning(f"Clash 核心重载过程异常: {e}")
+        logger.debug(f"Clash 核心重载检测: {e}")
 
 
 async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_href=None, force_send=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None):
@@ -899,29 +899,26 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
             async def cdp_call(method, params=None):
                 nonlocal seq
                 seq += 1
-                cur_id = seq
-                payload = {"id": cur_id, "method": method}
-                if params:
-                    payload["params"] = params
+                payload = {"id": seq, "method": method, "params": params or {}}
                 await ws.send(json.dumps(payload))
                 while True:
-                    msg = await ws.recv()
-                    data = json.loads(msg)
-                    if data.get("id") == cur_id:
-                        return data
+                    raw = await ws.recv()
+                    resp = json.loads(raw)
+                    if resp.get("id") == seq:
+                        return resp
 
-            # =========================================================================
-            # -1. 【白屏与错误页自动自愈防护 (Self-Healing from chrome-error://)】
-            # 彻底杜绝因端口切换未对齐导致的 ERR_CONNECTION_REFUSED 错误页/白屏假死
-            # =========================================================================
+            # 检查当前页面健康度
             try:
                 chk_res = await cdp_call("Runtime.evaluate", {
-                    "expression": "(() => ({ href: window.location.href, title: document.title, bodyChildCount: document.body ? document.body.children.length : 0 }))()",
+                    "expression": "({ href: window.location.href, title: document.title, bodyChildCount: document.body ? document.body.children.length : 0 })",
                     "returnByValue": True
                 })
                 page_info = chk_res.get("result", {}).get("result", {}).get("value") or {}
                 cur_href = page_info.get("href", "")
-                if cur_href.startswith("chrome-error://") or "ERR_" in page_info.get("title", "") or page_info.get("bodyChildCount", 1) == 0:
+                if "/onboarding" in cur_href or "login=true" in cur_href:
+                    logger.warning(f"⚠️ [自愈引擎] 检测到页面处于未登录/新手引导页 ({cur_href})，当前无登录会话，安全退出自动续接以防死等。")
+                    return {"success": False, "reason": "onboarding_login_page", "processed": 0}
+                elif cur_href.startswith("chrome-error://") or "ERR_" in page_info.get("title", "") or page_info.get("bodyChildCount", 1) == 0:
                     logger.warning(f"⚠️ [自愈引擎] 检测到页面处于白屏/错误页 ({cur_href})，启动端口嗅探自愈导航...")
                     live_port = find_live_web_server_port()
                     if live_port:

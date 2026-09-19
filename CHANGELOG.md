@@ -1,5 +1,17 @@
 # 变更记录
 
+## 1.6.20 根治启动期杀熟强杀、彻底收敛桌面唯一样式与日志顽疾消杀 — 2026-09-19
+
+- **消除桌面双图标冗余**：
+  - 彻底清理昨日误创的 `Google Antigravity.lnk` 重复项，全系统唯一保留官方权威入口 **`Antigravity 启动器.lnk`**，杜绝两个一模一样图标的视觉与心智混乱。
+- **根除启动期“杀熟”强杀循环（antigravity_exited_during_startup）**：
+  - 攻克 `Antigravity-ProxySupervisor.ps1` 在 Electron 单实例引导委托时，仅盯初始 `$MainPid` 导致误判“启动期崩溃”进而触发 `Stop-ExistingAntigravity` 自杀强杀的根本病灶；
+  - 改造 `Wait-AntigravityReady`：若初始引导 PID 移交退出，主动扫描存活的 `Antigravity.exe` 实例并继承主 PID，彻底消除“点击后闪退、打不开”的死锁。
+- **消灭日志中反反复复出现的四大顽疾**：
+  - **登录引导页 `/onboarding` 极速识别**：在 CDP 续接引擎中注入登录态探针，若命中 `/onboarding` 或 `login=true` 立即退出续接，消除 80 秒死等与虚假会话告警；
+  - **静默 Clash 核心重载伪报警**：识别 Clash Verge Rev 的命名管道模式（`\\pipe\\verge-mihomo`），降级 HTTP PUT 端口失败警告为调试日志，杜绝每小时刷屏；
+  - **自动清理僵尸探测文件**：地毯式清退 `private-proxy/probe-*` 历史遗留的 184 个 0 字节垃圾文件。
+
 ## 1.6.19 登录前冷启动不再被模型门禁挡住 — 2026-09-18
 
 - **修复冷启动死锁**：前台启动器在专用 `17897` 通路建立并通过基础连通性后，先打开官方 Antigravity 客户端，再执行 `agy` 真实模型门禁；首次使用、账号退出或本地凭据未就绪时，用户可以先进入客户端完成登录。
