@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.6.21.0")]
-[assembly: AssemblyFileVersion("1.6.21.0")]
-[assembly: AssemblyInformationalVersion("1.6.21")]
+[assembly: AssemblyVersion("1.6.22.0")]
+[assembly: AssemblyFileVersion("1.6.22.0")]
+[assembly: AssemblyInformationalVersion("1.6.22")]
 
 namespace AntigravityLauncher
 {
@@ -357,6 +357,15 @@ namespace AntigravityLauncher
 
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);
+
+        [DllImport("user32.dll")]
+        internal static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        internal static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        internal static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+        internal const uint SWP_NOMOVE = 0x0002;
+        internal const uint SWP_NOSIZE = 0x0001;
+        internal const uint SWP_NOACTIVATE = 0x0010;
+        internal const uint SWP_SHOWWINDOW = 0x0040;
 
         [DllImport("user32.dll")]
         internal static extern bool ReleaseCapture();
@@ -1082,6 +1091,30 @@ namespace AntigravityLauncher
                 }
             };
 
+            Shown += delegate
+            {
+                try
+                {
+                    // 启动瞬间短暂置顶提醒（0.8秒），让用户立刻感知到启动器已就绪
+                    Program.SetWindowPos(Handle, Program.HWND_TOPMOST, 0, 0, 0, 0, Program.SWP_NOMOVE | Program.SWP_NOSIZE | Program.SWP_SHOWWINDOW);
+                    var unpinTimer = new System.Windows.Forms.Timer { Interval = 800 };
+                    unpinTimer.Tick += delegate
+                    {
+                        unpinTimer.Stop();
+                        unpinTimer.Dispose();
+                        try { Program.SetWindowPos(Handle, Program.HWND_NOTOPMOST, 0, 0, 0, 0, Program.SWP_NOMOVE | Program.SWP_NOSIZE | Program.SWP_NOACTIVATE); } catch { }
+                    };
+                    unpinTimer.Start();
+                }
+                catch { }
+            };
+
+            Deactivate += delegate
+            {
+                // 一旦失焦或点击其他应用，立即彻底解除置顶，允许任何其他窗口自由覆盖
+                try { Program.SetWindowPos(Handle, Program.HWND_NOTOPMOST, 0, 0, 0, 0, Program.SWP_NOMOVE | Program.SWP_NOSIZE | Program.SWP_NOACTIVATE); } catch { }
+            };
+
             countdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             countdownTimer.Tick += delegate
             {
@@ -1468,11 +1501,27 @@ namespace AntigravityLauncher
             {
                 try
                 {
+                    // 启动瞬间短暂置顶提醒（0.8秒），向用户明确反馈启动器已拉起运行
+                    Program.SetWindowPos(Handle, Program.HWND_TOPMOST, 0, 0, 0, 0, Program.SWP_NOMOVE | Program.SWP_NOSIZE | Program.SWP_SHOWWINDOW);
                     BringToFront();
                     Activate();
+                    var unpinTimer = new System.Windows.Forms.Timer { Interval = 800 };
+                    unpinTimer.Tick += delegate
+                    {
+                        unpinTimer.Stop();
+                        unpinTimer.Dispose();
+                        try { Program.SetWindowPos(Handle, Program.HWND_NOTOPMOST, 0, 0, 0, 0, Program.SWP_NOMOVE | Program.SWP_NOSIZE | Program.SWP_NOACTIVATE); } catch { }
+                    };
+                    unpinTimer.Start();
                 }
                 catch { }
                 Task.Run(delegate { RunLaunchTask(); });
+            };
+
+            Deactivate += delegate
+            {
+                // 一旦失焦或点击其他应用，立即彻底解除置顶，允许任何其他窗口自由覆盖
+                try { Program.SetWindowPos(Handle, Program.HWND_NOTOPMOST, 0, 0, 0, 0, Program.SWP_NOMOVE | Program.SWP_NOSIZE | Program.SWP_NOACTIVATE); } catch { }
             };
         }
 
