@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.6.19.0")]
-[assembly: AssemblyFileVersion("1.6.19.0")]
-[assembly: AssemblyInformationalVersion("1.6.19")]
+[assembly: AssemblyVersion("1.6.21.0")]
+[assembly: AssemblyFileVersion("1.6.21.0")]
+[assembly: AssemblyInformationalVersion("1.6.21")]
 
 namespace AntigravityLauncher
 {
@@ -960,7 +960,7 @@ namespace AntigravityLauncher
             ClientSize = new Size(480, 146);
             BackColor = Color.FromArgb(248, 250, 252);
             ShowInTaskbar = true;
-            TopMost = true;
+            TopMost = false;
             KeyPreview = true;
 
             appIcon = Program.LoadIconOrPng(Program.IconPath);
@@ -1001,13 +1001,7 @@ namespace AntigravityLauncher
             };
             minimizeButton.Click += delegate
             {
-                TopMost = false;
                 WindowState = FormWindowState.Minimized;
-            };
-            Resize += delegate
-            {
-                if (WindowState == FormWindowState.Normal)
-                    TopMost = true;
             };
 
             var settingsButton = new CapsuleSettingsButton
@@ -1420,7 +1414,7 @@ namespace AntigravityLauncher
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             ShowInTaskbar = true;
-            TopMost = true;
+            TopMost = false;
             BackColor = Color.FromArgb(236, 244, 252);
             DoubleBuffered = true;
 
@@ -1458,13 +1452,7 @@ namespace AntigravityLauncher
             };
             btnMinimize.Click += delegate
             {
-                TopMost = false;
                 WindowState = FormWindowState.Minimized;
-            };
-            Resize += delegate
-            {
-                if (WindowState == FormWindowState.Normal)
-                    TopMost = true;
             };
 
             progressBar = new CapsuleProgress
@@ -1953,7 +1941,7 @@ namespace AntigravityLauncher
             ClientSize = new Size(380, 240);
             BackColor = Color.FromArgb(248, 250, 252);
             ShowInTaskbar = false;
-            TopMost = true;
+            TopMost = false;
 
             var lblTitle = new Label
             {

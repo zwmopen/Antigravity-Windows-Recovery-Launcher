@@ -7,7 +7,7 @@ foreach ($requiredText in @(
     'AntigravityLaunchCapsuleForm',
     'AntigravityHotLaunchChoiceForm',
     'ActivateExistingAntigravity',
-    'TopMost = true',
+    'TopMost = false',
     'ReadLogSince(logStartOffset)',
     'WaitForExistingSupervisor',
     'IsOwnWatcherRunning',
