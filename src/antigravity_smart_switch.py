@@ -3121,10 +3121,12 @@ def print_status_table():
     for i, acc in enumerate(accounts, 1):
         if acc["is_current"]:
             status = "★ 当前在用"
-        elif acc["gemini_5h"] <= 5.0:
-            status = "✕ 5h额度耗尽"
-        elif acc["gemini_weekly"] <= 0.0:
+        elif acc["gemini_weekly"] <= 0.0 and acc["gemini_5h"] <= 0.0:
+            status = "⛔ 0额度(自动剔除)"
+        elif acc["gemini_weekly"] <= 1.0:
             status = "✕ 周额度见底"
+        elif acc["gemini_5h"] <= 5.0:
+            status = "⏳ 5h额度冷却中"
         else:
             status = "✔ 健康待命"
         print(f"{i:<3} {acc['email']:<28} {acc['effective_quota']:>5.1f}%   {acc['gemini_5h']:>6.1f}%    {acc['gemini_weekly']:>5.1f}%     剩 {acc['days_to_w_reset']:>4.1f} 天    {acc['cockpit_score']:>6.1f}   {status}")
