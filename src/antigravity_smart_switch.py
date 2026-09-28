@@ -2139,8 +2139,28 @@ def send_feishu_notification(title, message, chat_names=None, debounce_seconds=9
     return False
 
 
+def is_desktop_notify_enabled():
+    """读取启动器设置，判断是否启用桌面弹窗通知。
+    遵循上帝视角无感铁律：默认关闭桌面弹窗（0 弹窗、0 闪烁、0 抢焦），通知全量收敛至飞书专属群。"""
+    try:
+        settings_path = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "launcher-settings.json")
+        if os.path.exists(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return bool(data.get("desktop_notify_enabled", False))
+    except Exception:
+        pass
+    return False
+
+
 def send_windows_notification(title, message, status="warning", duration_ms=8000):
-    """发送桌面通知：优先使用 shared-notification 技能，失败降级为系统气泡"""
+    """发送桌面通知：默认完全静默（0弹窗/0闪烁），自动保底转推飞书通知"""
+    if not is_desktop_notify_enabled():
+        logger.info(f"🔔 [桌面静默通知] {title}: {message.replace(chr(10), ' ')}")
+        # 桌面静默时，自动保底确保飞书收到通知，不漏掉任何关键事件
+        send_feishu_notification(title, message)
+        return True
+
     # 1. 优先调用本地 shared-notification 技能
     if os.path.exists(SHARED_NOTIFY_SCRIPT):
         try:
@@ -2186,8 +2206,9 @@ def send_windows_notification(title, message, status="warning", duration_ms=8000
 
 
 def send_dual_notification(title, message, status="warning", chat_names=None):
-    """同时发送桌面通知技能与飞书群/私聊通知"""
-    send_windows_notification(title, message, status=status)
+    """同时分发通知：桌面按配置静默（默认 0 弹窗），飞书必定精准投递"""
+    if is_desktop_notify_enabled():
+        send_windows_notification(title, message, status=status)
     send_feishu_notification(title, message, chat_names=chat_names)
 
 
