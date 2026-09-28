@@ -1878,20 +1878,13 @@ def get_all_accounts_and_quotas():
                         q_claude_weekly = pct
                         rt_claude_weekly = rt
         
-        # 增强容错 1：如果 groups 中缺少 buckets，但 models 列表中所有模型 remainingFraction 为 1.0（全新未用账号如 leinhartlamonica）
-        if (q_weekly is None or q_5h is None) and models:
-            fractions = [
-                m.get("quotaInfo", {}).get("remainingFraction")
-                for m in models.values()
-                if isinstance(m, dict) and "quotaInfo" in m and m.get("quotaInfo", {}).get("remainingFraction") is not None
-            ]
-            if fractions:
-                avg_frac = sum(fractions) / len(fractions)
-                pct = round(avg_frac * 100.0, 1)
-                if q_weekly is None:
-                    q_weekly = pct
-                if q_5h is None:
-                    q_5h = pct
+        # 铁律：Google Antigravity 真实额度必须以 quota_summary 中的 gemini-weekly 桶为唯一凭据！
+        # 警告：Google 后端对无订阅/无配额账号，其 models 列表中仍会返回 remainingFraction: 1 的静态模板假数据！
+        # 严禁将 models 列表的 1.0 误当成 100% 满血账号（曾导致无额度账号如 zwmrpg123 被误判为 300 分榜首并引发切号死循环）！
+        if q_weekly is None:
+            # 无有效周额度桶，确认为无配额/未开通/配额已撤销账号，严格归零
+            q_weekly = 0.0
+            q_5h = 0.0
 
         # 增强容错 2：如果周额度满血 (100%) 或极高，但 Google API 尚未生成 gemini-5h bucket（未消耗过5h额度的新号如 zwmrpg）
         # 绝对不能当作 0.0% 淘汰！周额度既然 100%，5小时滚动额度必然是 100% 满血！
