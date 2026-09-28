@@ -33,6 +33,9 @@ $sourceManifest = Join-Path $app 'manifest.json'
 $installedManifest = Join-Path $installRoot 'manifest.json'
 $agyDirectory = Join-Path $installRoot 'tools\agy'
 $agyPath = Join-Path $agyDirectory 'agy.exe'
+$proxyRuntime = Join-Path $env:LOCALAPPDATA 'Antigravity\private-proxy'
+$installedWatchdog = Join-Path $proxyRuntime 'watchdog-restore-fix.ps1'
+$installedFixedSupervisor = Join-Path $proxyRuntime 'Antigravity-ProxySupervisor.fixed.ps1'
 $agyManifestUri = 'https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/windows_amd64.json'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $officialApp = Join-Path $env:LOCALAPPDATA 'Programs\antigravity\Antigravity.exe'
@@ -205,6 +208,25 @@ if ((Test-Path -LiteralPath $sourceManifest) -and
     -not [string]::Equals($sourceManifest, $installedManifest, [System.StringComparison]::OrdinalIgnoreCase)) {
     Copy-Item -LiteralPath $sourceManifest -Destination $installedManifest -Force
 }
+
+# Keep the runtime watchdog and its golden supervisor copy on the same
+# contract as the installed launcher. Version-only restoration is unsafe:
+# an incompatible newer script can otherwise break every foreground launch.
+$installedSupervisorText = Get-Content -LiteralPath $installedSupervisor -Raw -Encoding UTF8
+if (-not $installedSupervisorText.Contains('[switch]$PrelaunchClient') -or
+    -not $installedSupervisorText.Contains('function Start-AntigravityBeforeModelGate')) {
+    throw 'supervisor_prelaunch_contract_missing'
+}
+New-Item -ItemType Directory -Path $proxyRuntime -Force | Out-Null
+$sourceWatchdog = Join-Path $app 'watchdog-restore-fix.ps1'
+if (Test-Path -LiteralPath $sourceWatchdog) {
+    Copy-Item -LiteralPath $sourceWatchdog -Destination $installedWatchdog -Force
+}
+if (Test-Path -LiteralPath $installedFixedSupervisor) {
+    $goldenBackup = $installedFixedSupervisor + '.before-install-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    Copy-Item -LiteralPath $installedFixedSupervisor -Destination $goldenBackup -Force
+}
+Copy-Item -LiteralPath $installedSupervisor -Destination $installedFixedSupervisor -Force
 
 $shell = New-Object -ComObject WScript.Shell
 foreach ($shortcutTarget in $shortcutTargets) {

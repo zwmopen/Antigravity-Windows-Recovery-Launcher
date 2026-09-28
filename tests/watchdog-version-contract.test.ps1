@@ -8,6 +8,9 @@ if ($watchdogSource -match '\$ProbeTimeoutMs\s*=\s*3000') { throw 'watchdog_must
 foreach ($required in @('Get-SupervisorVersion', '$currentVersion -lt $fixedVersion', 'no action needed')) {
     if (-not $watchdogSource.Contains($required)) { throw ('watchdog_contract_missing:' + $required) }
 }
+foreach ($required in @('Test-SupervisorContract', '[switch]$PrelaunchClient', 'golden supervisor contract incompatible')) {
+    if (-not $watchdogSource.Contains($required)) { throw ('watchdog_contract_missing:' + $required) }
+}
 
 # Exercise the no-action path with the real supervisor source. It intentionally
 # contains a 3000ms local probe override, which used to trigger a false restore.
@@ -37,6 +40,38 @@ try {
     if ($beforeHash -ne $afterHash) { throw 'watchdog_false_positive_restore' }
     if (-not ((Get-Content -LiteralPath (Join-Path $proxyRoot 'watchdog.log') -Raw) -match 'no action needed')) {
         throw 'watchdog_no_action_not_logged'
+    }
+} finally {
+    $env:LOCALAPPDATA = $oldLocalAppData
+    if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
+}
+
+# A higher version is not sufficient if the golden copy lost the foreground
+# prelaunch switch. The watchdog must refuse that bad golden copy rather than
+# perpetuate a launcher-start failure.
+$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('agy-watchdog-incompatible-golden-' + [guid]::NewGuid().ToString('N'))
+$launcherRoot = Join-Path $tempRoot 'Antigravity\launcher'
+$proxyRoot = Join-Path $tempRoot 'Antigravity\private-proxy'
+$launcherPath = Join-Path $launcherRoot 'Antigravity-ProxySupervisor.ps1'
+$fixedPath = Join-Path $proxyRoot 'Antigravity-ProxySupervisor.fixed.ps1'
+$watchdogPath = Join-Path $proxyRoot 'watchdog-restore-fix.ps1'
+$oldLocalAppData = $env:LOCALAPPDATA
+try {
+    New-Item -ItemType Directory -Path $launcherRoot,$proxyRoot -Force | Out-Null
+    $validLauncher = Get-Content -LiteralPath $supervisorSourcePath -Raw -Encoding UTF8
+    $invalidGolden = $validLauncher -replace '(?m)^\s*\[switch\]\$PrelaunchClient,\r?\n', '' -replace '# Version: 2\.8\.6', '# Version: 2.8.7'
+    [IO.File]::WriteAllText($launcherPath, $validLauncher, (New-Object Text.UTF8Encoding($true)))
+    [IO.File]::WriteAllText($fixedPath, $invalidGolden, (New-Object Text.UTF8Encoding($true)))
+    Copy-Item -LiteralPath $watchdogSourcePath -Destination $watchdogPath -Force
+    $env:LOCALAPPDATA = $tempRoot
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $watchdogPath
+    if ($LASTEXITCODE -ne 0) { throw 'watchdog_incompatible_golden_process_failed' }
+    $watchdogLog = Get-Content -LiteralPath (Join-Path $proxyRoot 'watchdog.log') -Raw
+    if ($watchdogLog -notmatch 'golden supervisor contract incompatible') {
+        throw 'watchdog_incompatible_golden_not_rejected'
+    }
+    if ((Get-Content -LiteralPath $launcherPath -Raw) -notmatch '\[switch\]\$PrelaunchClient') {
+        throw 'watchdog_incompatible_golden_changed_launcher'
     }
 } finally {
     $env:LOCALAPPDATA = $oldLocalAppData

@@ -61,6 +61,11 @@ function Copy-WithUtf8BomAndValidate {
         $msg = ($errs | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }) -join "; "
         throw "PowerShell syntax validation failed in $SourcePath : $msg"
     }
+    if ([System.IO.Path]::GetFileName($SourcePath) -eq 'Antigravity-ProxySupervisor.ps1' -and
+        (-not $text.Contains('[switch]$PrelaunchClient') -or
+         -not $text.Contains('function Start-AntigravityBeforeModelGate'))) {
+        throw 'supervisor_prelaunch_contract_missing'
+    }
     [System.IO.File]::WriteAllText($DestPath, $text, $utf8Bom)
 }
 

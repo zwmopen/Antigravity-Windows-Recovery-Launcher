@@ -1,8 +1,15 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 对应版本：1.6.19
-> 最后核对：2026-09-18。
+> 对应版本：1.6.19（部署热修复已于 2026-09-29 验收）
+> 最后核对：2026-09-29。
+
+## 2026-09-29 启动器部署契约漂移热修复
+
+- **根因**：稳定运行目录中的 `Antigravity-ProxySupervisor.ps1` 被旧 watchdog 黄金副本覆盖。该副本版本号更高（2.8.7）但缺少前台启动器传入的 `-PrelaunchClient` 参数，导致专用 `17897` 已启动后，监督器在拉起官方客户端前就以 `NamedParameterNotFound` 退出。
+- **修复**：watchdog 现在同时校验版本和启动契约（`[switch]$PrelaunchClient`、`Start-AntigravityBeforeModelGate`）；不兼容的黄金副本不会覆盖可用脚本。构建和安装器也会在发布/部署前拒绝缺少契约的监督器，并同步部署 watchdog 与黄金副本。
+- **实机验收**：源码、发布目录、稳定运行目录和黄金副本监督器字节一致；桌面快捷方式首次启动成功，状态为 `ready`，`17897` 监听、官方 Antigravity 与 language server 均存活；第二次点击成功激活已有窗口；通过同一 `17897` 出口执行 AGY 最小真实请求，返回 `SUCCESS` / `OK`。
+- **回归边界**：未修改日常 `7897`；地区限制、订阅候选和网络异常仍按现有故障转移策略处理。历史 `launcher-error.log` 中 00:11–00:18 的 `PrelaunchClient` 错误属于修复前记录，修复后无新增同类错误。
 
 ## 项目定位和范围
 
@@ -20,7 +27,7 @@
 
 - `Antigravity-Recovery-Launcher.exe`：稳定桌面入口和克制玻璃中文实时状态窗口；从本次新增的脱敏事件显示独立代理、候选数量、Google/OAuth、出口、真实模型、中文注入和应用就绪状态，再调用监督器完成恢复。若后台恢复已先占用监督器，前台会等待并接管其结果。
 - `Antigravity-AccountWatcher.exe`：监控 Cockpit 当前账号、无代理 `--reuse-window` 实例，以及 17897 到 Google/OAuth 的持续健康；0.6.0 对地区 400 做 30 秒防抖、120 秒稳定观察和 15 分钟熔断，连续 3 次真实网络失败仍触发有界后台恢复。
-- `Antigravity-ProxySupervisor.ps1`：监督器 2.8.4 从 Clash Verge 与 Mihomo Party 订阅索引定位仍有效的本地缓存，发现跨来源日本/美国候选，维护失败冷却，配置/启动 17897，并以官方 `agy` 最小真实生成作为正式 17897 模型门禁；临时端口只做网络/出口预检，避免重复消耗额度；US/JP 共同进入低延迟池，不再按国家硬编码优先；新增脱敏候选数量、来源统计和失败状态事件供中文启动器显示。
+- `Antigravity-ProxySupervisor.ps1`：监督器 2.8.6 从 Clash Verge 与 Mihomo Party 订阅索引定位仍有效的本地缓存，发现跨来源日本/美国候选，维护失败冷却，配置/启动 17897，并以官方 `agy` 最小真实生成作为正式 17897 模型门禁；临时端口只做网络/出口预检，避免重复消耗额度；US/JP 共同进入低延迟池，不再按国家硬编码优先；新增脱敏候选数量、来源统计和失败状态事件供中文启动器显示。
 - `src/watchdog-restore-fix.ps1`：按监督器版本保护 private-proxy golden copy，隔离探针的局部超时配置不会触发误回滚。
 - `localization-extension/translation-core.js`：可审查的词库和纯替换核心；完整句子、UI 短词、权限/额度/时间/数量/模型思考动态规则分层；优先 `uiLookup[exactKey]` 拦截，杜绝部分短语污染。
 - `localization-extension/content.js`：本地 UI DOM 观察、属性翻译与微任务同步拦截；`isInstantUiNode` 覆盖 `[role="menuitem"]` 等全部 WAI-ARIA 菜单与控件，实现 0ms 屏幕绘制前截杀（零闪烁 Zero-FOUT）；严格保护 Monaco 代码块、Markdown、终端命令与会话标题。

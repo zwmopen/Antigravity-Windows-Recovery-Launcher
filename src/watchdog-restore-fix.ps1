@@ -23,6 +23,19 @@ function Get-SupervisorVersion([string]$path) {
     } catch { return $null }
 }
 
+function Test-SupervisorContract([string]$path) {
+    try {
+        if (-not (Test-Path -LiteralPath $path)) { return $false }
+        $content = Get-Content -LiteralPath $path -Raw
+        # The foreground launcher passes -PrelaunchClient. A newer-looking
+        # golden copy must preserve that contract before it can be restored.
+        return $content.Contains('[switch]$PrelaunchClient') -and
+            $content.Contains('function Start-AntigravityBeforeModelGate')
+    } catch {
+        return $false
+    }
+}
+
 if (-not (Test-Path -LiteralPath $fixedBackup)) {
     Write-WatchdogLog 'golden supervisor copy missing; no action'
     exit 0
@@ -34,14 +47,21 @@ if ($null -eq $fixedVersion) {
     exit 0
 }
 
-$currentVersion = Get-SupervisorVersion -path $launcherScript
-$needsRestore = ($null -eq $currentVersion -or $currentVersion -lt $fixedVersion)
-if (-not $needsRestore) {
-    Write-WatchdogLog ("launcher script version={0}; golden={1}; no action needed" -f $currentVersion, $fixedVersion)
+$fixedContract = Test-SupervisorContract -path $fixedBackup
+if (-not $fixedContract) {
+    Write-WatchdogLog 'golden supervisor contract incompatible; no action'
     exit 0
 }
 
-Write-WatchdogLog ("older or unreadable launcher script detected current={0}; restoring golden={1}" -f $currentVersion, $fixedVersion)
+$currentVersion = Get-SupervisorVersion -path $launcherScript
+$currentContract = Test-SupervisorContract -path $launcherScript
+$needsRestore = ($null -eq $currentVersion -or $currentVersion -lt $fixedVersion -or -not $currentContract)
+if (-not $needsRestore) {
+    Write-WatchdogLog ("launcher script version={0}; golden={1}; contract=ok; no action needed" -f $currentVersion, $fixedVersion)
+    exit 0
+}
+
+Write-WatchdogLog ("older, unreadable, or incompatible launcher script detected current={0}; restoring golden={1}" -f $currentVersion, $fixedVersion)
 try {
     New-Item -ItemType Directory -Path (Split-Path -Parent $launcherScript) -Force | Out-Null
     Copy-Item -LiteralPath $fixedBackup -Destination $launcherScript -Force
