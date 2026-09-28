@@ -30,6 +30,9 @@ internal static class AntigravityAccountWatcher
     private static readonly string LocalizationPendingMarkerPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Antigravity", "localization-extension-pending.flag");
+    private static readonly string SettingsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Antigravity", "User", "settings.json");
     private const string RequiredProxyArgument = "--proxy-server=http://127.0.0.1:17897";
     private const string WatcherVersion = "0.6.0";
     internal const int MaxRepairAttempts = 3;
@@ -233,6 +236,20 @@ internal static class AntigravityAccountWatcher
         return false;
     }
 
+    private static bool SettingsProxyConfigured()
+    {
+        try
+        {
+            if (File.Exists(SettingsPath))
+            {
+                string json = File.ReadAllText(SettingsPath);
+                return json.IndexOf("127.0.0.1:17897", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+        }
+        catch { }
+        return false;
+    }
+
     private static void InspectAntigravityProcesses(out bool hasCompliant, out bool needsRepair)
     {
         hasCompliant = false;
@@ -260,7 +277,9 @@ internal static class AntigravityAccountWatcher
                         continue;
                     }
 
-                    if (commandLine.IndexOf(RequiredProxyArgument, StringComparison.OrdinalIgnoreCase) >= 0)
+                    bool hasCliProxy = commandLine.IndexOf(RequiredProxyArgument, StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool hasSettingsProxy = SettingsProxyConfigured();
+                    if (hasCliProxy || hasSettingsProxy)
                     {
                         hasCompliant = true;
                     }
@@ -269,7 +288,7 @@ internal static class AntigravityAccountWatcher
                         needsRepair = true;
                     }
 
-                    if (!localizationDisabled && !localizationPending && !HasLocalizationHook(commandLine))
+                    if (!localizationDisabled && !localizationPending && !hasSettingsProxy && !HasLocalizationHook(commandLine))
                     {
                         needsRepair = true;
                     }

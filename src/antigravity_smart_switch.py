@@ -686,23 +686,6 @@ def snapshot_active_and_running_tasks():
 
         res = asyncio.run(_query())
         if res:
-            # 融合 Brain 本地近 3 分钟活跃后台任务，补全因侧边栏虚拟滚动或 429 提前停转而丢失的任务
-            foreground_cids = [p.get("conv_id") for p in res.get("panes", []) if p.get("conv_id")]
-            sidebar_cids = [t.get("href", "").replace("/c/", "").split("?")[0] for t in res.get("running_sidebar_tasks", [])]
-            known_cids = set(foreground_cids + sidebar_cids)
-
-            brain_tasks = get_recent_brain_active_conversations(exclude_cids=known_cids, max_age_seconds=180)
-            if brain_tasks:
-                for bt in brain_tasks:
-                    res.setdefault("running_sidebar_tasks", []).append({
-                        "index": 999,
-                        "title": bt.get("title", f"后台断点-{bt['conv_id'][:8]}"),
-                        "href": bt["href"],
-                        "conv_id": bt["conv_id"],
-                        "source": "brain_transcript"
-                    })
-                res["has_running_tasks"] = True
-
             logger.info(f"🔍 [CDP全景断点雷达] 检测到 {res.get('total_panes', 0)} 个前台分屏列 (运行中: {len(res.get('interrupted_panes', []))} 个), 侧边栏转圈任务: {len(res.get('running_sidebar_tasks', []))} 个")
             if res.get("interrupted_panes"):
                 logger.info(f"   ▶ 前台运行中列: {res.get('interrupted_panes')}")
@@ -1364,117 +1347,11 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 logger.info(f"🖥️ 多分屏原生直连续接处理完毕: 共处理 {len(results)} 个并排分屏列，成功触发: {succ_cnt} 个")
 
                 # =====================================================================
-                # 2. 【后台侧边栏与 Brain 记录转圈任务深度接力】
+                # 2. 【无感保障：绝对静默，严禁劫持路由跳切会话】
                 # =====================================================================
+                # 严格遵循单窗口无感铁律：仅接力当前前台可见分屏，严禁调用 navigate 强切其他后台会话打乱用户视线
                 if running_sidebar_tasks:
-                    unresumed_tasks = []
-                    for st in running_sidebar_tasks:
-                        s_cid = st.get("conv_id") or st.get("href", "").replace("/c/", "").split("?")[0].strip()
-                        if s_cid and s_cid not in resumed_cids:
-                            unresumed_tasks.append(st)
-
-                    if unresumed_tasks:
-                        logger.info(f"🧭 [后台断点接力] 发现 {len(unresumed_tasks)} 个后台任务未在前台被唤醒，逐一启动深度接力...")
-                        for st in unresumed_tasks:
-                            s_title = st.get("title", "")
-                            s_cid = st.get("conv_id") or st.get("href", "").replace("/c/", "").split("?")[0].strip()
-                            if not s_cid or s_cid in resumed_cids:
-                                continue
-                            logger.info(f"▶ 正在唤醒后台断点任务: '{s_title}' (/c/{s_cid})...")
-                            nav_js = f"""
-                            (() => {{
-                                if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
-                                    window.__TSR_ROUTER__.navigate({{ href: '/c/{s_cid}' }});
-                                }} else {{
-                                    window.location.href = window.location.origin + '/c/{s_cid}';
-                                }}
-                                return true;
-                            }})()
-                            """
-                            await cdp_call("Runtime.evaluate", {"expression": nav_js})
-                            await asyncio.sleep(0.8)
-
-                            bg_prep_js = """
-                            (async () => {
-                                let ed = null;
-                                for (let r = 0; r < 15; r++) {
-                                    ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                                    if (ed) break;
-                                    await new Promise(res => setTimeout(res, 200));
-                                }
-                                if (!ed) return { status: "no_editor" };
-
-                                let container = ed.parentElement;
-                                for (let s = 0; s < 8; s++) {
-                                    if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i]'))) break;
-                                    if (container && container.parentElement) container = container.parentElement;
-                                }
-                                const stopBtn = container ? container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : null;
-                                if (stopBtn) return { status: "already_generating" };
-
-                                ed.focus();
-                                try {
-                                    const sel = window.getSelection();
-                                    const range = document.createRange();
-                                    range.selectNodeContents(ed);
-                                    range.collapse(false);
-                                    sel.removeAllRanges();
-                                    sel.addRange(range);
-                                    ed.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                                    ed.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                                    ed.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                                } catch(e) {}
-                                return { status: "ready" };
-                            })()
-                            """
-                            bg_prep_res = await cdp_call("Runtime.evaluate", {"expression": bg_prep_js, "awaitPromise": True, "returnByValue": True})
-                            bg_prep_val = bg_prep_res.get("result", {}).get("result", {}).get("value") or {}
-                            if bg_prep_val.get("status") == "already_generating":
-                                logger.info(f"后台任务 '{s_title}' 正在生成中，无需打标，保持原样。")
-                                resumed_cids.add(s_cid)
-                                succ_cnt += 1
-                                continue
-                            elif bg_prep_val.get("status") != "ready":
-                                logger.warning(f"后台任务 '{s_title}' 输入框未就绪 ({bg_prep_val.get('status')})，跳过...")
-                                continue
-
-                            await cdp_call("Input.insertText", {"text": str(text)})
-                            logger.info(f"已向后台任务 '{s_title}' 键入 '{text}'，等待 {wait_enter_sec:.1f} 秒待沉淀...")
-                            await asyncio.sleep(wait_enter_sec)
-
-                            bg_send_js = """
-                            (async () => {
-                                const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                                let container = ed ? ed.parentElement : null;
-                                for (let s = 0; s < 8; s++) {
-                                    if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i]'))) break;
-                                    if (container && container.parentElement) container = container.parentElement;
-                                }
-                                let btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
-                                for (let retry = 0; retry < 15; retry++) {
-                                    if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') break;
-                                    await new Promise(r => setTimeout(r, 100));
-                                    if (container) {
-                                        btn = container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary');
-                                    }
-                                }
-                                if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
-                                    btn.click();
-                                    return true;
-                                }
-                                return false;
-                            })()
-                            """
-                            bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "awaitPromise": True, "returnByValue": True})
-                            bg_sent = bg_send_res.get("result", {}).get("result", {}).get("value")
-                            if not bg_sent or force_send:
-                                await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                                await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-
-                            logger.info(f"✅ 后台任务 '{s_title}' 续接触发成功！")
-                            resumed_cids.add(s_cid)
-                            succ_cnt += 1
-                            await asyncio.sleep(0.4)
+                    logger.info(f"ℹ️ [无感保障] 检测到 {len(running_sidebar_tasks)} 个侧边栏任务，单窗口模式下保持静默，严禁切路由打扰当前前台！")
 
                 # =====================================================================
                 # 3. 【无缝返航复原多列分屏布局】
@@ -2224,8 +2101,8 @@ def send_feishu_notification(title, message, chat_names=None, debounce_seconds=9
                 if cid and cid not in targets:
                     targets.append(cid)
         else:
-            infra_chat = cfg.get("infra_ops_chat", "AI 额度与系统运维群")
-            default_targets = [infra_chat]
+            switch_chat = cfg.get("account_switch_chat") or cfg.get("infra_ops_chat") or "账号状态通知群"
+            default_targets = [switch_chat]
             for dt in default_targets:
                 cid = group_map.get(dt) or dt
                 if cid and cid not in targets:
@@ -2308,10 +2185,10 @@ def send_windows_notification(title, message, status="warning", duration_ms=8000
         return False
 
 
-def send_dual_notification(title, message, status="warning"):
+def send_dual_notification(title, message, status="warning", chat_names=None):
     """同时发送桌面通知技能与飞书群/私聊通知"""
     send_windows_notification(title, message, status=status)
-    send_feishu_notification(title, message)
+    send_feishu_notification(title, message, chat_names=chat_names)
 
 
 def handle_notification_event(event_type, region="", node="", rtt=""):
@@ -3213,7 +3090,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         f"🔥 切换模式: {mode_desc}\n"
         f"🚀 17897 专线复用，{resume_desc}"
     )
-    send_dual_notification(succ_title, succ_msg, status="info")
+    send_dual_notification(succ_title, succ_msg, status="info", chat_names=["账号状态通知群"])
     return "switched"
 
 
