@@ -2927,6 +2927,32 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
         Show-ProxyNotification -Event 'recovery_success' -Values @{ region = $egressCountry; node = $nodeName; rtt = $script:LastProbeRttMs }
     }
 } else {
+    # 开机冷启动/拉起前置账号门禁：确保入场账号健康有效且已注入最优凭据
+    if ($RecoveryReason -ne 'cockpit_account_changed') {
+        $SmartSwitchPy = Join-Path $ScriptRoot 'antigravity_smart_switch.py'
+        if (-not (Test-Path -LiteralPath $SmartSwitchPy)) {
+            $canonicalScript = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\antigravity_smart_switch.py'
+            if (Test-Path -LiteralPath $canonicalScript) { $SmartSwitchPy = $canonicalScript }
+        }
+        if (Test-Path -LiteralPath $SmartSwitchPy) {
+            $pyExe = Resolve-PythonPath
+            Write-SafeLog -Event 'preflight_account_check_started'
+            try {
+                $psi = New-Object System.Diagnostics.ProcessStartInfo
+                $psi.FileName = $pyExe
+                $psi.Arguments = "`"$SmartSwitchPy`" --preflight-ensure"
+                $psi.UseShellExecute = $false
+                $psi.CreateNoWindow = $true
+                $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+                $p = [System.Diagnostics.Process]::Start($psi)
+                $p.WaitForExit(8000)
+                Write-SafeLog -Event 'preflight_account_check_completed' -Values @{ exit_code = $p.ExitCode }
+            } catch {
+                Write-SafeLog -Event 'preflight_account_check_warning' -Values @{ error = $_.Exception.Message }
+            }
+        }
+    }
+
     Stop-ExistingAntigravity
 
     $previousEnvironment = @{}

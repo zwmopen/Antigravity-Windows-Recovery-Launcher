@@ -79,6 +79,12 @@ SHARED_NOTIFY_SCRIPT = r"D:\AICode\AI\skills\技能包\技能\shared-notificatio
 FEISHU_CONFIG_FILE = r"D:\AICode\AI\secrets\平台服务\飞书\feishu_config.json"
 BETA_FLAG_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "beta.flag")
 
+# 永久硬隔离黑名单（已确认封禁、需二次网页验证、invalid_grant 或 TOS 禁用的账号，全流程绝对禁止选用与切入）
+HARD_BLOCKED_EMAILS = {
+    "azrimjs@gmail.com",
+    "kt01096002805@gmail.com"
+}
+
 
 def is_beta_mode():
     """检测当前是否处于测试版模式 (由启动器 --beta 或存在 beta.flag 触发)"""
@@ -1765,6 +1771,11 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
                             pass
                     continue  # 进入第 2 次循环重试
 
+                if result.get("reason") == "onboarding_login_page":
+                    logger.error("🛑 [自愈引擎关键告警] 检测到 Antigravity 界面处于未登录/新手引导页 (/onboarding?login=true)！凭据失效或已被拦截！")
+                    clear_pending_auto_resume()
+                    return "onboarding_login_page"
+
                 clear_pending_auto_resume()
 
                 success_items = [r for r in result.get("results", []) if r.get("success") and r.get("reason") not in ("idle_skip", "already_generating")]
@@ -1850,28 +1861,52 @@ def get_all_accounts_and_quotas():
         disabled = bool(acc.get("disabled", False))
         disabled_reason = acc.get("disabled_reason", "")
 
-        # 核心防御：解密读取 Cockpit 账号明细，严防被封禁/需要网页验证/invalid_grant 账号被误判为满血备用！
+        # 核心防御：解密读取 Cockpit 账号明细，严防被封禁/需要网页验证/invalid_grant/需要申诉的账号被误判为满血备用！
         acc_file = os.path.join(COCKPIT_DIR, "accounts", f"{acc_id}.json")
         if os.path.exists(acc_file) and cockpit_aes:
             try:
                 enc = json.loads(open(acc_file, "r", encoding="utf-8").read())
                 pt = cockpit_aes.decrypt(base64.b64decode(enc["nonce"]), base64.b64decode(enc["ciphertext"]), None)
                 detail = json.loads(pt.decode("utf-8"))
+
+                # 判定特殊账号（需要申诉、网页验证、封禁、invalid_grant 等）
+                special_keywords = [
+                    "invalid_grant", "reauth", "re-auth", "appeal", "申诉",
+                    "verify", "verification", "需验证", "验证", "suspended",
+                    "suspension", "封禁", "冻结", "banned", "disabled", "禁用",
+                    "unauthorized", "consent", "401", "403", "password", "credential",
+                    "revoked", "deactivated", "locked", "锁定", "风控"
+                ]
+
+                is_special = False
+                special_reason = ""
+
                 if detail.get("disabled"):
-                    disabled = True
-                    disabled_reason = detail.get("disabled_reason") or "账号已禁用/失效"
+                    is_special = True
+                    special_reason = detail.get("disabled_reason") or "账号已标记禁用"
                 elif detail.get("quota_error"):
                     err_msg = str(detail.get("quota_error", {}).get("message", ""))
-                    if "invalid_grant" in err_msg.lower() or "reauth" in err_msg.lower() or "401" in err_msg:
-                        disabled = True
-                        disabled_reason = "需网页验证 / 封禁隔离 (invalid_grant)"
+                    if not err_msg:
+                        err_msg = str(detail.get("quota_error"))
+                    is_special = True
+                    err_lower = err_msg.lower()
+                    if any(k in err_lower or k in err_msg for k in ["appeal", "申诉"]):
+                        special_reason = f"需申诉 / 账号限制 ({err_msg[:50]})"
+                    elif any(k in err_lower or k in err_msg for k in ["verify", "verification", "需验证", "reauth", "consent"]):
+                        special_reason = f"需网页验证 / 重新授权 ({err_msg[:50]})"
+                    elif any(k in err_lower or k in err_msg for k in ["suspended", "banned", "封禁", "冻结", "locked"]):
+                        special_reason = f"已封禁 / 账号冻结 ({err_msg[:50]})"
                     else:
-                        disabled = False
-                        disabled_reason = ""
+                        special_reason = f"需网页验证 / 封禁隔离 (invalid_grant: {err_msg[:50]})"
+                elif disabled:
+                    is_special = True
+                    special_reason = disabled_reason or "账号已禁用"
                 else:
-                    # 申诉成功 / 重新网页登录授权后自动解除隔离，重归健康战备池！
-                    disabled = False
-                    disabled_reason = ""
+                    is_special = False
+                    special_reason = ""
+
+                disabled = is_special
+                disabled_reason = special_reason
 
                 if disabled != bool(acc.get("disabled", False)) or disabled_reason != acc.get("disabled_reason", ""):
                     acc["disabled"] = disabled
@@ -1879,6 +1914,14 @@ def get_all_accounts_and_quotas():
                     accounts_json_modified = True
             except Exception:
                 pass
+
+        if email.lower() in HARD_BLOCKED_EMAILS:
+            disabled = True
+            disabled_reason = "永久封禁/失效账号硬黑名单拦截 (HARD_BLOCKED)"
+            if not acc.get("disabled") or acc.get("disabled_reason") != disabled_reason:
+                acc["disabled"] = True
+                acc["disabled_reason"] = disabled_reason
+                accounts_json_modified = True
 
         is_current = (acc_id == current_id)
         
@@ -1966,47 +2009,60 @@ def get_all_accounts_and_quotas():
             sec_to_w_reset = 7.0 * 86400.0
             days_to_w_reset = 7.0
         
-        # 智能优选综合评分机制 (Cockpit Score V3 - 到期优先与额度双维度升级)：
+        # 智能优选综合评分机制 (Cockpit Score V4 - 严格多级优先级体系)：
         # 用户核心铁律：
-        # 优先级 1. 即将到期优先：优先使用剩余时间最短、即将要刷新的（按周来算）。
-        # 优先级 2. 额度更多优先：在重置时间相近时，优先使用剩余额度更充沛的。
-        
-        # 1. 周恢复紧迫度（主维度：0~350分 + 极速临界加成）：
-        #    周重置窗口为 7.0 天。剩余天数越少，未用额度越面临清零浪费风险，必须最优先消化！
+        # 优先级 1. 周额度到期时间：越近越好（天数少的绝对优先于天数多的，天数每少 1 天增加 1000 分）。
+        # 优先级 2. 额度大小：在周到期天数相近/处于同一天梯队时，周额度更多的绝对优先（0~500分）。
+        #          【硬性门禁】：周额度必须 > 5.0% 才算有效，<= 5.0% 濒死直接一票否决淘汰。
+        # 优先级 3. 小时额度：其次看小时额度，越满越好（0~200分，100% 满血优先）。
+        # 优先级 4. 特殊账号判定：遇到需要申诉、网页验证、封禁等特殊账号，自动识别并扣 100,000 分绝对跳过！
+
         clamped_days = min(7.0, max(0.0, float(days_to_w_reset)))
-        score_urgency = (7.0 - clamped_days) * 50.0
-        
-        # 临界重置冲刺加成（24~48小时内重置具有极高消耗优先级）：
-        if clamped_days <= 1.0:
-            score_urgency += 40.0
-        elif clamped_days <= 2.0:
-            score_urgency += 20.0
-            
-        # 2. 周额度存量（次维度：0~80分）：
-        #    同梯队内额度越充沛越优选，但绝对权重不压制即将到期的紧迫性
-        score_weekly = q_w_val * 0.8
-        
-        # 3. 5小时滚动满血度（基础保障：0~70分）：
-        #    确保当前具备充足的瞬时高并发额度，>=90% 满血加 20 分
-        score_5h = (q_5h_val * 0.5) + (20.0 if q_5h_val >= 90.0 else 0.0)
-        
-        # 4. 安全红线与低额度惩罚：
+        day_bucket = int(clamped_days)  # 0, 1, 2, 3, 4, 5, 6, 7 天阶梯
+
+        # 1. 绝对第一优先级：周到期天数阶梯 (0 ~ 7,000 分)
+        #    Bucket 0 (<1天): 7,000分
+        #    Bucket 1 (1~2天): 6,000分
+        #    Bucket 2 (2~3天): 5,000分
+        #    Bucket 3 (3~4天): 4,000分
+        #    Bucket 4 (4~5天): 3,000分
+        #    Bucket 5 (5~6天): 2,000分
+        #    Bucket 6 (6~7天): 1,000分
+        #    Bucket 7 (>=7天): 0分
+        urgency_tier_score = (7 - day_bucket) * 1000.0
+
+        # 2. 绝对第二优先级：在同一天数梯队内（条件相同时），周额度越多越好 (0 ~ 500 分)
+        #    即使额度 100% 满血也只有 500 分，绝对无法跨越 1000 分的天数阶梯！
+        #    即：2 天的账号 (基准 5000) 即使只有 6% 额度 (5030分)，也永远碾压 3 天 100% 额度的账号 (4000+500+200=4700分)！
+        weekly_quota_score = min(100.0, max(0.0, q_w_val)) * 5.0
+
+        # 3. 绝对第三优先级：小时额度越满越好 (0 ~ 200 分)
+        #    在周额度相同或极相近时，5小时额度越充沛越优选
+        hourly_quota_score = min(100.0, max(0.0, q_5h_val)) * 2.0
+
+        # 4. 微观天数倒数分 (0 ~ 50 分，同一小时/分钟内微观时间更近者胜出)
+        sub_day_urgency = max(0.0, (1.0 - (clamped_days - day_bucket))) * 50.0
+
+        # 5. 安全红线与特殊账号绝对一票否决
         score_penalty = 0.0
-        # 濒死硬隔离红线（周额度 <= 5.0% 必须彻底挂起，严禁调用）
+        if disabled:
+            # 特殊账号（需申诉/需验证/封禁）彻底压入负分深渊
+            score_penalty -= 100000.0
         if q_w_val <= 5.0:
-            score_penalty -= 500.0
+            # 濒死账号（<=5%）彻底压入负分深渊
+            score_penalty -= 50000.0
         elif q_w_val < 15.0:
-            score_penalty -= 40.0
-            
-        # 5小时滚动频控红线（5h <= 5.0% 会立刻报 429 频控异常）
+            score_penalty -= 50.0
+
         if q_5h_val <= 5.0:
-            score_penalty -= 500.0
+            # 频控死锁账号（<=5%）直接扣分淘汰
+            score_penalty -= 50000.0
         elif q_5h_val < 15.0:
             score_penalty -= 30.0
-        
-        cockpit_score = round(score_urgency + score_weekly + score_5h + score_penalty, 1)
+
+        cockpit_score = round(urgency_tier_score + weekly_quota_score + hourly_quota_score + sub_day_urgency + score_penalty, 1)
         tiger_score = cockpit_score
-        
+
         results.append({
             "id": acc_id,
             "email": email,
@@ -2021,9 +2077,9 @@ def get_all_accounts_and_quotas():
             "days_to_w_reset": days_to_w_reset,
             "sec_to_w_reset": sec_to_w_reset,
             "effective_quota": effective,
-            "score_5h": score_5h,
-            "score_urgency": score_urgency,
-            "score_weekly": score_weekly,
+            "score_5h": hourly_quota_score,
+            "score_urgency": urgency_tier_score,
+            "score_weekly": weekly_quota_score,
             "cockpit_score": cockpit_score,
             "tiger_score": tiger_score,
             "claude_5h": q_c_5h_val,
@@ -2047,40 +2103,38 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         for acc in accounts:
             if acc["id"] == target_email_or_id or acc["email"].lower() == target_norm:
                 if acc.get("disabled"):
-                    raise ValueError(f"指定账号 [{acc['email']}] 处于风控/需网页验证状态 ({acc.get('disabled_reason', '已封禁')})，严禁切换！")
+                    raise ValueError(f"指定账号 [{acc['email']}] 处于特殊/需申诉/需网页验证锁定状态 ({acc.get('disabled_reason', '已封禁')})，系统自动跳过并严禁切入！")
                 return acc, "用户指定目标账号"
         raise ValueError(f"未找到指定的账号: {target_email_or_id}")
     
-    # 门禁过滤（并行条件）：
-    # 1. 排除当前在用与已禁用账号；
-    # 2. 排除处于 429 临时关押冷却期的账号；
-    # 3. 周额度 <= 1.0% 必须一票否决淘汰（周额度耗尽在 Google 端会直接 429）；
-    # 4. 5小时额度 <= threshold (5%) 必须一票否决淘汰；
-    # 铁律：候选账号必须同时满足 [周额度 > 1.0%] 且 [5小时额度 > threshold]！
+    # 门禁过滤（严格遵循用户四大铁律）：
+    # 1. 彻底跳过特殊账号（disabled=True，包含申诉、需验证、封禁、invalid_grant等）；
+    # 2. 排除当前在用账号；
+    # 3. 排除处于 429 临时隔离关押期的账号；
+    # 4. 【周额度门禁】：超过 5.0% 才算！周额度 <= 5.0% 必须彻底淘汰；
+    # 5. 【5小时额度门禁】：5小时额度 <= 5.0% 必须淘汰。
     quarantined = load_quarantined_accounts()
-    all_eligible = [
+    candidates = [
         acc for acc in accounts
         if not acc.get("disabled", False)
         and not acc.get("is_current", False)
         and acc.get("id") != current_id
         and acc.get("id") not in quarantined
-        and float(acc.get("gemini_weekly", 0.0)) > 1.0
-        and float(acc.get("gemini_5h", 0.0)) > threshold
+        and acc.get("email", "").strip().lower() not in HARD_BLOCKED_EMAILS
+        and float(acc.get("gemini_weekly", 0.0)) > 5.0   # 用户铁律：超过 5% 才算有效
+        and float(acc.get("gemini_5h", 0.0)) > threshold  # 5小时额度必须 > 5%
     ]
-    # 濒死硬隔离铁律（用户强制基准）：周额度 < 5.0% 必须彻底静置挂起，绝不调用濒死残血账号产出！
-    # 自动切号时坚决排除所有周额度 < 5.0% 的账号；若全部 < 5.0%，直接安全停机等待周重置，绝不频繁切号报429！
-    candidates = [acc for acc in all_eligible if float(acc.get("gemini_weekly", 0.0)) >= 5.0]
     
     if not candidates and quarantined:
-        # 【紧急解冻救场机制】：备选账号告急时，绝对不能因为历史冷冻而直接宣布无号可用！
-        # 对所有被隔离账号执行即时探活审计，只要当前额度满足可用标准，立刻强制解冻并拉入救场候选池！
+        # 【紧急解冻救场机制】：备选池全部处于历史冷却隔离时，对隔离账号探活审计
         rescued = []
         for acc in accounts:
             aid = acc.get("id")
-            if aid in quarantined and not acc.get("disabled", False) and aid != current_id:
+            a_email = acc.get("email", "").strip().lower()
+            if aid in quarantined and not acc.get("disabled", False) and aid != current_id and a_email not in HARD_BLOCKED_EMAILS:
                 w_q = float(acc.get("gemini_weekly", 0.0))
                 h_q = float(acc.get("gemini_5h", 0.0))
-                if w_q > 1.0 and h_q > threshold:
+                if w_q > 5.0 and h_q > threshold:
                     remove_quarantined_account(aid)
                     rescued.append(acc)
                     logger.info(f"🚨 [紧急解冻救场] 备选池告急！检测到隔离账号 [{acc.get('email')}] 额度充沛 (5h: {h_q}%, 周: {w_q}%)，已强制解冻救场！")
@@ -2088,29 +2142,32 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
             candidates = rescued
 
     if candidates:
-        # 多维复合排序（严格遵循用户双层铁律）：
-        # 1. 综合得分（到期紧迫度占主导，额度量占次要）DESC
-        # 2. 周重置倒计时最短（天数最少）ASC
+        # 多维复合排序（严格遵循用户四大铁律）：
+        # 1. 综合得分（天数阶梯主导，额度次要，小时再次要）DESC
+        # 2. 天数阶梯最小 (天数少的绝对优先) ASC
         # 3. 周剩余额度最高 DESC
+        # 4. 5小时滚动额度最高 DESC
+        # 5. 剩余精确天数最少 ASC
         candidates.sort(
             key=lambda x: (
                 x.get("cockpit_score", 0.0),
-                -x.get("days_to_w_reset", 7.0),
-                x.get("gemini_weekly", 0.0)
+                -int(x.get("days_to_w_reset", 7.0)),
+                x.get("gemini_weekly", 0.0),
+                x.get("gemini_5h", 0.0),
+                -x.get("days_to_w_reset", 7.0)
             ),
             reverse=True
         )
         best = candidates[0]
+        day_str = f"{best.get('days_to_w_reset', 7.0):.1f}天"
         reason = (
-            f"智能优选 [得分: {best.get('cockpit_score', 0.0)}]：优先消化即将到期额度 "
-            f"(周重置仅剩 {best.get('days_to_w_reset', 7.0)}天)，周额度剩余 {best.get('gemini_weekly', 0.0)}%，"
-            f"5小时额度 {best.get('gemini_5h', 0.0)}%"
+            f"智能优选 [得分: {best.get('cockpit_score', 0.0)}]：优先消化即将到期账号 "
+            f"(周重置仅剩 {day_str})，周额度剩余 {best.get('gemini_weekly', 0.0):.1f}%，"
+            f"5小时额度 {best.get('gemini_5h', 0.0):.1f}%"
         )
         return best, reason
     
-    # 彻底废除旧代码的盲目 fallback 兜底！
-    # 严格遵从用户铁律：若没有真正可用账号，坚决不切号、不重启、不杀窗口！
-    raise RuntimeError("🛑【账号池周额度硬隔离保护】全池备选账号周额度均已低于 5.0% 濒死警戒线！已自动挂起停止切号，保持当前窗口完好，静待周重置（若急用可手动指定账号切入）。")
+    raise RuntimeError("🛑【账号池周额度硬隔离保护】全池备选账号周额度均已低于或等于 5.0% 警戒线（或处于特殊申诉/验证状态）！已自动挂起停止切号，保持当前窗口完好，静待周重置（若急用可手动指定账号切入）。")
 
 
 def is_antigravity_running():
@@ -2333,7 +2390,10 @@ def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, curr_f
         curr_force_exhausted: 强制判定【当前在用账号】已耗尽 (如捕获到 429 报错时)，仍会正常核验池中是否有备选候选账号。
         force_exhausted: 强制判定【整个账号池】全部耗尽 (仅用于极限测试与强制封锁)。
     """
-    enabled_accounts = [a for a in accounts if not a.get("disabled", False)]
+    enabled_accounts = [
+        a for a in accounts
+        if not a.get("disabled", False) and a.get("email", "").strip().lower() not in HARD_BLOCKED_EMAILS
+    ]
     if not enabled_accounts:
         return False
 
@@ -2352,6 +2412,7 @@ def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, curr_f
         if a.get("id") != current_id
         and not a.get("is_current", False)
         and a.get("id") not in quarantined
+        and a.get("email", "").strip().lower() not in HARD_BLOCKED_EMAILS
         and float(a.get("gemini_weekly", 0.0)) > 1.0
         and float(a.get("gemini_5h", 0.0)) > threshold
     ]
@@ -2361,7 +2422,8 @@ def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, curr_f
         rescued = []
         for a in enabled_accounts:
             aid = a.get("id")
-            if aid in quarantined and aid != current_id and not a.get("is_current", False):
+            a_email = a.get("email", "").strip().lower()
+            if aid in quarantined and aid != current_id and not a.get("is_current", False) and a_email not in HARD_BLOCKED_EMAILS:
                 w_q = float(a.get("gemini_weekly", 0.0))
                 h_q = float(a.get("gemini_5h", 0.0))
                 if w_q > 1.0 and h_q > threshold:
@@ -3157,7 +3219,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     resume_wait_timeout = 45 if hot_restart_success else 180
     if should_resume:
         logger.info("🎯 [步骤 5/5] 智能断点续接：正在等待语言服务就绪，定向接力未完成任务...")
-        execute_auto_resume(
+        resume_status = execute_auto_resume(
             max_windows=max(task_snapshot.get("total_panes", 0), 4),
             text="继续",
             wait_timeout=resume_wait_timeout,
@@ -3168,6 +3230,36 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
             full_url=task_snapshot.get("url"),
             panes=task_snapshot.get("panes", [])
         )
+        if resume_status == "onboarding_login_page":
+            logger.error(f"🛑 [自愈引擎严重告警] 账号 [{best_acc['email']}] 切入后反重力页面停留在新手登录页 (/onboarding?login=true)！证明该账号凭据已无效或被 Google 拒绝！")
+            clear_pending_switch()
+            # 1. 立即隔离该账号 365 天
+            record_quarantine_account(best_acc["id"], duration_seconds=86400 * 365)
+            # 2. 将其在 Cockpit accounts.json 中标为 disabled
+            try:
+                if os.path.exists(ACCOUNTS_FILE):
+                    with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as af:
+                        cur_acc_data = json.load(af)
+                    for a in cur_acc_data.get("accounts", []):
+                        if a.get("id") == best_acc["id"]:
+                            a["disabled"] = True
+                            a["disabled_reason"] = "启动后遭遇登录页/无效授权拦截 (onboarding_login_page)"
+                    with open(ACCOUNTS_FILE, "w", encoding="utf-8") as af:
+                        json.dump(cur_acc_data, af, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.warning(f"更新 accounts.json disabled 失败: {e}")
+            
+            # 3. 发送双端告警
+            send_dual_notification(
+                "Antigravity 账号失效预警 (已触发自动转移)",
+                f"⚠️ 刚刚切入的账号 [{best_acc['email']}] 登录态无效 (停留在登录引导页)！\n"
+                f"🛡️ 系统已自动对其执行 365 天隔离与禁用保护。\n"
+                f"⚡ 正在立即紧急切换至下一顺位可用健康账号...",
+                status="error",
+                chat_names=["账号状态通知群"]
+            )
+            # 4. 自动故障转移：立即强制切下一个健康账号！
+            return run_smart_switch(threshold=threshold, force=True)
     else:
         logger.info("⏭ [步骤 5/5] 自动续接已关闭，跳过发送'继续'（可在启动器设置中开启）")
     clear_pending_switch()
@@ -3186,6 +3278,58 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     return "switched"
 
 
+def preflight_ensure_valid_account(threshold=5.0):
+    """
+    开机冷启动前置门禁：在拉起 Antigravity 之前检查并对齐最优健康账号。
+    用于启动器冷启动或用户退出反重力后重新点击启动器。
+    判定逻辑：
+    1. 检查当前生效账号是否存在、是否处于 disabled / HARD_BLOCKED_EMAILS / 需申诉验证状态；
+    2. 检查当前生效账号 5h 滚动额度是否 <= threshold (5.0%) 或周额度 <= 5.0%；
+    3. 若当前账号已失效或额度见底：强制切入全池最优可用健康账号（原子对齐 Windows 凭据 + Cockpit 状态文件）；
+    4. 若当前账号健康可用，平滑放行。
+    """
+    current_id, accounts = get_all_accounts_and_quotas()
+    curr_acc = next((a for a in accounts if a["is_current"]), None)
+    curr_email = curr_acc["email"] if curr_acc else "未知"
+    curr_5h = curr_acc["gemini_5h"] if curr_acc else 0.0
+    curr_weekly = curr_acc["gemini_weekly"] if curr_acc else 0.0
+    is_disabled = (not curr_acc) or curr_acc.get("disabled", False) or (curr_email.lower() in HARD_BLOCKED_EMAILS)
+    is_exhausted = is_disabled or (curr_5h <= threshold) or (curr_weekly <= 5.0)
+
+    if not is_exhausted:
+        logger.info(f"✅ [冷启动门禁通过] 当前在用账号 [{curr_email}] 健康有效 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)，直接放行启动。")
+        return 0
+
+    reason_desc = "已处于失效/封禁/需验证状态" if is_disabled else f"额度不足 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)"
+    logger.warning(f"⚠️ [冷启动门禁拦截] 检测到当前账号 [{curr_email}] {reason_desc}，严禁直接拉起！")
+    logger.info("🎯 正在执行开机前置智能选号与凭据原子直写...")
+
+    try:
+        best_acc, reason = select_best_account(accounts, current_id, threshold=threshold)
+    except Exception as e:
+        logger.warning(f"🛑 [冷启动门禁告警] 全池无可用备选账号: {e}")
+        return 1
+
+    logger.info(f"🎯 [冷启动门禁选优] 优选健康满血接力: {best_acc['email']} (5h: {best_acc['gemini_5h']}%, 周: {best_acc['gemini_weekly']}%)")
+    logger.info(f"📋 决策理由: {reason}")
+
+    # 原子写入 Windows Credential Manager
+    write_antigravity_windows_credential(best_acc["id"])
+    # 四合一状态同步与 UI 刷新
+    sync_all_cockpit_account_files(best_acc["id"], best_acc["email"])
+    refresh_cockpit_tools_ui()
+
+    try:
+        os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
+        with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
+            f.write(best_acc["id"].strip())
+    except Exception:
+        pass
+
+    logger.info(f"✅ [冷启动门禁就绪] 目标账号 [{best_acc['email']}] 凭据已注入，Antigravity 可安全启动！")
+    return 0
+
+
 def print_status_table():
     current_id, accounts = get_all_accounts_and_quotas()
     curr_acc = next((a for a in accounts if a["is_current"]), None)
@@ -3199,6 +3343,8 @@ def print_status_table():
     for i, acc in enumerate(accounts, 1):
         if acc["is_current"]:
             status = "★ 当前在用"
+        elif acc.get("disabled") or acc.get("email", "").lower() in HARD_BLOCKED_EMAILS:
+            status = "⛔ 封禁/隔离中"
         elif acc["gemini_weekly"] <= 0.0 and acc["gemini_5h"] <= 0.0:
             status = "⛔ 0额度(自动剔除)"
         elif acc["gemini_weekly"] <= 1.0:
@@ -3595,8 +3741,9 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         elif len(healthy_accounts) == 1:
                             logger.info(f"💡 [账号池余量感知] 备用健康账号仅存 1 个 ({healthy_accounts[0]['email']})，请注意关注。")
                     
-                    # 门禁触发条件：5小时额度耗尽 (<= threshold) 或 周额度见底 (<= 1.0%)
-                    is_exhausted = (curr_5h <= threshold) or (curr_weekly <= 1.0)
+                    # 门禁触发条件：账号失效/禁用/黑名单、5小时额度耗尽 (<= threshold) 或 周额度见底 (<= 1.0%)
+                    is_disabled = curr_acc.get("disabled", False) or (curr_email.lower() in HARD_BLOCKED_EMAILS)
+                    is_exhausted = is_disabled or (curr_5h <= threshold) or (curr_weekly <= 1.0)
                     if is_exhausted:
                         # 检查账号池是否已无可用候选账号
                         if guard_quota_pool_exhaustion(accounts, current_id=current_id, threshold=threshold):
@@ -3607,7 +3754,12 @@ def run_watch_daemon(threshold=5.0, interval=30):
                                 )
                             continue
 
-                        reason_str = f"5小时配额耗尽 ({curr_5h:.1f}% <= {threshold}%)" if curr_5h <= threshold else f"周配额见底 ({curr_weekly:.1f}% <= 1.0%)"
+                        if is_disabled:
+                            reason_str = f"当前在用账号已失效/封禁/需验证/硬黑名单锁定 ({curr_acc.get('disabled_reason', '已禁用')})"
+                        elif curr_5h <= threshold:
+                            reason_str = f"5小时配额耗尽 ({curr_5h:.1f}% <= {threshold}%)"
+                        else:
+                            reason_str = f"周配额见底 ({curr_weekly:.1f}% <= 1.0%)"
                         logger.warning("!" * 65)
                         logger.warning(
                             f"⚠️ 【门禁触发】当前账号 {curr_email} {reason_str}！"
@@ -3647,6 +3799,7 @@ def main():
     parser.add_argument("--auto-resume", action="store_true", help="立即执行前排窗口打标与自动续接")
     parser.add_argument("--resume-text", type=str, default="继续", help="自动续接发送的内容 (默认: 继续)")
     parser.add_argument("--resume-count", type=int, default=3, help="自动续接前排窗口数 (默认: 3)")
+    parser.add_argument("--preflight-ensure", action="store_true", help="开机冷启动前置账号核验与优选门禁")
     parser.add_argument("--update-subscriptions", action="store_true", help="主动从机场提供商更新全部 Clash 订阅配置")
     parser.add_argument("--notify", type=str, default="", help="发送 Windows 桌面气泡通知正文")
     parser.add_argument("--notify-title", type=str, default="反重力网络专线", help="发送 Windows 桌面气泡通知标题")
@@ -3666,6 +3819,8 @@ def main():
         stop_watch_daemon()
     elif args.watch:
         run_watch_daemon(threshold=args.threshold, interval=args.interval)
+    elif args.preflight_ensure:
+        sys.exit(preflight_ensure_valid_account(threshold=args.threshold))
     elif args.status:
         print_status_table()
     elif args.incident:
