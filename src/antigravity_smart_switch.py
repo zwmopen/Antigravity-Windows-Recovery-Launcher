@@ -1832,11 +1832,54 @@ def get_all_accounts_and_quotas():
                     pass
     
     results = []
+    cockpit_aes = None
+    key_file = os.path.join(COCKPIT_DIR, "secure-account-storage.key")
+    if os.path.exists(key_file):
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+            raw_key = base64.b64decode(open(key_file, "rb").read().strip())
+            cockpit_aes = AESGCM(raw_key)
+        except Exception:
+            pass
+
+    accounts_json_modified = False
     for acc in accounts:
         acc_id = acc.get("id")
         email = acc.get("email", "").strip()
         name = acc.get("name", "")
-        disabled = acc.get("disabled", False)
+        disabled = bool(acc.get("disabled", False))
+        disabled_reason = acc.get("disabled_reason", "")
+
+        # 核心防御：解密读取 Cockpit 账号明细，严防被封禁/需要网页验证/invalid_grant 账号被误判为满血备用！
+        acc_file = os.path.join(COCKPIT_DIR, "accounts", f"{acc_id}.json")
+        if os.path.exists(acc_file) and cockpit_aes:
+            try:
+                enc = json.loads(open(acc_file, "r", encoding="utf-8").read())
+                pt = cockpit_aes.decrypt(base64.b64decode(enc["nonce"]), base64.b64decode(enc["ciphertext"]), None)
+                detail = json.loads(pt.decode("utf-8"))
+                if detail.get("disabled"):
+                    disabled = True
+                    disabled_reason = detail.get("disabled_reason") or "账号已禁用/失效"
+                elif detail.get("quota_error"):
+                    err_msg = str(detail.get("quota_error", {}).get("message", ""))
+                    if "invalid_grant" in err_msg.lower() or "reauth" in err_msg.lower() or "401" in err_msg:
+                        disabled = True
+                        disabled_reason = "需网页验证 / 封禁隔离 (invalid_grant)"
+                    else:
+                        disabled = False
+                        disabled_reason = ""
+                else:
+                    # 申诉成功 / 重新网页登录授权后自动解除隔离，重归健康战备池！
+                    disabled = False
+                    disabled_reason = ""
+
+                if disabled != bool(acc.get("disabled", False)) or disabled_reason != acc.get("disabled_reason", ""):
+                    acc["disabled"] = disabled
+                    acc["disabled_reason"] = disabled_reason
+                    accounts_json_modified = True
+            except Exception:
+                pass
+
         is_current = (acc_id == current_id)
         
         cd = cache_map.get(email.lower(), {})
@@ -1923,31 +1966,45 @@ def get_all_accounts_and_quotas():
             sec_to_w_reset = 7.0 * 86400.0
             days_to_w_reset = 7.0
         
-        # Cockpit Tools 综合评分机制 (Cockpit Score V2 - 额度深度判定升级)：
-        # 1. 5小时满血度（0~150分）：越高越好，>=95% 满血加 50 分
-        score_5h = q_5h_val + (50.0 if q_5h_val >= 95.0 else 0.0)
+        # 智能优选综合评分机制 (Cockpit Score V3 - 到期优先与额度双维度升级)：
+        # 用户核心铁律：
+        # 优先级 1. 即将到期优先：优先使用剩余时间最短、即将要刷新的（按周来算）。
+        # 优先级 2. 额度更多优先：在重置时间相近时，优先使用剩余额度更充沛的。
         
-        # 2. 周总容量为王（0~150分）：周额度是持久续航的核心基石，权重提升至 1.5 倍
-        score_weekly = q_w_val * 1.5
+        # 1. 周恢复紧迫度（主维度：0~350分 + 极速临界加成）：
+        #    周重置窗口为 7.0 天。剩余天数越少，未用额度越面临清零浪费风险，必须最优先消化！
+        clamped_days = min(7.0, max(0.0, float(days_to_w_reset)))
+        score_urgency = (7.0 - clamped_days) * 50.0
         
-        # 3. 周恢复紧迫度（0~50分）：越快恢复重置越优先消化存量，但严格设门禁：
-        #    铁律：只有当周额度充足 (> 15%) 时才享受紧迫加分；若周额度 <= 10%，残血账号严禁加速消耗！
-        if q_w_val > 15.0:
-            if days_to_w_reset <= 1.0:
-                score_urgency = 50.0
-            elif days_to_w_reset <= 2.0:
-                score_urgency = 35.0
-            elif days_to_w_reset <= 3.0:
-                score_urgency = 20.0
-            else:
-                score_urgency = 0.0
-        else:
-            score_urgency = 0.0
+        # 临界重置冲刺加成（24~48小时内重置具有极高消耗优先级）：
+        if clamped_days <= 1.0:
+            score_urgency += 40.0
+        elif clamped_days <= 2.0:
+            score_urgency += 20.0
             
-        # 4. 残血红线惩罚：周额度 <= 5.0% 的账号极度容易在数轮对话内再次暴毙，扣 100 分
-        score_penalty = -100.0 if q_w_val <= 5.0 else 0.0
+        # 2. 周额度存量（次维度：0~80分）：
+        #    同梯队内额度越充沛越优选，但绝对权重不压制即将到期的紧迫性
+        score_weekly = q_w_val * 0.8
         
-        cockpit_score = round(score_5h + score_weekly + score_urgency + score_penalty, 1)
+        # 3. 5小时滚动满血度（基础保障：0~70分）：
+        #    确保当前具备充足的瞬时高并发额度，>=90% 满血加 20 分
+        score_5h = (q_5h_val * 0.5) + (20.0 if q_5h_val >= 90.0 else 0.0)
+        
+        # 4. 安全红线与低额度惩罚：
+        score_penalty = 0.0
+        # 濒死硬隔离红线（周额度 <= 5.0% 必须彻底挂起，严禁调用）
+        if q_w_val <= 5.0:
+            score_penalty -= 500.0
+        elif q_w_val < 15.0:
+            score_penalty -= 40.0
+            
+        # 5小时滚动频控红线（5h <= 5.0% 会立刻报 429 频控异常）
+        if q_5h_val <= 5.0:
+            score_penalty -= 500.0
+        elif q_5h_val < 15.0:
+            score_penalty -= 30.0
+        
+        cockpit_score = round(score_urgency + score_weekly + score_5h + score_penalty, 1)
         tiger_score = cockpit_score
         
         results.append({
@@ -1955,6 +2012,7 @@ def get_all_accounts_and_quotas():
             "email": email,
             "name": name,
             "disabled": disabled,
+            "disabled_reason": disabled_reason,
             "is_current": is_current,
             "gemini_5h": q_5h_val,
             "gemini_weekly": q_w_val,
@@ -1972,7 +2030,14 @@ def get_all_accounts_and_quotas():
             "claude_weekly": q_c_w_val,
             "is_parked": is_parked
         })
-    
+
+    if accounts_json_modified:
+        try:
+            with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(acc_data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     return current_id, results
 
 
@@ -1981,6 +2046,8 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         target_norm = target_email_or_id.strip().lower()
         for acc in accounts:
             if acc["id"] == target_email_or_id or acc["email"].lower() == target_norm:
+                if acc.get("disabled"):
+                    raise ValueError(f"指定账号 [{acc['email']}] 处于风控/需网页验证状态 ({acc.get('disabled_reason', '已封禁')})，严禁切换！")
                 return acc, "用户指定目标账号"
         raise ValueError(f"未找到指定的账号: {target_email_or_id}")
     
@@ -2021,12 +2088,23 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
             candidates = rescued
 
     if candidates:
-        # 按 Cockpit Tools 综合评分降序排列
-        candidates.sort(key=lambda x: x.get("cockpit_score", 0.0), reverse=True)
+        # 多维复合排序（严格遵循用户双层铁律）：
+        # 1. 综合得分（到期紧迫度占主导，额度量占次要）DESC
+        # 2. 周重置倒计时最短（天数最少）ASC
+        # 3. 周剩余额度最高 DESC
+        candidates.sort(
+            key=lambda x: (
+                x.get("cockpit_score", 0.0),
+                -x.get("days_to_w_reset", 7.0),
+                x.get("gemini_weekly", 0.0)
+            ),
+            reverse=True
+        )
         best = candidates[0]
         reason = (
-            f"Cockpit Tools 智能优选 [得分: {best.get('cockpit_score', 0.0)}]：5小时满血({best.get('gemini_5h', 0.0)}%)，"
-            f"周恢复时间仅剩 {best.get('days_to_w_reset', 7.0)}天 (优先消化即将到期额度)，周额度剩余 {best.get('gemini_weekly', 0.0)}%"
+            f"智能优选 [得分: {best.get('cockpit_score', 0.0)}]：优先消化即将到期额度 "
+            f"(周重置仅剩 {best.get('days_to_w_reset', 7.0)}天)，周额度剩余 {best.get('gemini_weekly', 0.0)}%，"
+            f"5小时额度 {best.get('gemini_5h', 0.0)}%"
         )
         return best, reason
     
