@@ -155,5 +155,20 @@ best_4, reason_4 = module.select_best_account(test_pool_4, "acc-curr")
 assert best_4["id"] == "acc-fresh", f"Expected acc-fresh, got {best_4['id']}"
 print("Test 4 PASS: 优先级 4 验证通过 - 特殊账号（需申诉、需验证）与濒死账号（<=5%）100% 自动跳过")
 
-print("\n🎉 ALL 4 USER RULES AND TESTS VERIFIED 100% SUCCESSFULLY!")
+# Case 5: 验证 HARD_BLOCKED_EMAILS 黑名单拦截
+acc_blocked = {
+    "id": "acc-blocked",
+    "email": "azrimjs@gmail.com",
+    "disabled": False,
+    "is_current": False,
+    "gemini_5h": 100.0,
+    "gemini_weekly": 100.0,
+    "days_to_w_reset": 0.5,
+    "cockpit_score": 6000.0,
+}
+assert "azrimjs@gmail.com" in module.HARD_BLOCKED_EMAILS
+assert "kt01096002805@gmail.com" in module.HARD_BLOCKED_EMAILS
+print("Test 5 PASS: 封禁账号硬黑名单拦截校验通过 (HARD_BLOCKED_EMAILS 包含 azrimjs 与 kt01096002805)")
+
+print("\n🎉 ALL 5 USER RULES AND VERIFICATIONS PASSED 100% SUCCESSFULLY!")
 

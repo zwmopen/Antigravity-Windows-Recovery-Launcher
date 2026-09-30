@@ -1296,6 +1296,8 @@ namespace AntigravityLauncher
         private bool googlePassed = false;
         private string modelStatusText = "等待链路验证…";
         private bool modelPassed = false;
+        private string accountStatusText = "正在核验账号与冷启动门禁…";
+        private bool accountPassed = false;
         private string footerStatusText = "正在匹配最优专线通道…";
 
         public AntigravityLaunchCapsuleForm(string reason)
@@ -1408,22 +1410,24 @@ namespace AntigravityLauncher
             DrawPillBadge(e.Graphics, "🌐 同区低延", 260, 19, Color.FromArgb(224, 231, 255), Color.FromArgb(165, 180, 252), Color.FromArgb(67, 56, 202));
             DrawPillBadge(e.Graphics, "⭐ 记忆好用", 348, 19, Color.FromArgb(220, 252, 231), Color.FromArgb(134, 239, 172), Color.FromArgb(21, 128, 61));
 
-            // 5. 三行直观、清晰的通路状态步骤 (无白边缝隙，融入背景)
+            // 5. 四行直观、清晰的通路状态步骤 (无白边缝隙，融入背景)
             using (var fontStep = new Font("Microsoft YaHei UI", 9F))
             using (var fontDot = new Font("Segoe UI", 8.5F, FontStyle.Bold))
             {
                 // 行 1：本地专线
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 64, "本地专线", lineStatusText, linePassed);
+                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 58, "本地专线", lineStatusText, linePassed);
                 // 行 2：Google 通路
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 90, "Google 通路", googleStatusText, googlePassed);
+                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 82, "Google 通路", googleStatusText, googlePassed);
                 // 行 3：AI 模型服务
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 116, "AI 模型服务", modelStatusText, modelPassed);
+                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 106, "AI 模型服务", modelStatusText, modelPassed);
+                // 行 4：算力调度
+                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 130, "算力调度", accountStatusText, accountPassed);
             }
 
             // 6. 底部柔和状态文字
             using (var fontFooter = new Font("Microsoft YaHei UI", 8.5F))
             {
-                TextRenderer.DrawText(e.Graphics, footerStatusText, fontFooter, new Point(22, 168), Color.FromArgb(100, 116, 139));
+                TextRenderer.DrawText(e.Graphics, footerStatusText, fontFooter, new Point(22, 172), Color.FromArgb(100, 116, 139));
             }
         }
 
@@ -1443,13 +1447,34 @@ namespace AntigravityLauncher
         private void InitializeComponent()
         {
             Text = "Antigravity";
-            ClientSize = new Size(520, 204);
+            ClientSize = new Size(520, 212);
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             ShowInTaskbar = true;
             TopMost = false;
             BackColor = Color.FromArgb(236, 244, 252);
             DoubleBuffered = true;
+
+            try
+            {
+                string statusFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity", "private-proxy", "launch-account-status.json");
+                if (File.Exists(statusFile))
+                {
+                    string json = File.ReadAllText(statusFile);
+                    int idx = json.IndexOf("\"email\"");
+                    if (idx >= 0)
+                    {
+                        int start = json.IndexOf('"', idx + 7);
+                        int end = json.IndexOf('"', start + 1);
+                        if (start >= 0 && end > start)
+                        {
+                            string email = json.Substring(start + 1, end - start - 1);
+                            accountStatusText = email + " · 正在核验健康度与冷启动门禁…";
+                        }
+                    }
+                }
+            }
+            catch { }
 
             appIcon = Program.LoadIconOrPng(Program.IconPath);
             if (File.Exists(Program.IconPath))
@@ -1490,7 +1515,7 @@ namespace AntigravityLauncher
 
             progressBar = new CapsuleProgress
             {
-                Location = new Point(22, 148),
+                Location = new Point(22, 154),
                 Size = new Size(476, 7),
                 ProgressValue = 3
             };
@@ -1544,7 +1569,12 @@ namespace AntigravityLauncher
                 googlePassed = true;
                 modelStatusText = "Gemini 编程模型验证通过";
                 modelPassed = true;
-                footerStatusText = Program.IsAntigravityRunning() ? "🚀 最优专线已就绪，正在切回代码窗口…" : "🚀 通路已全部就绪，正在打开 Antigravity…";
+                accountPassed = true;
+                if (!accountStatusText.Contains("就绪") && !accountStatusText.Contains("满血"))
+                {
+                    accountStatusText += " · 算力已连接";
+                }
+                footerStatusText = Program.IsAntigravityRunning() ? "🚀 最优专线已就绪，正在切回代码窗口…" : "🚀 通路与算力已全部就绪，正在打开 Antigravity…";
                 progressBar.ProgressValue = 100;
                 Invalidate();
             }));
@@ -1603,6 +1633,11 @@ namespace AntigravityLauncher
                     {
                         modelStatusText = state.ModelText;
                         modelPassed = state.ModelPassed;
+                    }
+                    if (!string.IsNullOrEmpty(state.AccountText))
+                    {
+                        accountStatusText = state.AccountText;
+                        accountPassed = state.AccountPassed;
                     }
                     if (!string.IsNullOrEmpty(state.FooterText)) footerStatusText = state.FooterText;
                     progressBar.ProgressValue = prog;
@@ -1764,6 +1799,11 @@ namespace AntigravityLauncher
                             modelStatusText = state.ModelText;
                             modelPassed = state.ModelPassed;
                         }
+                        if (!string.IsNullOrEmpty(state.AccountText))
+                        {
+                            accountStatusText = state.AccountText;
+                            accountPassed = state.AccountPassed;
+                        }
                         if (!string.IsNullOrEmpty(state.FooterText)) footerStatusText = state.FooterText;
                         progressBar.ProgressValue = prog;
                         Invalidate();
@@ -1886,6 +1926,7 @@ namespace AntigravityLauncher
                     state.GoogleText = "连通正常 · 授权畅通";
                     state.ModelPassed = true;
                     state.ModelText = "Gemini 编程模型就绪";
+                    state.AccountPassed = true;
                     state.TargetProgress = 95;
                     state.Ceiling = 100;
                 }
@@ -1919,6 +1960,25 @@ namespace AntigravityLauncher
                     state.FooterText = "🚀 通路已全部通过，正在拉起 Antigravity…";
                     state.TargetProgress = Math.Max(state.TargetProgress, 88);
                     state.Ceiling = Math.Max(state.Ceiling, 94);
+                }
+                else if (line.Contains("preflight_account_check_completed"))
+                {
+                    string accEmail = GetValue(line, "account_email");
+                    string q5h = GetValue(line, "account_5h");
+                    string qw = GetValue(line, "account_weekly");
+                    string action = GetValue(line, "account_action");
+                    if (!string.IsNullOrEmpty(accEmail))
+                    {
+                        if (action == "switched")
+                        {
+                            state.AccountText = "自动接力 · " + accEmail + " [5h: " + q5h + "% · 周: " + qw + "%]";
+                        }
+                        else
+                        {
+                            state.AccountText = accEmail + " [5h: " + q5h + "% · 周: " + qw + "% · 满血就绪]";
+                        }
+                        state.AccountPassed = true;
+                    }
                 }
                 else if (line.Contains("antigravity_started"))
                 {
@@ -1971,6 +2031,8 @@ namespace AntigravityLauncher
             internal bool GooglePassed = false;
             internal string ModelText;
             internal bool ModelPassed = false;
+            internal string AccountText;
+            internal bool AccountPassed = false;
             internal string FooterText;
             internal int TargetProgress;
             internal int Ceiling;

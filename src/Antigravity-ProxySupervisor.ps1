@@ -2938,6 +2938,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
             $pyExe = Resolve-PythonPath
             Write-SafeLog -Event 'preflight_account_check_started'
             try {
+                $statusFile = Join-Path $RuntimeDirectory "launch-account-status.json"
                 $psi = New-Object System.Diagnostics.ProcessStartInfo
                 $psi.FileName = $pyExe
                 $psi.Arguments = "`"$SmartSwitchPy`" --preflight-ensure"
@@ -2946,7 +2947,19 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
                 $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
                 $p = [System.Diagnostics.Process]::Start($psi)
                 $p.WaitForExit(8000)
-                Write-SafeLog -Event 'preflight_account_check_completed' -Values @{ exit_code = $p.ExitCode }
+                $accValues = @{ exit_code = $p.ExitCode }
+                if (Test-Path -LiteralPath $statusFile) {
+                    try {
+                        $accJson = Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                        if ($accJson -and $accJson.email) {
+                            $accValues['account_email'] = [string]$accJson.email
+                            $accValues['account_5h'] = [string]$accJson.gemini_5h
+                            $accValues['account_weekly'] = [string]$accJson.gemini_weekly
+                            $accValues['account_action'] = [string]$accJson.action
+                        }
+                    } catch { }
+                }
+                Write-SafeLog -Event 'preflight_account_check_completed' -Values $accValues
             } catch {
                 Write-SafeLog -Event 'preflight_account_check_warning' -Values @{ error = $_.Exception.Message }
             }

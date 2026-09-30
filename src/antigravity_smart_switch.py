@@ -75,6 +75,7 @@ INCIDENT_HISTORY_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-prox
 AUTO_RESUME_LOCK_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "auto-resume.lock")
 QUARANTINE_ACCOUNTS_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "quarantined-accounts.json")
 QUOTA_POOL_STATE_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "quota-pool-state.json")
+LAUNCH_ACCOUNT_STATUS_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "launch-account-status.json")
 SHARED_NOTIFY_SCRIPT = r"D:\AICode\AI\skills\技能包\技能\shared-notification\scripts\shared_notify.py"
 FEISHU_CONFIG_FILE = r"D:\AICode\AI\secrets\平台服务\飞书\feishu_config.json"
 BETA_FLAG_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "beta.flag")
@@ -1863,41 +1864,47 @@ def get_all_accounts_and_quotas():
 
         # 核心防御：解密读取 Cockpit 账号明细，严防被封禁/需要网页验证/invalid_grant/需要申诉的账号被误判为满血备用！
         acc_file = os.path.join(COCKPIT_DIR, "accounts", f"{acc_id}.json")
+        detail = None
         if os.path.exists(acc_file) and cockpit_aes:
             try:
                 enc = json.loads(open(acc_file, "r", encoding="utf-8").read())
                 pt = cockpit_aes.decrypt(base64.b64decode(enc["nonce"]), base64.b64decode(enc["ciphertext"]), None)
                 detail = json.loads(pt.decode("utf-8"))
 
-                # 判定特殊账号（需要申诉、网页验证、封禁、invalid_grant 等）
-                special_keywords = [
-                    "invalid_grant", "reauth", "re-auth", "appeal", "申诉",
-                    "verify", "verification", "需验证", "验证", "suspended",
-                    "suspension", "封禁", "冻结", "banned", "disabled", "禁用",
-                    "unauthorized", "consent", "401", "403", "password", "credential",
-                    "revoked", "deactivated", "locked", "锁定", "风控"
-                ]
+                token_info = detail.get("token", {}) if isinstance(detail.get("token"), dict) else {}
+                err_obj = detail.get("quota_error") or detail.get("token_error") or detail.get("error")
 
                 is_special = False
                 special_reason = ""
 
-                if detail.get("disabled"):
+                if email.lower() in HARD_BLOCKED_EMAILS:
+                    is_special = True
+                    special_reason = "永久封禁/失效账号硬黑名单拦截 (HARD_BLOCKED)"
+                elif detail.get("disabled"):
                     is_special = True
                     special_reason = detail.get("disabled_reason") or "账号已标记禁用"
-                elif detail.get("quota_error"):
-                    err_msg = str(detail.get("quota_error", {}).get("message", ""))
-                    if not err_msg:
-                        err_msg = str(detail.get("quota_error"))
+                elif not token_info or (not token_info.get("access_token") and not token_info.get("refresh_token")):
+                    is_special = True
+                    special_reason = "凭据缺失 / Token为空"
+                elif not token_info.get("refresh_token") and token_info.get("expiry_timestamp") and float(token_info.get("expiry_timestamp", 0)) < time.time():
+                    is_special = True
+                    special_reason = "Token已过期且无刷新凭据 (Expired & No Refresh Token)"
+                elif err_obj:
+                    err_msg = ""
+                    if isinstance(err_obj, dict):
+                        err_msg = f"{err_obj.get('reason', '')} {err_obj.get('message', '')} {err_obj.get('code', '')}".strip()
+                    else:
+                        err_msg = str(err_obj)
                     is_special = True
                     err_lower = err_msg.lower()
-                    if any(k in err_lower or k in err_msg for k in ["appeal", "申诉"]):
-                        special_reason = f"需申诉 / 账号限制 ({err_msg[:50]})"
-                    elif any(k in err_lower or k in err_msg for k in ["verify", "verification", "需验证", "reauth", "consent"]):
+                    if any(k in err_lower for k in ["appeal", "申诉", "tos_violation"]):
+                        special_reason = f"需申诉 / 违规限制 ({err_msg[:50]})"
+                    elif any(k in err_lower for k in ["verify", "verification", "需验证", "reauth", "consent"]):
                         special_reason = f"需网页验证 / 重新授权 ({err_msg[:50]})"
-                    elif any(k in err_lower or k in err_msg for k in ["suspended", "banned", "封禁", "冻结", "locked"]):
+                    elif any(k in err_lower for k in ["suspended", "banned", "封禁", "冻结", "locked"]):
                         special_reason = f"已封禁 / 账号冻结 ({err_msg[:50]})"
                     else:
-                        special_reason = f"需网页验证 / 封禁隔离 (invalid_grant: {err_msg[:50]})"
+                        special_reason = f"需网页验证 / 异常拦截 ({err_msg[:50]})"
                 elif disabled:
                     is_special = True
                     special_reason = disabled_reason or "账号已禁用"
@@ -1907,6 +1914,23 @@ def get_all_accounts_and_quotas():
 
                 disabled = is_special
                 disabled_reason = special_reason
+
+                # 双向固化：若判定为特殊/失效账号，同步加锁关押并原子回写 Cockpit 加密文件，杜绝状态回退
+                if is_special:
+                    record_quarantine_account(acc_id, duration_seconds=365 * 86400)
+                    if not detail.get("disabled") or detail.get("disabled_reason") != special_reason:
+                        detail["disabled"] = True
+                        detail["disabled_reason"] = special_reason
+                        try:
+                            nonce = os.urandom(12)
+                            ct = cockpit_aes.encrypt(nonce, json.dumps(detail, ensure_ascii=False).encode("utf-8"), None)
+                            with open(acc_file, "w", encoding="utf-8") as af:
+                                json.dump({
+                                    "nonce": base64.b64encode(nonce).decode("utf-8"),
+                                    "ciphertext": base64.b64encode(ct).decode("utf-8")
+                                }, af, indent=2)
+                        except Exception:
+                            pass
 
                 if disabled != bool(acc.get("disabled", False)) or disabled_reason != acc.get("disabled_reason", ""):
                     acc["disabled"] = disabled
@@ -1918,6 +1942,7 @@ def get_all_accounts_and_quotas():
         if email.lower() in HARD_BLOCKED_EMAILS:
             disabled = True
             disabled_reason = "永久封禁/失效账号硬黑名单拦截 (HARD_BLOCKED)"
+            record_quarantine_account(acc_id, duration_seconds=365 * 86400)
             if not acc.get("disabled") or acc.get("disabled_reason") != disabled_reason:
                 acc["disabled"] = True
                 acc["disabled_reason"] = disabled_reason
@@ -3297,6 +3322,22 @@ def preflight_ensure_valid_account(threshold=5.0):
     is_exhausted = is_disabled or (curr_5h <= threshold) or (curr_weekly <= 5.0)
 
     if not is_exhausted:
+        status_info = {
+            "email": curr_email,
+            "name": curr_acc.get("name", "") if curr_acc else "",
+            "gemini_5h": curr_5h,
+            "gemini_weekly": curr_weekly,
+            "days_to_w_reset": curr_acc.get("days_to_w_reset", 0.0) if curr_acc else 0.0,
+            "action": "reused",
+            "reason": "健康满血 · 优选就绪",
+            "timestamp": int(time.time())
+        }
+        try:
+            os.makedirs(os.path.dirname(LAUNCH_ACCOUNT_STATUS_FILE), exist_ok=True)
+            with open(LAUNCH_ACCOUNT_STATUS_FILE, "w", encoding="utf-8") as sf:
+                json.dump(status_info, sf, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
         logger.info(f"✅ [冷启动门禁通过] 当前在用账号 [{curr_email}] 健康有效 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)，直接放行启动。")
         return 0
 
@@ -3318,6 +3359,23 @@ def preflight_ensure_valid_account(threshold=5.0):
     # 四合一状态同步与 UI 刷新
     sync_all_cockpit_account_files(best_acc["id"], best_acc["email"])
     refresh_cockpit_tools_ui()
+
+    status_info = {
+        "email": best_acc["email"],
+        "name": best_acc.get("name", ""),
+        "gemini_5h": best_acc["gemini_5h"],
+        "gemini_weekly": best_acc["gemini_weekly"],
+        "days_to_w_reset": best_acc.get("days_to_w_reset", 0.0),
+        "action": "switched",
+        "reason": f"智能接力 ({reason})",
+        "timestamp": int(time.time())
+    }
+    try:
+        os.makedirs(os.path.dirname(LAUNCH_ACCOUNT_STATUS_FILE), exist_ok=True)
+        with open(LAUNCH_ACCOUNT_STATUS_FILE, "w", encoding="utf-8") as sf:
+            json.dump(status_info, sf, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
     try:
         os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
