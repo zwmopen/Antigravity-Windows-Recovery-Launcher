@@ -546,18 +546,21 @@ def get_recent_brain_active_conversations(exclude_cids=None, max_age_seconds=180
                                 last_line = tail[-1] if tail else ""
                                 data = json.loads(last_line) if last_line else {}
                                 is_active = False
-                                if data.get("source") == "MODEL":
+                                # 严格判定未完成/运行中状态 (排除已经输出完文本等待人类输入的闲置会话)
+                                if data.get("type") == "PLANNER_RESPONSE" and bool(data.get("tool_calls")):
+                                    is_active = True
+                                elif data.get("type") == "GENERIC" and age < 60:
                                     is_active = True
                                 elif data.get("source") == "system" and "server restart" in str(data.get("content", "")):
                                     is_active = True
-                                elif data.get("type") in ("PLANNER_RESPONSE", "GENERIC"):
+                                elif data.get("source") == "MODEL" and not data.get("content") and age < 45:
                                     is_active = True
 
                                 if is_active:
                                     recent.append({
                                         "conv_id": entry.name,
                                         "href": f"/c/{entry.name}",
-                                        "title": f"后台断点-{entry.name[:8]}",
+                                        "title": f"断点会话-{entry.name[:8]}",
                                         "age_sec": round(age, 1)
                                     })
                     except Exception:
@@ -676,27 +679,53 @@ def snapshot_active_and_running_tasks():
                 return resp.get("result", {}).get("result", {}).get("value", {})
 
         res = asyncio.run(_query())
-        if res:
-            r_tasks = res.get("running_tasks", [])
-            logger.info(f"🔍 [CDP纯单窗口断点雷达] 切号前正在运行任务数: {len(r_tasks)} 个 (前台在跑: {any(t.get('is_current') for t in r_tasks)})")
+        if not res:
+            res = {
+                "has_running_tasks": False,
+                "running_tasks": [],
+                "active_href": "",
+                "active_title": ""
+            }
+
+        # 双重保险：结合本地 brain 目录嗅探近期活跃/被中断的会话，补充 DOM 虚拟滚动可能遗漏的后台运行任务
+        r_tasks = res.get("running_tasks", [])
+        known_cids = set()
+        for t in r_tasks:
+            h = t.get("href", "")
+            m = re.search(r'/c/([a-f0-9\-]{36})', h)
+            if m:
+                known_cids.add(m.group(1))
+
+        recent_brains = get_recent_brain_active_conversations(exclude_cids=list(known_cids), max_age_seconds=180)
+        for rb in recent_brains:
+            cid = rb.get("conv_id")
+            r_tasks.append({
+                "href": rb.get("href", f"/c/{cid}"),
+                "title": rb.get("title", f"断点任务-{cid[:8]}"),
+                "is_current": False
+            })
+        res["running_tasks"] = r_tasks
+        res["has_running_tasks"] = bool(r_tasks)
+        if r_tasks:
+            logger.info(f"🔍 [断点雷达·双模融合] 切号前正在运行任务数: {len(r_tasks)} 个 (前台在跑: {any(t.get('is_current') for t in r_tasks)})")
             for t in r_tasks:
                 logger.info(f"   ▶ 断点运行任务: '{t.get('title')}' ({t.get('href')}) [当前前台={t.get('is_current')}]")
-            return res
-        return {
-            "has_running_tasks": False,
-            "running_tasks": [],
-            "active_href": "",
-            "active_title": ""
-        }
+        return res
     except Exception as e:
         logger.debug(f"抓取当前活动会话与断点任务异常: {e}")
+        fallback_brains = get_recent_brain_active_conversations(max_age_seconds=180)
+        fallback_tasks = []
+        for fb in fallback_brains:
+            fallback_tasks.append({
+                "href": fb.get("href", f"/c/{fb.get('conv_id')}"),
+                "title": fb.get("title", f"断点任务-{fb.get('conv_id')[:8]}"),
+                "is_current": False
+            })
         return {
-            "has_running_tasks": False,
-            "interrupted_panes": [],
-            "running_sidebar_tasks": [],
-            "panes": [],
-            "active_href": "",
-            "active_title": ""
+            "has_running_tasks": bool(fallback_tasks),
+            "running_tasks": fallback_tasks,
+            "active_href": fallback_tasks[0].get("href", "") if fallback_tasks else "",
+            "active_title": fallback_tasks[0].get("title", "") if fallback_tasks else ""
         }
 
 
@@ -3380,8 +3409,23 @@ def run_watch_daemon(threshold=5.0, interval=30):
 
     loop_count = 0
     _last_antigravity_running = is_antigravity_running()
+    _script_mtime = os.path.getmtime(__file__) if os.path.exists(__file__) else 0
     while True:
         try:
+            # 0. 脚本热重载自愈：当 antigravity_smart_switch.py 源码文件发生变更时，自动平滑热重启自身
+            try:
+                if os.path.exists(__file__):
+                    cur_mtime = os.path.getmtime(__file__)
+                    if _script_mtime > 0 and cur_mtime > _script_mtime:
+                        logger.info(f"🔄 检测到脚本源码已更新 (mtime: {cur_mtime} > {_script_mtime})，正在平滑热重载守护进程...")
+                        if sys.platform == "win32" and "_global_mutex_handle" in globals() and _global_mutex_handle:
+                            try:
+                                ctypes.windll.kernel32.CloseHandle(_global_mutex_handle)
+                            except Exception:
+                                pass
+                        os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception as e:
+                logger.debug(f"热重载检测异常: {e}")
             # 1. 双星互保与汉化巡检：每 2 轮检查 C# 守卫，每 10 轮确保一次汉化语言包注入
             if loop_count % 2 == 0:
                 ensure_account_watcher_running()
