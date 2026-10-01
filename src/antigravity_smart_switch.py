@@ -3865,11 +3865,17 @@ def check_language_server_quota_error():
                         record_quarantine_account(old_acc["id"], duration)
                         return True
 
-                    logger.info(f"💡 [日志穿透降噪] 捕获到 429 报错重置时刻 ({target_reset_utc.strftime('%H:%M:%S UTC')}) 指向历史账号 {old_acc['email']} ({rt_key}: {rt_val.strftime('%H:%M:%S UTC')})")
-                    logger.info(f"   当前在用账号 ({curr_email}) 状态健康 (5h: {curr_5h}%)，判定为历史会话残留重试，已安全过滤忽略。")
-                    # 顺便关押该历史账号，确保关押期内绝不误切回该账号
+                    logger.info(f"💡 [日志穿透感知] 捕获到 429 报错重置时刻 ({target_reset_utc.strftime('%H:%M:%S UTC')}) 指向已耗尽账号 {old_acc['email']} ({rt_key}: {rt_val.strftime('%H:%M:%S UTC')})")
+                    logger.info(f"   当前在用账号 ({curr_email}) 状态健康 (5h: {curr_5h}%)。")
+                    # 关押该已耗尽账号，确保关押期内绝不误切回该账号
                     record_quarantine_account(old_acc["id"], duration)
-                    return False
+                    # 【核心自愈】：虽然 Windows 凭据与 Cockpit 已经指向健康账号，
+                    # 但内存中运行的 Language Server 可能仍在执行死锁重试循环 (如 attempt 7/9, retrying in 144s)！
+                    # 必须立刻执行 hot_restart_language_server() 踢掉僵死会话，强迫其立刻重新加载健康凭据！
+                    logger.warning(f"⚡ [内存重试死锁自愈] 检测到编辑器 Language Server 仍在对已耗尽账号 {old_acc['email']} 执行死锁重试，立即触发热重启语言服务！")
+                    hot_restart_language_server(wait_timeout=15.0)
+                    return True
+
 
                 # 5. 若未匹配到离线旧账号，确认为当前在用账号真实 429 耗尽
                 logger.warning(f"🚨 [实时日志穿透感知] 核心语言服务检测到当前账号真实 429 额度耗尽！")

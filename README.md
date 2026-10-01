@@ -195,6 +195,7 @@ Google Antigravity 的周额度按固定周期刷新，**未用完的额度到�
 * 🏛️ [系统架构与协同设计](docs/ARCHITECTURE.md)
 * 💡 [设计哲学与工程边界](docs/DESIGN.md)
 * 🛠️ [踩坑与故障排查手册](docs/TROUBLESHOOTING.md)
+* 📋 [2.9.1 正式稳定版发布说明](docs/RELEASE-NOTES-2.9.1.md)
 * 📋 [1.5.0 正式稳定版发布说明](docs/RELEASE-NOTES-1.5.0.md)
 * 📝 [完整版本演进记录](CHANGELOG.md)
 
