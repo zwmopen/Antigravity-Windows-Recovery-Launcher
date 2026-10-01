@@ -440,13 +440,22 @@ def find_live_web_server_port():
     return None
 
 
-def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, target_title=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None):
+def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, target_title=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None, running_tasks=None):
     """写入自动续接待办事务凭据 (5分钟 TTL 单次令牌，支持智能断点感知精准续接)"""
     try:
         if full_url:
             full_url = normalize_target_path(full_url)
         if target_href:
             target_href = normalize_target_path(target_href)
+        if running_tasks is None:
+            running_tasks = []
+            if running_sidebar_tasks:
+                for st in running_sidebar_tasks:
+                    running_tasks.append({
+                        "href": st.get("href"),
+                        "title": st.get("title", "侧边栏任务"),
+                        "is_current": False
+                    })
         os.makedirs(os.path.dirname(PENDING_AUTO_RESUME_FILE), exist_ok=True)
         with open(PENDING_AUTO_RESUME_FILE, "w", encoding="utf-8") as f:
             json.dump({
@@ -455,22 +464,15 @@ def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, ta
                 "max_windows": max_windows,
                 "target_href": target_href,
                 "target_title": target_title,
-                "interrupted_panes": interrupted_panes if interrupted_panes is not None else [],
-                "running_sidebar_tasks": running_sidebar_tasks if running_sidebar_tasks is not None else [],
+                "running_tasks": running_tasks,
                 "full_url": full_url,
-                "panes": panes if panes is not None else [],
                 "timestamp": time.time(),
                 "created_at": datetime.now().isoformat(),
                 "ttl_seconds": 300,
                 "status": "pending"
             }, f, indent=2)
         hint = f" (优先锚定会话: '{target_title or target_href}')" if (target_title or target_href) else ""
-        brk_hint = ""
-        if interrupted_panes:
-            brk_hint += f" [断点分屏列: {interrupted_panes}]"
-        if running_sidebar_tasks:
-            brk_hint += f" [侧边栏转圈任务: {len(running_sidebar_tasks)}个]"
-        logger.info(f"已写入大任务断点自动续接凭据{hint}{brk_hint} (前排 {max_windows} 个窗口，扣 '{text}')")
+        logger.info(f"已写入大任务断点自动续接凭据{hint} [待续接任务数: {len(running_tasks)}] (发送 '{text}')")
     except Exception as e:
         logger.warning(f"写入自动续接事务文件异常: {e}")
 
@@ -567,14 +569,12 @@ def get_recent_brain_active_conversations(exclude_cids=None, max_age_seconds=180
 
 
 def snapshot_active_and_running_tasks():
-    """在退出旧实例前通过 CDP 深度嗅探前台分屏窗格与侧边栏全局旋转状态，抓取全景断点任务清单"""
+    """在退出旧实例前通过 CDP 精准嗅探切号前【真正还在运行】的任务清单 (彻底废除分屏，纯单窗口架构)"""
     port = get_devtools_active_port(wait_timeout=1)
     if not port or not websockets:
         return {
             "has_running_tasks": False,
-            "interrupted_panes": [],
-            "running_sidebar_tasks": [],
-            "panes": [],
+            "running_tasks": [],
             "active_href": "",
             "active_title": ""
         }
@@ -585,9 +585,7 @@ def snapshot_active_and_running_tasks():
         if not page:
             return {
                 "has_running_tasks": False,
-                "interrupted_panes": [],
-                "running_sidebar_tasks": [],
-                "panes": [],
+                "running_tasks": [],
                 "active_href": "",
                 "active_title": ""
             }
@@ -600,14 +598,35 @@ def snapshot_active_and_running_tasks():
                     const urlPath = decodeURIComponent(window.location.pathname || '');
                     const search = window.location.search || '';
                     const relativeUrl = (urlPath || '/c') + search;
-                    const match = urlPath.match(/\/c\/([a-zA-Z0-9_\-+]+)/);
-                    const urlConvIds = match ? match[1].split('+').filter(Boolean) : [];
 
-                    // 1. 侧边栏全局雷达扫描 (Sidebar Scanner: 侦测所有转圈会话并建立 ID 映射表)
+                    // 1. 嗅探当前前台主会话是否正在运行 (Stop 按钮或加载中 Spinner)
+                    let currentIsRunning = false;
+                    const stopButtons = Array.from(document.querySelectorAll('button')).filter(b => {
+                        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                        const testid = (b.getAttribute('data-testid') || '').toLowerCase();
+                        const text = (b.innerText || '').trim().toLowerCase();
+                        if (aria.includes('固定') || aria.includes('pin') || testid.includes('pin')) return false;
+                        const isStop = testid === 'stop-button' ||
+                                       aria.includes('stop') ||
+                                       aria.includes('停止') ||
+                                       (aria.includes('取消') && !aria.includes('固定')) ||
+                                       text.includes('stop') ||
+                                       text.includes('停止');
+                        const r = b.getBoundingClientRect();
+                        return isStop && r.width > 0 && r.height > 0 && b.offsetParent !== null;
+                    });
+                    const paneSpins = Array.from(document.querySelectorAll('.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"]')).filter(s => {
+                        const r = s.getBoundingClientRect();
+                        return r.width > 0 && r.left >= 250; // 仅限主区域
+                    });
+                    if (stopButtons.length > 0 || paneSpins.length > 0) {
+                        currentIsRunning = true;
+                    }
+
+                    // 2. 嗅探侧边栏中所有处于转圈态的后台任务
                     const sidebarRows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                     const spinningSidebarTasks = [];
-                    const spinningMap = {};
-                    let activeSidebarRow = null;
+                    let activeSidebarTitle = document.title || '';
 
                     sidebarRows.forEach((r, i) => {
                         const a = r.querySelector('a');
@@ -617,121 +636,38 @@ def snapshot_active_and_running_tasks():
                         const isSpinning = !!r.querySelector('.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"], [class*="spin"]');
 
                         if ((href && url.includes(href)) || r.classList.contains('bg-sidebar-secondary')) {
-                            activeSidebarRow = { href: href, title: title };
-                        }
-                        if (href) {
-                            const cid = href.replace('/c/', '');
-                            spinningMap[cid] = { isSpinning: isSpinning, title: title, index: i, href: href };
+                            if (title) activeSidebarTitle = title;
                         }
                         if (isSpinning) {
-                            spinningSidebarTasks.push({ index: i, title: title || `会话-${i+1}`, href: href });
+                            spinningSidebarTasks.push({ href: href, title: title || `会话-${i+1}` });
                         }
                     });
 
-                    // 2. 前台分屏布局容器与编辑器扫描 (Active Panes Scanner)
-                    const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {
-                        const r = el.getBoundingClientRect();
-                        return r.width > 150 && r.height > 200;
-                    });
-                    paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-
-                    const editors = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
-                    const visiblePanes = editors.map(ed => {
-                        const r = ed.getBoundingClientRect();
-                        return { el: ed, left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
-                    }).filter(ed => ed.width > 40 && ed.height > 10);
-                    visiblePanes.sort((a, b) => a.left - b.left);
-
-                    // 3. 过滤真实的 Stop 按钮（精准匹配，彻底排除侧边栏取消固定等 pin 按钮）
-                    const allStopButtons = Array.from(document.querySelectorAll('button')).map(b => {
-                        const r = b.getBoundingClientRect();
-                        const aria = b.getAttribute('aria-label') || '';
-                        const testid = b.getAttribute('data-testid') || '';
-                        const text = (b.innerText || '').trim();
-                        if (aria.includes('固定') || aria.includes('pin') || testid.includes('pin')) return null;
-                        const isStop = testid === 'stop-button' ||
-                                       aria.toLowerCase().includes('stop') ||
-                                       aria.includes('停止') ||
-                                       (aria.includes('取消') && !aria.includes('固定')) ||
-                                       text.toLowerCase().includes('stop') ||
-                                       text.includes('停止');
-                        if (isStop && r.width > 0 && r.height > 0 && b.offsetParent !== null) {
-                            return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), label: aria || text || 'Stop' };
-                        }
-                        return null;
-                    }).filter(Boolean);
-
-                    // 4. 过滤前台窗格内部的 Spinner（排除侧边栏 X < 250 区域）
-                    const paneSpins = Array.from(document.querySelectorAll('.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"]')).map(s => {
-                        const r = s.getBoundingClientRect();
-                        if (r.width > 0 && r.left >= 250) {
-                            return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top) };
-                        }
-                        return null;
-                    }).filter(Boolean);
-
-                    const totalCount = Math.max(urlConvIds.length, paneContainers.length, visiblePanes.length);
-                    const panesStatus = [];
-                    const interruptedPanes = [];
-
-                    for (let idx = 0; idx < totalCount; idx++) {
-                        const cid = urlConvIds[idx] || '';
-                        const sInfo = spinningMap[cid] || {};
-                        const isSpinningById = !!sInfo.isSpinning;
-
-                        let isStopInCol = false;
-                        let isSpinInCol = false;
-                        let stopLabels = [];
-
-                        if (idx < paneContainers.length) {
-                            const pRect = paneContainers[idx].getBoundingClientRect();
-                            const colLeft = pRect.left - 20;
-                            const colRight = pRect.right + 20;
-
-                            const stops = allStopButtons.filter(b => b.left >= colLeft && b.right <= colRight);
-                            const spins = paneSpins.filter(s => s.left >= colLeft && s.right <= colRight);
-
-                            isStopInCol = stops.length > 0;
-                            isSpinInCol = spins.length > 0;
-                            stopLabels = stops.map(b => b.label);
-                        } else if (idx < visiblePanes.length) {
-                            const pane = visiblePanes[idx];
-                            const colLeft = pane.left - 40;
-                            const colRight = pane.right + 40;
-
-                            const stops = allStopButtons.filter(b => b.left >= colLeft && b.right <= colRight);
-                            const spins = paneSpins.filter(s => s.left >= colLeft && s.right <= colRight);
-
-                            isStopInCol = stops.length > 0;
-                            isSpinInCol = spins.length > 0;
-                            stopLabels = stops.map(b => b.label);
-                        }
-
-                        // 综合判定：URL 会话 ID 转圈、分屏列 Stop 按钮、分屏列 Spin 图标三位一体
-                        const isRunning = isSpinningById || isStopInCol || isSpinInCol;
-                        if (isRunning) {
-                            interruptedPanes.push(idx);
-                        }
-
-                        panesStatus.push({
-                            pane_index: idx,
-                            conv_id: cid,
-                            title: sInfo.title || `分屏列-${idx+1}`,
-                            is_actively_running: isRunning,
-                            reason: isSpinningById ? 'sidebar_spinning' : (isStopInCol ? 'stop_button' : (isSpinInCol ? 'pane_spin' : 'idle')),
-                            stops_labels: stopLabels
+                    // 3. 严格汇总：仅收录切号前【真正还在运行】的任务
+                    const runningTasks = [];
+                    if (currentIsRunning) {
+                        runningTasks.push({
+                            href: relativeUrl,
+                            title: activeSidebarTitle || '当前主工作区',
+                            is_current: true
                         });
                     }
+                    spinningSidebarTasks.forEach(st => {
+                        if (!currentIsRunning || (st.href && !relativeUrl.includes(st.href))) {
+                            runningTasks.push({
+                                href: st.href,
+                                title: st.title,
+                                is_current: false
+                            });
+                        }
+                    });
 
                     return {
                         url: relativeUrl,
-                        active_href: activeSidebarRow ? (activeSidebarRow.href || '') : '',
-                        active_title: activeSidebarRow ? activeSidebarRow.title : (document.title || ''),
-                        total_panes: panesStatus.length,
-                        panes: panesStatus,
-                        interrupted_panes: interruptedPanes,
-                        running_sidebar_tasks: spinningSidebarTasks,
-                        has_running_tasks: interruptedPanes.length > 0 || spinningSidebarTasks.length > 0
+                        active_href: relativeUrl,
+                        active_title: activeSidebarTitle,
+                        running_tasks: runningTasks,
+                        has_running_tasks: runningTasks.length > 0
                     };
                 })()"""
                 payload = {"id": 1, "method": "Runtime.evaluate", "params": {"expression": js, "returnByValue": True}}
@@ -741,18 +677,14 @@ def snapshot_active_and_running_tasks():
 
         res = asyncio.run(_query())
         if res:
-            logger.info(f"🔍 [CDP全景断点雷达] 检测到 {res.get('total_panes', 0)} 个前台分屏列 (运行中: {len(res.get('interrupted_panes', []))} 个), 侧边栏转圈任务: {len(res.get('running_sidebar_tasks', []))} 个")
-            if res.get("interrupted_panes"):
-                logger.info(f"   ▶ 前台运行中列: {res.get('interrupted_panes')}")
-            if res.get("running_sidebar_tasks"):
-                task_names = [t.get("title") for t in res.get("running_sidebar_tasks")]
-                logger.info(f"   ▶ 侧边栏/后台任务: {', '.join(task_names)}")
+            r_tasks = res.get("running_tasks", [])
+            logger.info(f"🔍 [CDP纯单窗口断点雷达] 切号前正在运行任务数: {len(r_tasks)} 个 (前台在跑: {any(t.get('is_current') for t in r_tasks)})")
+            for t in r_tasks:
+                logger.info(f"   ▶ 断点运行任务: '{t.get('title')}' ({t.get('href')}) [当前前台={t.get('is_current')}]")
             return res
         return {
             "has_running_tasks": False,
-            "interrupted_panes": [],
-            "running_sidebar_tasks": [],
-            "panes": [],
+            "running_tasks": [],
             "active_href": "",
             "active_title": ""
         }
@@ -917,17 +849,31 @@ def _reload_clash_core(clash_dir, profiles_config):
         logger.debug(f"Clash 核心重载检测: {e}")
 
 
-async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_href=None, force_send=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None):
-    """通过 CDP WebSocket 连接向 Antigravity 发送前排打标并扣 1 续接脚本 (支持智能断点感知、全景分屏对齐与深层侧边栏接力)"""
+async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_href=None, force_send=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None, running_tasks=None):
+    """通过 CDP WebSocket 连接向 Antigravity 针对切号前真正运行中的任务精准补发'继续' (纯单窗口架构，绝不乱发闲置会话)"""
     if force_send is None:
         force_send = True
-    if force_send:
-        logger.info("⚡ [极速响应] 已启用极速续接策略：键入'继续'沉淀 1.2 秒后提交，兼顾防吞车与秒级接力！")
     if full_url:
         full_url = normalize_target_path(full_url)
     if target_href:
         target_href = normalize_target_path(target_href)
 
+    # 规范化 running_tasks
+    if running_tasks is None:
+        running_tasks = []
+        if running_sidebar_tasks:
+            for st in running_sidebar_tasks:
+                running_tasks.append({
+                    "href": st.get("href"),
+                    "title": st.get("title", "侧边栏任务"),
+                    "is_current": False
+                })
+
+    if not running_tasks:
+        logger.info("ℹ️ [智能断点雷达] 切号前无任何运行中任务，保持静默，绝不误发'继续'。")
+        return {"success": True, "processed": 0, "reason": "all_idle", "results": []}
+
+    logger.info(f"⚡ [纯单窗口断点续接引擎] 准备对切号前 {len(running_tasks)} 个运行中任务精准派发 '{text}'...")
     wait_enter_sec = 1.2 if (force_send or is_beta_mode()) else 0.5
 
     import websockets
@@ -968,14 +914,14 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
             except Exception as e:
                 logger.debug(f"自愈检测异常忽略: {e}")
 
-            # =========================================================================
-            # 0. 【工作台与真实会话 URL 预对齐】
-            # 无论是单窗口还是多分屏，若切号前处于某个真实会话 (/c/ID...)，优先纯相对路径对齐 URL，
-            # 彻底杜绝因热重启后窗口重置停留在主页或空白新对话 (/ 或 /c) 而将'继续'误发到新对话/主页的致命乌龙！
-            # =========================================================================
+            results = []
+            resumed_hrefs = set()
+
+            # 1. 优先处理切号前的前台任务
+            current_tasks = [t for t in running_tasks if t.get("is_current")]
             target_dest = full_url or target_href
-            if target_dest:
-                target_rel = normalize_target_path(target_dest)
+            if current_tasks or target_dest:
+                target_rel = normalize_target_path(target_dest) or (current_tasks[0].get("href") if current_tasks else None)
                 if target_rel and target_rel not in ("/", "/c", "/c/") and "/c/" in target_rel:
                     align_url_js = f"""
                     (() => {{
@@ -994,597 +940,46 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     """
                     align_res = await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
                     if align_res.get("result", {}).get("result", {}).get("value"):
-                        logger.info(f"🧭 [会话对齐] 正在对齐恢复切号前真实工作会话 ({target_rel})，杜绝误操作主页/空白新对话...")
-                        await asyncio.sleep(0.8)
+                        logger.info(f"🧭 [会话对齐] 正在对齐恢复切号前真实工作会话 ({target_rel})...")
+                        await asyncio.sleep(1.0)
 
-            # =========================================================================
-            # 1. 【优先模式】：多分屏原生直连感知（Multi-Pane Native Direct Mode）
-            # =========================================================================
-            scan_panes_js = """
-            (() => {
-                // 1. 优先通过 agent-input-box 容器定位各分屏列 (最精准)
-                const inputBoxes = Array.from(document.querySelectorAll('[data-testid="agent-input-box"]')).filter(el => {
-                    const r = el.getBoundingClientRect();
-                    return r.width > 100 && r.height > 20;
-                });
-                inputBoxes.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+            # 若前台任务切号前确实在运行，向前台派发“继续”
+            if current_tasks:
+                c_task = current_tasks[0]
+                t_title = c_task.get("title", "当前主会话")
+                logger.info(f"▶ 正在向前台活跃任务 [{t_title}] 补发 '{text}'...")
 
-                if (inputBoxes.length > 0) {
-                    return inputBoxes.map((box, i) => {
-                        const r = box.getBoundingClientRect();
-                        const ed = box.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                        const stopBtn = box.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
-                        const sendBtn = box.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i]');
-                        return {
-                            index: i,
-                            x: Math.round(r.left),
-                            y: Math.round(r.top),
-                            w: Math.round(r.width),
-                            h: Math.round(r.height),
-                            has_editor: !!ed,
-                            text: ed ? (ed.innerText || '').trim() : '',
-                            is_generating: !!stopBtn,
-                            stop_label: stopBtn ? (stopBtn.getAttribute('aria-label') || 'Stop') : '',
-                            has_send: !!sendBtn,
-                            can_send: !!sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true'
-                        };
-                    });
-                }
-
-                // 2. 后备：通过 pane 容器
-                const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {
-                    const r = el.getBoundingClientRect();
-                    return r.width > 150 && r.height > 200;
-                });
-                paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-
-                if (paneContainers.length > 0) {
-                    return paneContainers.map((p, i) => {
-                        const r = p.getBoundingClientRect();
-                        const ed = p.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                        const stopBtn = p.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
-                        const sendBtn = p.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary');
-                        return {
-                            index: i,
-                            x: Math.round(r.left),
-                            y: Math.round(r.top),
-                            w: Math.round(r.width),
-                            h: Math.round(r.height),
-                            has_editor: !!ed,
-                            text: ed ? (ed.innerText || '').trim() : '',
-                            is_generating: !!stopBtn,
-                            stop_label: stopBtn ? (stopBtn.getAttribute('aria-label') || 'Stop') : '',
-                            has_send: !!sendBtn,
-                            can_send: !!sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true'
-                        };
-                    });
-                }
-
-                // 3. 极简后备：直接查找可见的 lexical-editor
-                const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
-                const visible = all.filter(el => {
-                    const r = el.getBoundingClientRect();
-                    return r.width > 40 && r.height > 10;
-                });
-                visible.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-                return visible.map((el, i) => {
-                    const r = el.getBoundingClientRect();
-                    let container = el.parentElement;
-                    for (let s = 0; s < 8; s++) {
-                        if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i], button[aria-label*="取消" i]'))) break;
-                        if (container && container.parentElement) container = container.parentElement;
-                    }
-                    const stopBtn = container ? container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : null;
-                    const sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
-                    return {
-                        index: i,
-                        x: Math.round(r.left),
-                        y: Math.round(r.top),
-                        w: Math.round(r.width),
-                        h: Math.round(r.height),
-                        has_editor: true,
-                        text: (el.innerText || '').trim(),
-                        is_generating: !!stopBtn,
-                        stop_label: stopBtn ? (stopBtn.getAttribute('aria-label') || 'Stop') : '',
-                        has_send: !!sendBtn,
-                        can_send: !!sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true'
-                    };
-                });
-            })()
-            """
-
-            # 轮询等待编辑器窗格挂载（最多等待 12 秒）
-            expected_pane_count = max(len(panes or []), (max(interrupted_panes) + 1 if interrupted_panes else 1))
-            screen_panes = []
-            for wait_i in range(12):
-                scan_res = await cdp_call("Runtime.evaluate", {"expression": scan_panes_js, "returnByValue": True})
-                screen_panes = scan_res.get("result", {}).get("result", {}).get("value") or []
-                if len(screen_panes) >= expected_pane_count or (len(screen_panes) > 0 and expected_pane_count <= 1):
-                    break
-                await asyncio.sleep(0.8)
-
-            if screen_panes and len(screen_panes) > 0:
-                logger.info(f"🖥️ [多分屏原生感知模式] 检测到当前屏幕一字排开 {len(screen_panes)} 个分屏窗格 (预期 {expected_pane_count} 列)！启用智能断点原地续接引擎...")
-
-                # 智能断点感知与目标选择：
-                # 1. 单窗口极简模式 (len(screen_panes) == 1)：始终接力当前主会话 (列 0)，
-                #    彻底解决 429 报错导致转圈停转、从而被误判为空闲跳过、出现“继续没有发”的根本病灶！
-                # 2. 多分屏模式：若明确检测到全部空闲且侧边栏无转圈任务，方执行静默跳过。
-                if len(screen_panes) == 1:
-                    target_p_indices = [0]
-                elif interrupted_panes and len(interrupted_panes) > 0:
-                    target_p_indices = interrupted_panes
-                elif interrupted_panes is not None and len(interrupted_panes) == 0 and not running_sidebar_tasks:
-                    logger.info("⏭ [智能断点感知] 切号前所有分屏窗口均处于空闲等待态，无需向任何窗口补发'继续'，100% 保持静默。")
-                    return {"success": True, "processed": 0, "success_count": 0, "results": [], "mode": "smart_idle_skip"}
-                else:
-                    target_p_indices = list(range(min(len(screen_panes), int(max_windows))))
-
-                results = []
-                resumed_cids = set()
-
-                for p_idx in target_p_indices:
-                    col_num = p_idx + 1
-                    col_cid = panes[p_idx].get("conv_id") if (panes and p_idx < len(panes)) else None
-
-                    # 1. 优先在屏幕可见分屏列中原地打标续接
-                    if p_idx < len(screen_panes):
-                        p_info = screen_panes[p_idx]
-                        logger.info(f"▶ 正在处理断点接力 [分屏列 {col_num}] (X={p_info['x']}, 宽度={p_info['w']}, 编辑器={p_info.get('has_editor', True)})...")
-
-                        prep_pane_js = f"""
-                        (() => {{
-                            const inputBoxes = Array.from(document.querySelectorAll('[data-testid="agent-input-box"]')).filter(el => {{
-                                const r = el.getBoundingClientRect();
-                                return r.width > 100 && r.height > 20;
-                            }});
-                            inputBoxes.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-
-                            let target = null;
-                            let container = null;
-                            if (inputBoxes.length > {p_idx}) {{
-                                container = inputBoxes[{p_idx}];
-                                target = container.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                            }}
-                            if (!target) {{
-                                const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {{
-                                    const r = el.getBoundingClientRect();
-                                    return r.width > 150 && r.height > 200;
-                                }});
-                                paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-                                if (paneContainers.length > {p_idx}) {{
-                                    container = paneContainers[{p_idx}];
-                                    target = container.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                                }}
-                            }}
-                            if (!target) {{
-                                const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
-                                const visible = all.filter(el => el.getBoundingClientRect().width > 40 && el.getBoundingClientRect().height > 10);
-                                visible.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-                                target = visible[{p_idx}];
-                                container = target ? target.parentElement : null;
-                            }}
-                            if (!target) return {{ status: "pane_editor_missing" }};
-
-                            for (let s = 0; s < 8; s++) {{
-                                if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i], button[aria-label*="取消" i]'))) break;
-                                if (container && container.parentElement) container = container.parentElement;
-                            }}
-                            const stopBtn = container ? container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : null;
-                            const isGen = !!stopBtn;
-                            if (isGen && !{json.dumps(bool(force_send))}) return {{ status: "generating" }};
-
-                            target.focus();
-                            try {{
-                                const sel = window.getSelection();
-                                const range = document.createRange();
-                                range.selectNodeContents(target);
-                                range.collapse(false);
-                                sel.removeAllRanges();
-                                sel.addRange(range);
-                                target.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true }}));
-                                target.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true }}));
-                                target.dispatchEvent(new MouseEvent('click', {{ bubbles: true }}));
-                            }} catch(e) {{}}
-
-                            const curPath = window.location.pathname || '';
-                            const isBlankChat = curPath === '/' || curPath === '/c' || curPath === '/c/';
-                            const msgCount = document.querySelectorAll('[data-testid*="chat-turn"], [class*="message"], [data-testid*="user-message"], [data-testid*="assistant-message"]').length;
-                            if (isBlankChat && msgCount === 0) {{
-                                return {{ status: "blank_home_page_skip" }};
-                            }}
-
-                            const curText = (target.innerText || '').trim();
-                            if (curText === {json.dumps(str(text))}) {{
-                                return {{ status: "ready_has_text" }};
-                            }} else if (curText.length > 0) {{
-                                return {{ status: "ready_custom_draft", text: curText }};
-                            }} else {{
-                                document.execCommand('selectAll', false, null);
-                                document.execCommand('delete', false, null);
-                                return {{ status: "ready" }};
-                            }}
-                        }})()
-                        """
-                        p_prep_res = await cdp_call("Runtime.evaluate", {"expression": prep_pane_js, "returnByValue": True})
-                        p_prep_val = p_prep_res.get("result", {}).get("result", {}).get("value") or {}
-                        p_status = p_prep_val.get("status")
-
-                        if p_status == "blank_home_page_skip":
-                            logger.info(f"分屏列 [{col_num}] 处于空白新对话/主页初始态 (无历史消息)，绝不误发'继续'，安全跳过。")
-                            continue
-                        elif p_status == "generating":
-                            logger.info(f"分屏列 [{col_num}] 正在模型流式生成中，无需打标，保持原样继续。")
-                            results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "reason": "already_generating"})
-                            if col_cid:
-                                resumed_cids.add(col_cid)
-                            continue
-                        elif p_status not in ("ready", "ready_has_text", "ready_custom_draft"):
-                            logger.warning(f"分屏列 [{col_num}] 屏幕直接聚焦不成功 (状态: {p_status})，尝试深层会话中继...")
-                        else:
-                            wait_enter_sec = 1.2 if (force_send or is_beta_mode()) else 0.5
-                            if p_status == "ready":
-                                await cdp_call("Input.insertText", {"text": str(text)})
-                                logger.info(f"已向分屏列 [{col_num}] 键入 '{text}'，等待 {wait_enter_sec:.1f} 秒待界面加载沉降后再提交...")
-                                await asyncio.sleep(wait_enter_sec)
-                            elif p_status in ("ready_has_text", "ready_custom_draft"):
-                                logger.info(f"分屏列 [{col_num}] 检测到已有草稿内容，等待 {wait_enter_sec:.1f} 秒待界面完全加载后再提交...")
-                                await asyncio.sleep(wait_enter_sec)
-
-                            # 点击该分屏列内部专属的发送按钮
-                            send_pane_js = f"""
-                            (async () => {{
-                                const inputBoxes = Array.from(document.querySelectorAll('[data-testid="agent-input-box"]')).filter(el => {{
-                                    const r = el.getBoundingClientRect();
-                                    return r.width > 100 && r.height > 20;
-                                }});
-                                inputBoxes.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-
-                                let target = null;
-                                let colContainer = null;
-                                if (inputBoxes.length > {p_idx}) {{
-                                    colContainer = inputBoxes[{p_idx}];
-                                    target = colContainer.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                                }}
-                                if (!target) {{
-                                    const paneContainers = Array.from(document.querySelectorAll('.group\\\\/pane, [class*="group/pane"]')).filter(el => {{
-                                        const r = el.getBoundingClientRect();
-                                        return r.width > 150 && r.height > 200;
-                                    }});
-                                    paneContainers.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-                                    if (paneContainers.length > {p_idx}) {{
-                                        colContainer = paneContainers[{p_idx}];
-                                        target = colContainer.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                                    }}
-                                }}
-                                if (!target) {{
-                                    const all = Array.from(document.querySelectorAll('[data-lexical-editor="true"], div[contenteditable="true"]'));
-                                    const visible = all.filter(el => el.getBoundingClientRect().width > 40 && el.getBoundingClientRect().height > 10);
-                                    visible.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-                                    target = visible[{p_idx}];
-                                }}
-                                if (!target) return {{ success: false, reason: "pane_editor_missing" }};
-
-                                try {{ target.dispatchEvent(new Event('input', {{ bubbles: true }})); }} catch(e) {{}}
-
-                                let container = colContainer || target.parentElement;
-                                for (let s = 0; s < 8; s++) {{
-                                    if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="取消" i]'))) break;
-                                    if (container && container.parentElement) container = container.parentElement;
-                                }}
-
-                                let sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
-                                for (let retry = 0; retry < 15; retry++) {{
-                                    if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
-                                    await new Promise(r => setTimeout(r, 100));
-                                    if (container) {{
-                                        sendBtn = container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary');
-                                    }}
-                                }}
-                                if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {{
-                                    sendBtn.click();
-                                    return {{ success: true, method: "button_click" }};
-                                }}
-                                return {{ success: false, reason: "button_not_clickable" }};
-                            }})()
-                            """
-                            p_send_res = await cdp_call("Runtime.evaluate", {"expression": send_pane_js, "awaitPromise": True, "returnByValue": True})
-                            p_send_val = p_send_res.get("result", {}).get("result", {}).get("value") or {}
-                            p_is_sent = p_send_val.get("success", False)
-
-                            if not p_is_sent or force_send:
-                                await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                                await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                                await asyncio.sleep(0.35)
-
-                            sent_text = p_prep_val.get("text") if p_status == "ready_custom_draft" else text
-                            logger.info(f"✅ 分屏列 [{col_num}] 原生屏幕续接触发成功 (内容: '{sent_text}')")
-                            results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "text": sent_text})
-                            if col_cid:
-                                resumed_cids.add(col_cid)
-                            await asyncio.sleep(0.4)
-                            continue
-
-                    # 2. 若该列在屏幕上被标签页遮挡或未挂载，走 CID 深层路由穿透中继
-                    if col_cid and col_cid not in resumed_cids:
-                        logger.info(f"🧭 [分屏列穿透中继] 分屏列 [{col_num}] 屏幕直接交互未命中，瞬切至会话 (/c/{col_cid}) 进行保底续接...")
-                        nav_js = f"""
-                        (() => {{
-                            if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
-                                window.__TSR_ROUTER__.navigate({{ href: '/c/{col_cid}' }});
-                            }} else {{
-                                window.location.href = window.location.origin + '/c/{col_cid}';
-                            }}
-                            return true;
-                        }})()
-                        """
-                        await cdp_call("Runtime.evaluate", {"expression": nav_js})
-                        await asyncio.sleep(0.8)
-
-                        bg_prep_js = """
-                        (async () => {
-                            let ed = null;
-                            for (let r = 0; r < 15; r++) {
-                                ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                                if (ed) break;
-                                await new Promise(res => setTimeout(res, 200));
-                            }
-                            if (!ed) return { status: "no_editor" };
-
-                            let container = ed.parentElement;
-                            for (let s = 0; s < 8; s++) {
-                                if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="Cancel" i], button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i]'))) break;
-                                if (container && container.parentElement) container = container.parentElement;
-                            }
-                            const stopBtn = container ? container.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]') : null;
-                            if (stopBtn) return { status: "already_generating" };
-
-                            ed.focus();
-                            try {
-                                const sel = window.getSelection();
-                                range = document.createRange();
-                                range.selectNodeContents(ed);
-                                range.collapse(false);
-                                sel.removeAllRanges();
-                                sel.addRange(range);
-                                ed.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                                ed.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                                ed.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                            } catch(e) {}
-                            return { status: "ready" };
-                        })()
-                        """
-                        bg_prep_res = await cdp_call("Runtime.evaluate", {"expression": bg_prep_js, "awaitPromise": True, "returnByValue": True})
-                        bg_prep_val = bg_prep_res.get("result", {}).get("result", {}).get("value") or {}
-                        if bg_prep_val.get("status") == "already_generating":
-                            logger.info(f"分屏列 [{col_num}] 正在生成中，无需打标，保持原样。")
-                            resumed_cids.add(col_cid)
-                            continue
-
-                        await cdp_call("Input.insertText", {"text": str(text)})
-                        await asyncio.sleep(wait_enter_sec)
-
-                        bg_send_js = """
-                        (async () => {
-                            const ed = document.querySelector('[data-lexical-editor="true"], div[contenteditable="true"]');
-                            let container = ed ? ed.parentElement : null;
-                            for (let s = 0; s < 8; s++) {
-                                if (container && (container.getAttribute('data-testid') === 'agent-input-box' || container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i]'))) break;
-                                if (container && container.parentElement) container = container.parentElement;
-                            }
-                            let btn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary') : null;
-                            for (let retry = 0; retry < 15; retry++) {
-                                if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') break;
-                                await new Promise(r => setTimeout(r, 100));
-                                if (container) {
-                                    btn = container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button.rounded-full.bg-secondary');
-                                }
-                            }
-                            if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
-                                btn.click();
-                                return true;
-                            }
-                            return false;
-                        })()
-                        """
-                        bg_send_res = await cdp_call("Runtime.evaluate", {"expression": bg_send_js, "awaitPromise": True, "returnByValue": True})
-                        bg_sent = bg_send_res.get("result", {}).get("result", {}).get("value")
-                        if not bg_sent or force_send:
-                            await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                            await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-
-                        logger.info(f"✅ 分屏列 [{col_num}] 穿透保底续接触发成功 (/c/{col_cid})！")
-                        results.append({"index": col_num, "title": f"分屏列-{col_num}", "success": True, "text": text, "relay": True})
-                        resumed_cids.add(col_cid)
-                        await asyncio.sleep(0.4)
-
-                succ_cnt = sum(1 for item in results if item.get("success"))
-                logger.info(f"🖥️ 多分屏原生直连续接处理完毕: 共处理 {len(results)} 个并排分屏列，成功触发: {succ_cnt} 个")
-
-                # =====================================================================
-                # 2. 【无感保障：绝对静默，严禁劫持路由跳切会话】
-                # =====================================================================
-                # 严格遵循单窗口无感铁律：仅接力当前前台可见分屏，严禁调用 navigate 强切其他后台会话打乱用户视线
-                if running_sidebar_tasks:
-                    logger.info(f"ℹ️ [无感保障] 检测到 {len(running_sidebar_tasks)} 个侧边栏任务，单窗口模式下保持静默，严禁切路由打扰当前前台！")
-
-                # =====================================================================
-                # 3. 【无缝返航复原多列分屏布局】
-                # =====================================================================
-                restore_url = full_url or target_href
-                if restore_url:
-                    restore_rel = normalize_target_path(restore_url)
-                    logger.info(f"🔙 正在返航原路复原前台多分屏工作台布局 ({restore_rel})...")
-                    restore_nav_js = f"""
-                    (() => {{
-                        const curRel = (window.location.pathname || '') + (window.location.search || '');
-                        const target = {json.dumps(restore_rel)};
-                        if (decodeURIComponent(curRel) !== decodeURIComponent(target) && !curRel.includes(target)) {{
-                            if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
-                                window.__TSR_ROUTER__.navigate({{ href: target }});
-                            }} else {{
-                                window.location.href = window.location.origin + target;
-                            }}
-                            return true;
-                        }}
-                        return false;
-                    }})()
-                    """
-                    await cdp_call("Runtime.evaluate", {"expression": restore_nav_js})
-                    await asyncio.sleep(0.8)
-                    ensure_chinese_localization_injected()
-
-                return {"success": succ_cnt > 0, "processed": len(results), "success_count": succ_cnt, "results": results, "mode": "multi_pane_direct"}
-
-            # =========================================================================
-            # 2. 【后备降级模式】：单窗口全屏白屏或骨架屏时走侧边栏轮询与路由点选
-            # =========================================================================
-            logger.info("未检测到可见的并排分屏输入框，降级启用侧边栏轮询探测...")
-            fetch_rows_js = """
-            (() => {
-                const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                const toggleBtn = document.querySelector('button[aria-label*="toggle" i], button[aria-label*="sidebar" i], button[aria-label*="历史" i], button[data-testid="sidebar-toggle"]');
-                if (rows.length === 0 && toggleBtn) {
-                    const aria = toggleBtn.getAttribute('aria-expanded');
-                    if (aria === 'false') { toggleBtn.click(); }
-                }
-                const convs = rows.map((r, i) => {
-                    const titleDiv = r.querySelector('.truncate');
-                    const a = r.querySelector('a');
-                    let t = titleDiv ? titleDiv.textContent.trim() : '';
-                    if (!t && r.innerText) { t = r.innerText.split('\\n')[0].trim(); }
-                    if (!t) t = `会话-${i + 1}`;
-                    return {
-                        index: i, title: t,
-                        href: a ? a.getAttribute('href') : '',
-                        isSelected: r.classList.contains('bg-sidebar-secondary')
-                    };
-                });
-                return {
-                    convs: convs,
-                    currentUrl: window.location.href,
-                    diagnostics: {
-                        rows_found: rows.length,
-                        toggle_found: !!toggleBtn,
-                        title: document.title,
-                        url: window.location.href
-                    }
-                };
-            })()
-            """
-            all_convs = []
-            current_url = ""
-            diag = {}
-            for poll_i in range(20):
-                r = await cdp_call("Runtime.evaluate", {"expression": fetch_rows_js, "returnByValue": True})
-                eval_val = r.get("result", {}).get("result", {}).get("value") or {}
-                if not eval_val:
-                    eval_val = r.get("result", {}).get("value") or {}
-                all_convs = eval_val.get("convs", [])
-                current_url = eval_val.get("currentUrl", "")
-                diag = eval_val.get("diagnostics", {})
-                if all_convs:
-                    logger.info(f"✅ [后备侧边栏轮询第{poll_i+1}次] 发现 {len(all_convs)} 个侧边栏会话")
-                    break
-                logger.info(f"⏳ [后备侧边栏轮询第{poll_i+1}/20次] 暂无对话，2s后重试...")
-                await asyncio.sleep(2)
-
-            if not all_convs:
-                logger.warning(f"CDP 侧边栏会话列表检索结束 (发现 0 个会话)，DOM 现场: {diag}")
-                record_incident(
-                    incident_type="CDP_RESUME_NO_CONVERSATIONS",
-                    severity="INFO",
-                    summary="CDP 自动续接未检索到前排历史会话",
-                    root_cause="轮询 40 秒后未在 DOM 中发现 conversation-row-sidebar 元素。侧边栏可能为空或未展开。",
-                    evidence=diag,
-                    action_taken="跳过自动发送，保持当前新窗口正常在前台使用",
-                    recommended_action="若需自动续接前排任务，请确认 Antigravity 侧边栏存在历史对话记录。"
-                )
-                return {"success": False, "reason": "no_conversations_found", "diagnostics": diag}
-
-            logger.info(f"CDP 成功检索到 {len(all_convs)} 个侧边栏会话，准备智能优先续接 (最多 {max_windows} 个)...")
-
-            # 优先级重组：优先精准锚定切号前的活跃任务会话与侧边栏转圈断点
-            prioritized = []
-            if running_sidebar_tasks:
-                for r_task in running_sidebar_tasks:
-                    r_href = r_task.get("href", "")
-                    r_title = r_task.get("title", "")
-                    matched = next((c for c in all_convs if c.get("href") and (c["href"] in r_href or r_href in c["href"])), None)
-                    if not matched and r_title:
-                        matched = next((c for c in all_convs if c.get("title") == r_title), None)
-                    if matched and matched not in prioritized:
-                        prioritized.append(matched)
-                        logger.info(f"🎯 [侧边栏转圈断点命中] 优先续接: '{matched['title']}' ({matched['href']})")
-
-            if target_href:
-                matched = next((c for c in all_convs if c.get("href") and (c["href"] in target_href or target_href in c["href"])), None)
-                if not matched:
-                    m_uuid = re.search(r'[0-9a-fA-F-]{36}', target_href)
-                    if m_uuid:
-                        matched = next((c for c in all_convs if m_uuid.group(0) in c.get("href", "")), None)
-                if matched and matched not in prioritized:
-                    prioritized.append(matched)
-                    logger.info(f"🎯 [切号前活跃任务精准定位] 优先续接: '{matched['title']}' ({matched['href']})")
-
-            if not prioritized:
-                active_c = next((c for c in all_convs if c.get("href") and (c["href"] in current_url or c.get("isSelected"))), None)
-                if active_c:
-                    prioritized.append(active_c)
-                    logger.info(f"🎯 [当前聚焦窗口命中] 优先续接: '{active_c['title']}' ({active_c['href']})")
-
-            for c in all_convs:
-                if len(prioritized) >= int(max_windows):
-                    break
-                if c not in prioritized:
-                    prioritized.append(c)
-
-            target_convs = prioritized
-            results = []
-
-            for c in target_convs:
-                idx = c["index"]
-                title = c["title"]
-                href = c["href"]
-
-                # a. 切换至对应会话窗口并等待路由与 DOM 彻底挂载沉降
-                switch_and_prep_js = f"""
+                prep_front_js = f"""
                 (async () => {{
-                    const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                    const row = rows[{idx}];
-                    if (!row) return {{ status: "no_row" }};
-                    const a = row.querySelector('a');
-                    if (!a) return {{ status: "no_anchor" }};
-                    
-                    const targetHref = a.getAttribute('href') || '';
-                    if (targetHref && !location.href.includes(targetHref)) {{
-                        a.click();
-                        for (let i = 0; i < 15; i++) {{
-                            if (location.href.includes(targetHref)) break;
-                            await new Promise(r => setTimeout(r, 100));
-                        }}
-                        await new Promise(r => setTimeout(r, 350));
+                    let ed = null;
+                    for (let r = 0; r < 20; r++) {{
+                        ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
+                        if (ed) break;
+                        await new Promise(res => setTimeout(res, 250));
                     }}
+                    if (!ed) return {{ status: "no_editor" }};
 
-                    let editable = null;
-                    for (let retry = 0; retry < 15; retry++) {{
-                        editable = document.querySelector('[data-lexical-editor="true"]');
-                        if (editable) break;
-                        await new Promise(r => setTimeout(r, 200));
-                    }}
+                    const stopBtn = document.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                    if (stopBtn && !{json.dumps(bool(force_send))}) return {{ status: "already_generating" }};
 
-                    if (!editable) return {{ status: "editor_not_found" }};
+                    ed.focus();
+                    try {{
+                        const sel = window.getSelection();
+                        const range = document.createRange();
+                        range.selectNodeContents(ed);
+                        range.collapse(false);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                        ed.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true }}));
+                        ed.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true }}));
+                        ed.dispatchEvent(new MouseEvent('click', {{ bubbles: true }}));
+                    }} catch(e) {{}}
 
-                    const isGenerating = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="Stop execution" i], button[aria-label*="停止生成" i], button[aria-label*="停止执行" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
-                    if (isGenerating && !{json.dumps(bool(force_send))}) return {{ status: "generating" }};
-
-                    const currentText = (editable.innerText || '').trim();
-                    editable.focus();
-
-                    if (currentText === {json.dumps(str(text))}) {{
+                    const curText = (ed.innerText || '').trim();
+                    if (curText === {json.dumps(str(text))}) {{
                         return {{ status: "ready_has_text" }};
-                    }} else if (currentText.length > 0) {{
-                        return {{ status: "ready_custom_draft", text: currentText }};
+                    }} else if (curText.length > 0) {{
+                        return {{ status: "ready_custom_draft", text: curText }};
                     }} else {{
                         document.execCommand('selectAll', false, null);
                         document.execCommand('delete', false, null);
@@ -1592,108 +987,136 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     }}
                 }})()
                 """
-                prep_res = await cdp_call("Runtime.evaluate", {"expression": switch_and_prep_js, "awaitPromise": True, "returnByValue": True})
-                prep_val = prep_res.get("result", {}).get("result", {}).get("value", {}) or prep_res.get("result", {}).get("value", {})
-                prep_status = prep_val.get("status")
+                prep_res = await cdp_call("Runtime.evaluate", {"expression": prep_front_js, "awaitPromise": True, "returnByValue": True})
+                prep_val = prep_res.get("result", {}).get("result", {}).get("value") or {}
+                p_status = prep_val.get("status")
 
-                if prep_status == "generating":
-                    logger.info(f"会话 [{title}] 正在模型生成中，无需打标，保持继续。")
-                    results.append({"index": idx + 1, "title": title, "href": href, "success": True, "reason": "already_generating"})
-                    continue
-                elif prep_status not in ("ready", "ready_has_text", "ready_custom_draft"):
-                    results.append({"index": idx + 1, "title": title, "href": href, "success": False, "reason": prep_status})
-                    continue
+                if p_status == "already_generating":
+                    logger.info(f"前台主会话 [{t_title}] 已在流式生成中，无需打标，保持原样。")
+                    results.append({"title": t_title, "success": True, "reason": "already_generating"})
+                elif p_status in ("ready", "ready_has_text", "ready_custom_draft"):
+                    if p_status == "ready":
+                        await cdp_call("Input.insertText", {"text": str(text)})
+                        logger.info(f"已向前台主会话键入 '{text}'，等待 {wait_enter_sec:.1f} 秒沉淀后提交...")
+                        await asyncio.sleep(wait_enter_sec)
+                    else:
+                        logger.info(f"前台主会话检测到已有草稿，等待 {wait_enter_sec:.1f} 秒沉淀后提交...")
+                        await asyncio.sleep(wait_enter_sec)
 
-                wait_enter_sec = 1.2 if (force_send or is_beta_mode()) else 0.5
-                if prep_status == "ready":
-                    await cdp_call("Input.insertText", {"text": str(text)})
-                    logger.info(f"已向会话 [{title}] 键入 '{text}'，等待 {wait_enter_sec:.1f} 秒待界面组件彻底加载沉降后再敲击回车提交...")
-                    await asyncio.sleep(wait_enter_sec)
-                elif prep_status in ("ready_has_text", "ready_custom_draft"):
-                    logger.info(f"会话 [{title}] 检测到已有内容/草稿，等待 {wait_enter_sec:.1f} 秒待界面完全加载后再敲击回车提交...")
-                    await asyncio.sleep(wait_enter_sec)
-
-                send_js = f"""
-                (async () => {{
-                    const editable = document.querySelector('[data-lexical-editor="true"]');
-                    if (editable) {{
-                        try {{ editable.dispatchEvent(new Event('input', {{ bubbles: true }})); }} catch(e) {{}}
-                    }}
-                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="Stop execution" i], button[aria-label*="停止生成" i], button[aria-label*="停止执行" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
-                    if (isGen && !{json.dumps(bool(force_send))}) return {{ success: true, method: "already_generating" }};
-
-                    let container = editable ? editable.parentElement : null;
-                    for (let step = 0; step < 6; step++) {{
-                        if (container && container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button[aria-label*="提交" i]')) break;
-                        if (container && container.parentElement) container = container.parentElement;
-                    }}
-                    let sendBtn = null;
-                    for (let retry = 0; retry < 15; retry++) {{
-                        sendBtn = container ? container.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button[aria-label*="提交" i]') : document.querySelector('button[data-testid="send-button"], button[aria-label*="发送" i], button[aria-label*="Send" i], button[aria-label*="Submit" i], button[aria-label*="提交" i]');
-                        if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
-                        await new Promise(r => setTimeout(r, 100));
-                    }}
-                    if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {{
-                        sendBtn.click();
-                        return {{ success: true, method: "button_click" }};
-                    }}
-                    return {{ success: false, reason: "button_not_clickable" }};
-                }})()
-                """
-                send_res = await cdp_call("Runtime.evaluate", {"expression": send_js, "awaitPromise": True, "returnByValue": True})
-                send_val = send_res.get("result", {}).get("result", {}).get("value", {}) or send_res.get("result", {}).get("value", {})
-                is_sent = send_val.get("success", False)
-
-                if not is_sent or force_send:
                     await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
                     await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                    await asyncio.sleep(0.35)
+                    logger.info(f"✅ 前台主会话 [{t_title}] 成功发送 '{text}' 续接！")
+                    results.append({"title": t_title, "success": True, "text": text, "is_current": True})
+                    if c_task.get("href"):
+                        resumed_hrefs.add(normalize_target_path(c_task["href"]))
+                    await asyncio.sleep(0.5)
 
-                sent_content = prep_val.get("text") if prep_status == "ready_custom_draft" else text
-                logger.info(f"✅ CDP 窗口 [{idx+1}] 发送成功: 会话='{title}' 成功触发发送 (内容: '{sent_content}')" + (" [测试版强制发送]" if force_send else ""))
-                results.append({"index": idx + 1, "title": title, "href": href, "success": True, "text": sent_content, "force_sent": bool(force_send)})
-                await asyncio.sleep(0.4)
+            # 2. 依序定向接力切号前在转圈的后台侧边栏任务
+            sidebar_tasks = [t for t in running_tasks if not t.get("is_current")]
+            if sidebar_tasks:
+                logger.info(f"🚀 [侧边栏断点接力] 发现 {len(sidebar_tasks)} 个侧边栏断点任务，启动后台轮巡定向补发...")
+                for st in sidebar_tasks:
+                    s_href = normalize_target_path(st.get("href", ""))
+                    s_title = st.get("title", "侧边栏任务")
+                    if not s_href or s_href in resumed_hrefs:
+                        continue
 
-            # 3. 切回首选窗口聚焦
-            await asyncio.sleep(0.6)
-            if target_convs:
-                preferred_conv = next((item for item in results if item.get("success")), target_convs[0])
-                pref_idx = preferred_conv["index"] - 1 if "index" in preferred_conv and preferred_conv.get("index", 0) > 0 else preferred_conv.get("index", 0)
-                switch_back_js = f"""
-                (async () => {{
-                    const isGen = !!document.querySelector('button[aria-label*="Stop generation" i], button[aria-label*="Stop execution" i], button[aria-label*="停止生成" i], button[aria-label*="停止执行" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
-                    if (isGen) return {{ status: "stay_generating" }};
-
-                    const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
-                    if (rows.length > {pref_idx}) {{
-                        const link = rows[{pref_idx}].querySelector('a');
-                        const targetHref = link ? link.getAttribute('href') : '';
-                        if (link && targetHref && !location.href.includes(targetHref)) {{
-                            link.click();
-                            await new Promise(r => setTimeout(r, 400));
+                    logger.info(f"▶ 正在定向接力侧边栏任务: '{s_title}' ({s_href})...")
+                    nav_js = f"""
+                    (() => {{
+                        const target = {json.dumps(s_href)};
+                        if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                            window.__TSR_ROUTER__.navigate({{ href: target }});
+                        }} else {{
+                            window.location.href = window.location.origin + target;
                         }}
+                        return true;
+                    }})()
+                    """
+                    await cdp_call("Runtime.evaluate", {"expression": nav_js})
+                    await asyncio.sleep(1.8)
+
+                    type_and_send_js = f"""
+                    (async () => {{
+                        let ed = null;
+                        for (let r = 0; r < 15; r++) {{
+                            ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
+                            if (ed) break;
+                            await new Promise(res => setTimeout(res, 200));
+                        }}
+                        if (!ed) return {{ status: "no_editor" }};
+
+                        const stopBtn = document.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
+                        if (stopBtn && !{json.dumps(bool(force_send))}) return {{ status: "already_generating" }};
+
+                        ed.focus();
+                        try {{
+                            const sel = window.getSelection();
+                            const range = document.createRange();
+                            range.selectNodeContents(ed);
+                            range.collapse(false);
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                            ed.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true }}));
+                            ed.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true }}));
+                            ed.dispatchEvent(new MouseEvent('click', {{ bubbles: true }}));
+                        }} catch(e) {{}}
+                        return {{ status: "ready" }};
+                    }})()
+                    """
+                    t_res = await cdp_call("Runtime.evaluate", {"expression": type_and_send_js, "awaitPromise": True, "returnByValue": True})
+                    t_val = t_res.get("result", {}).get("result", {}).get("value") or {}
+                    if t_val.get("status") == "already_generating":
+                        logger.info(f"侧边栏任务 [{s_title}] 已处于生成态，无需重复打标。")
+                        results.append({"title": s_title, "success": True, "reason": "already_generating"})
+                        resumed_hrefs.add(s_href)
+                        continue
+                    elif t_val.get("status") == "ready":
+                        await cdp_call("Input.insertText", {"text": str(text)})
+                        await asyncio.sleep(wait_enter_sec)
+                        await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
+                        await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
+                        logger.info(f"✅ 侧边栏任务 [{s_title}] 成功补发 '{text}' 续接！")
+                        results.append({"title": s_title, "success": True, "text": text, "sidebar": True})
+                        resumed_hrefs.add(s_href)
+                        await asyncio.sleep(0.8)
+
+            # 3. 轮巡补发完毕后，无缝原路返航复原切号前的前台会话
+            restore_url = full_url or target_href
+            if restore_url and sidebar_tasks:
+                restore_rel = normalize_target_path(restore_url)
+                logger.info(f"🔙 正在返航原路复原前台工作台会话 ({restore_rel})...")
+                restore_nav_js = f"""
+                (() => {{
+                    const curRel = (window.location.pathname || '') + (window.location.search || '');
+                    const target = {json.dumps(restore_rel)};
+                    if (decodeURIComponent(curRel) !== decodeURIComponent(target) && !curRel.includes(target)) {{
+                        if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                            window.__TSR_ROUTER__.navigate({{ href: target }});
+                        }} else {{
+                            window.location.href = window.location.origin + target;
+                        }}
+                        return true;
                     }}
-                    return {{ status: "ok" }};
+                    return false;
                 }})()
                 """
-                try:
-                    await cdp_call("Runtime.evaluate", {"expression": switch_back_js, "awaitPromise": True})
-                except Exception as e:
-                    logger.debug(f"切回聚焦窗口静默忽略: {e}")
+                await cdp_call("Runtime.evaluate", {"expression": restore_nav_js})
+                await asyncio.sleep(0.8)
+                ensure_chinese_localization_injected()
 
             succ_cnt = sum(1 for item in results if item.get("success"))
-            logger.info(f"CDP 自动续接处理完毕: 总共处理 {len(results)} 个会话窗口，成功续接发送: {succ_cnt} 个")
-
+            logger.info(f"🎉 纯单窗口断点精准续接处理完毕: 共接力 {len(results)} 个未完成任务，成功触发: {succ_cnt} 个")
             return {
-                "success": True,
+                "success": succ_cnt > 0 or len(running_tasks) == 0,
                 "processed": len(results),
                 "success_count": succ_cnt,
-                "results": results
+                "results": results,
+                "mode": "single_window_precise"
             }
     except (websockets.exceptions.ConnectionClosedOK, websockets.exceptions.ConnectionClosed) as e:
         logger.debug(f"CDP WebSocket 连接关闭: {e}")
         return {"success": True, "note": "connection_closed_normally"}
-
 
 def get_antigravity_main_pid():
     """获取 Antigravity 主进程 PID (排除 --type=xxx 渲染或工具子进程)"""
@@ -1710,7 +1133,7 @@ def get_antigravity_main_pid():
     return 0
 
 
-def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_pids=None, target_href=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None):
+def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_pids=None, target_href=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None, running_tasks=None):
     """执行前排任务窗口打标与自动续接 (单飞互斥保护，支持智能断点感知与精准接力)"""
     if websockets is None:
         logger.warning("未检测到 websockets 模块，无法通过 CDP 执行自动续接。")
@@ -1728,16 +1151,17 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
             text = token.get("text", text)
             if not target_href:
                 target_href = token.get("target_href")
-            if interrupted_panes is None:
-                interrupted_panes = token.get("interrupted_panes")
-            if running_sidebar_tasks is None:
-                running_sidebar_tasks = token.get("running_sidebar_tasks")
             if full_url is None:
                 full_url = token.get("full_url")
-            if panes is None:
-                panes = token.get("panes")
+            if running_tasks is None:
+                running_tasks = token.get("running_tasks")
             # 立即消费令牌，防止后续重复调用
             clear_pending_auto_resume()
+
+        # 智能断点门禁：若切号前已明确无运行中任务，保持绝对静默，绝不乱发'继续'
+        if running_tasks is not None and len(running_tasks) == 0:
+            logger.info("ℹ️ [智能断点雷达] 切号前全部任务均处于空闲状态，无需续接，切号后保持静默。")
+            return True
 
         # 1. 优先等待 Launcher 彻底完成并退出，确保 Antigravity 窗口稳定在前台且互斥锁已释放
         launcher_wait_start = time.time()
@@ -1796,10 +1220,8 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
                     max_windows=max_windows,
                     text=text,
                     target_href=target_href,
-                    interrupted_panes=interrupted_panes,
-                    running_sidebar_tasks=running_sidebar_tasks,
                     full_url=full_url,
-                    panes=panes
+                    running_tasks=running_tasks
                 ))
                 logger.info(f"自动续接执行结果: {json.dumps(result, ensure_ascii=False)}")
 
@@ -3001,6 +2423,27 @@ def sync_all_cockpit_account_files(target_account_id, target_email):
         except Exception as e:
             results["antigravity_legacy_instances.json"] = f"ERROR: {e}"
 
+    # 5. launch-account-status.json (启动器胶囊状态直写，根治胶囊显示旧号 Bug)
+    try:
+        current_id_tmp, accounts_tmp = get_all_accounts_and_quotas()
+        target_acc = next((a for a in accounts_tmp if a.get("id") == target_account_id or a.get("email", "").lower() == target_email.lower()), None)
+        capsule_data = {
+            "email": target_email,
+            "name": target_acc.get("name", "") if target_acc else "",
+            "gemini_5h": float(target_acc.get("gemini_5h", 100.0)) if target_acc else 100.0,
+            "gemini_weekly": float(target_acc.get("gemini_weekly", 100.0)) if target_acc else 100.0,
+            "days_to_w_reset": float(target_acc.get("days_to_w_reset", 0.0)) if target_acc else 0.0,
+            "action": "switched",
+            "reason": "切号总线原子同步",
+            "timestamp": now_ts
+        }
+        os.makedirs(os.path.dirname(LAUNCH_ACCOUNT_STATUS_FILE), exist_ok=True)
+        with open(LAUNCH_ACCOUNT_STATUS_FILE, "w", encoding="utf-8") as sf:
+            json.dump(capsule_data, sf, ensure_ascii=False, indent=2)
+        results["launch-account-status.json"] = "OK"
+    except Exception as e:
+        results["launch-account-status.json"] = f"ERROR: {e}"
+
     return results
 
 
@@ -3357,13 +2800,12 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
         logger.info("[DryRun 演练模式] 未执行实际退出与切号操作。")
         return "dry_run"
     
-    # 0. 优先深度探测抓取切号前当前处于活跃前台的会话窗口与侧边栏全局断点任务
+    # 0. 优先深度探测抓取切号前当前处于活跃前台的会话窗口与侧边栏全局断点任务 (纯单窗口架构)
     task_snapshot = snapshot_active_and_running_tasks()
     target_href = task_snapshot.get("active_href")
     target_title = task_snapshot.get("active_title")
-    interrupted_panes = task_snapshot.get("interrupted_panes", [])
-    running_sidebar_tasks = task_snapshot.get("running_sidebar_tasks", [])
-    has_running_tasks = task_snapshot.get("has_running_tasks", False)
+    running_tasks = task_snapshot.get("running_tasks", [])
+    has_running_tasks = bool(running_tasks)
 
     # 1. 记录切号待办事务与断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
     write_pending_switch(best_acc)
@@ -3380,28 +2822,20 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     except Exception:
         pass
 
-    # 智能断点自愈策略：默认开启（具备零误触保护：空闲会话绝不打扰，仅接力被中断任务）
-    should_resume = _auto_resume_enabled
+    # 智能断点自愈策略：切号前检测到还在运行的那个，才会说继续；若完全闲置，保持静默
+    should_resume = _auto_resume_enabled and has_running_tasks
     if should_resume:
-        max_w = max(task_snapshot.get("total_panes", 0), 4)
         write_pending_auto_resume(
-            max_windows=max_w,
             text="继续",
             target_href=target_href,
             target_title=target_title,
-            interrupted_panes=interrupted_panes,
-            running_sidebar_tasks=running_sidebar_tasks,
-            full_url=task_snapshot.get("url"),
-            panes=task_snapshot.get("panes", [])
+            running_tasks=running_tasks,
+            full_url=task_snapshot.get("url")
         )
-        if interrupted_panes:
-            logger.info(f"✅ [智能断点续接已就绪] 切号后将精准接力 {len(interrupted_panes)} 个运行中分屏列: {interrupted_panes} (闲置列保持静默)")
-        elif running_sidebar_tasks:
-            logger.info(f"✅ [智能断点续接已就绪] 切号后将接力侧边栏转圈任务: {[t['title'] for t in running_sidebar_tasks]}")
-        else:
-            logger.info("✅ [智能断点感知] 自动续接已就绪 (若切号前全闲置则自动保持静默)")
+        logger.info(f"✅ [智能断点续接已就绪] 切号后将精准接力 {len(running_tasks)} 个运行中任务: {[t.get('title') for t in running_tasks]} (闲置会话 100% 保持静默)")
     else:
-        logger.info("⏭ [设置] 自动续接已关闭（可在启动器设置中开启）")
+        clear_pending_auto_resume()
+        logger.info("ℹ️ [智能断点雷达] 切号前所有任务均处于空闲状态，无需续接，切号后保持静默。")
 
     try:
         os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
@@ -3412,14 +2846,7 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     
     # 2. 剩余 5% 触发切号：按规则【只发桌面通知，不发飞书】
     notif_title = "Antigravity 额度预警 (剩余 <= 5%)"
-    active_names = []
-    if interrupted_panes:
-        for p in task_snapshot.get("panes", []):
-            if p.get("pane_index") in interrupted_panes:
-                active_names.append(p.get("title", f"列{p.get('pane_index')+1}"))
-    for t in running_sidebar_tasks:
-        if t.get("title") and t.get("title") not in active_names:
-            active_names.append(t.get("title"))
+    active_names = [t.get("title") for t in running_tasks if t.get("title")]
     if not active_names and target_title:
         active_names.append(target_title)
 
@@ -3505,17 +2932,14 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
     # 热重启成功时语言服务已就绪，等待时间可大幅缩短
     resume_wait_timeout = 45 if hot_restart_success else 180
     if should_resume:
-        logger.info("🎯 [步骤 5/5] 智能断点续接：正在等待语言服务就绪，定向接力未完成任务...")
+        logger.info(f"🎯 [步骤 5/5] 智能断点续接：正在等待语言服务就绪，定向接力 {len(running_tasks)} 个未完成任务...")
         resume_status = execute_auto_resume(
-            max_windows=max(task_snapshot.get("total_panes", 0), 4),
             text="继续",
             wait_timeout=resume_wait_timeout,
             exclude_pids=resume_exclude_pids,
             target_href=target_href,
-            interrupted_panes=interrupted_panes,
-            running_sidebar_tasks=running_sidebar_tasks,
-            full_url=task_snapshot.get("url"),
-            panes=task_snapshot.get("panes", [])
+            running_tasks=running_tasks,
+            full_url=task_snapshot.get("url")
         )
         if resume_status == "onboarding_login_page":
             logger.error(f"🛑 [自愈引擎严重告警] 账号 [{best_acc['email']}] 切入后反重力页面停留在新手登录页 (/onboarding?login=true)！证明该账号凭据已无效或被 Google 拒绝！")
@@ -3943,14 +3367,11 @@ def run_watch_daemon(threshold=5.0, interval=30):
     if pending_resume and is_antigravity_running():
         logger.info("发现切号后待自动续接的事务凭据，正在执行智能断点自愈接力...")
         execute_auto_resume(
-            max_windows=pending_resume.get("max_windows", 4),
             text=pending_resume.get("text", "继续"),
             wait_timeout=15,
             target_href=pending_resume.get("target_href"),
-            interrupted_panes=pending_resume.get("interrupted_panes"),
-            running_sidebar_tasks=pending_resume.get("running_sidebar_tasks"),
-            full_url=pending_resume.get("full_url"),
-            panes=pending_resume.get("panes")
+            running_tasks=pending_resume.get("running_tasks"),
+            full_url=pending_resume.get("full_url")
         )
     
     # 启动时若 Antigravity 正在运行，主动确保中文汉化包就绪
