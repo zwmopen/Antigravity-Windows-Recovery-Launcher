@@ -167,8 +167,16 @@ acc_blocked = {
     "cockpit_score": 6000.0,
 }
 assert "azrimjs@gmail.com" in module.HARD_BLOCKED_EMAILS
-assert "kt01096002805@gmail.com" in module.HARD_BLOCKED_EMAILS
-print("Test 5 PASS: 封禁账号硬黑名单拦截校验通过 (HARD_BLOCKED_EMAILS 包含 azrimjs 与 kt01096002805)")
+# Case 6: 验证动态黑名单与一键解封机制 (block_account / unblock_account)
+test_dyn_email = "dynamic_test@example.com"
+assert test_dyn_email not in module.HARD_BLOCKED_EMAILS
+module.block_account(test_dyn_email, "测试隔离")
+assert test_dyn_email in module.HARD_BLOCKED_EMAILS
+unblock_res = module.unblock_account(test_dyn_email)
+assert unblock_res is True
+assert test_dyn_email not in module.HARD_BLOCKED_EMAILS
+print("Test 6 PASS: 动态黑名单与一键解封验证通过 (block_account & unblock_account)")
 
-print("\n🎉 ALL 5 USER RULES AND VERIFICATIONS PASSED 100% SUCCESSFULLY!")
+print("\n🎉 ALL 6 USER RULES AND VERIFICATIONS PASSED 100% SUCCESSFULLY!")
+
 

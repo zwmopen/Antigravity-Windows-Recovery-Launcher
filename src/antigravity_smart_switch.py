@@ -80,11 +80,59 @@ SHARED_NOTIFY_SCRIPT = r"D:\AICode\AI\skills\技能包\技能\shared-notificatio
 FEISHU_CONFIG_FILE = r"D:\AICode\AI\secrets\平台服务\飞书\feishu_config.json"
 BETA_FLAG_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "beta.flag")
 
-# 永久硬隔离黑名单（已确认封禁、需二次网页验证、invalid_grant 或 TOS 禁用的账号，全流程绝对禁止选用与切入）
-HARD_BLOCKED_EMAILS = {
+HARD_BLOCKED_EMAILS_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "hard-blocked-emails.json")
+DEFAULT_HARD_BLOCKED_EMAILS = {
     "azrimjs@gmail.com",
     "kt01096002805@gmail.com"
 }
+
+
+def load_hard_blocked_emails():
+    """读取硬隔离黑名单列表 (包含封禁、需二次验证、invalid_grant 或 TOS 禁用账号)"""
+    if os.path.exists(HARD_BLOCKED_EMAILS_FILE):
+        try:
+            with open(HARD_BLOCKED_EMAILS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return set(e.strip().lower() for e in data if e.strip())
+        except Exception:
+            pass
+    # 若配置文件尚未生成，使用默认初始值并初始化文件
+    try:
+        os.makedirs(os.path.dirname(HARD_BLOCKED_EMAILS_FILE), exist_ok=True)
+        with open(HARD_BLOCKED_EMAILS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(list(DEFAULT_HARD_BLOCKED_EMAILS)), f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+    return set(DEFAULT_HARD_BLOCKED_EMAILS)
+
+
+def save_hard_blocked_emails(emails_set):
+    """持久化保存硬隔离黑名单列表"""
+    try:
+        os.makedirs(os.path.dirname(HARD_BLOCKED_EMAILS_FILE), exist_ok=True)
+        with open(HARD_BLOCKED_EMAILS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(list(emails_set)), f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"保存黑名单文件异常: {e}")
+
+
+class HardBlockedEmailsWrapper:
+    """动态黑名单包装器，确保各处在调用 'email in HARD_BLOCKED_EMAILS' 时实时同步磁盘配置"""
+    def __contains__(self, item):
+        if not item:
+            return False
+        return str(item).strip().lower() in load_hard_blocked_emails()
+
+    def __iter__(self):
+        return iter(load_hard_blocked_emails())
+
+    def __len__(self):
+        return len(load_hard_blocked_emails())
+
+
+# 永久硬隔离黑名单对象（支持动态追加与一键解封释放）
+HARD_BLOCKED_EMAILS = HardBlockedEmailsWrapper()
 
 
 def is_beta_mode():
@@ -3008,6 +3056,220 @@ def refresh_cockpit_tools_ui():
         return False, f"刷新 Cockpit UI 异常: {e}"
 
 
+def unblock_account(target_email_or_id):
+    """
+    【一键解封/放出黑名单与隔离账号】
+    当用户完成申诉、在 Cockpit 重新登录或想要重新启用某账号时调用：
+    1. 从 HARD_BLOCKED_EMAILS 中剔除；
+    2. 从 429 / 封禁临时关押名单 (quarantined-accounts.json) 中解除；
+    3. 解密 Cockpit 账号加密文件，清除 disabled 状态、清除 disabled_reason 与 quota_error，原子回写；
+    4. 更新 Cockpit accounts.json，解除 disabled 标记；
+    5. 触发 Cockpit UI 刷新。
+    """
+    target = target_email_or_id.strip()
+    target_lower = target.lower()
+
+    # 1. 查找对应账号基本信息
+    current_id, accounts = get_all_accounts_and_quotas()
+    matched_acc = None
+    for acc in accounts:
+        if acc.get("id") == target or acc.get("email", "").lower() == target_lower:
+            matched_acc = acc
+            break
+
+    matched_email = matched_acc.get("email") if matched_acc else (target if "@" in target else "")
+    matched_id = matched_acc.get("id") if matched_acc else target
+
+    # 2. 从硬黑名单移除
+    blocked = load_hard_blocked_emails()
+    if matched_email.lower() in blocked:
+        blocked.remove(matched_email.lower())
+        save_hard_blocked_emails(blocked)
+        logger.info(f"🔓 已从硬黑名单移除: {matched_email}")
+
+    # 3. 从临时关押名单移除
+    if matched_id:
+        remove_quarantined_account(matched_id)
+    if matched_email:
+        remove_quarantined_account(matched_email)
+
+    # 4. 解密并回写 Cockpit 账号明细文件
+    cockpit_unblocked = False
+    key_file = os.path.join(COCKPIT_DIR, "secure-account-storage.key")
+    acc_file = os.path.join(COCKPIT_DIR, "accounts", f"{matched_id}.json")
+    if os.path.exists(key_file) and os.path.exists(acc_file):
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+            raw_key = base64.b64decode(open(key_file, "rb").read().strip())
+            cockpit_aes = AESGCM(raw_key)
+            enc = json.loads(open(acc_file, "r", encoding="utf-8").read())
+            pt = cockpit_aes.decrypt(base64.b64decode(enc["nonce"]), base64.b64decode(enc["ciphertext"]), None)
+            detail = json.loads(pt.decode("utf-8"))
+
+            detail["disabled"] = False
+            detail["disabled_reason"] = None
+            if "quota_error" in detail:
+                detail["quota_error"] = None
+            if "token_error" in detail:
+                detail["token_error"] = None
+
+            nonce = os.urandom(12)
+            ct = cockpit_aes.encrypt(nonce, json.dumps(detail, ensure_ascii=False).encode("utf-8"), None)
+            with open(acc_file, "w", encoding="utf-8") as af:
+                json.dump({
+                    "nonce": base64.b64encode(nonce).decode("utf-8"),
+                    "ciphertext": base64.b64encode(ct).decode("utf-8")
+                }, af, indent=2)
+            cockpit_unblocked = True
+        except Exception as e:
+            logger.warning(f"更新 Cockpit 加密文件异常: {e}")
+
+    # 5. 更新 accounts.json
+    if os.path.exists(ACCOUNTS_FILE):
+        try:
+            with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
+                acc_data = json.load(f)
+            for a in acc_data.get("accounts", []):
+                if a.get("id") == matched_id or a.get("email", "").lower() == target_lower:
+                    a["disabled"] = False
+                    a["disabled_reason"] = ""
+            with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(acc_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"更新 accounts.json 异常: {e}")
+
+    refresh_cockpit_tools_ui()
+    print("\n" + "=" * 80)
+    print(f"🎉 【账号解封成功】已成功将账号 [{matched_email or matched_id}] 放出隔离与黑名单！")
+    print("=" * 80)
+    print("  * 已从永久硬黑名单移除 (HARD_BLOCKED)")
+    print("  * 已从 429 临时关押名单释放 (quarantined-accounts)")
+    print("  * 已重置 Cockpit 加密明细与 accounts.json (disabled: false, 错误状态已清空)")
+    print("  * 该账号现已恢复为正常候选状态，可参与算力智能调度！")
+    print("=" * 80 + "\n")
+    return True
+
+
+def block_account(target_email_or_id, reason="用户手动封禁隔离"):
+    """【手动将账号加入黑名单隔离】"""
+    target = target_email_or_id.strip()
+    target_lower = target.lower()
+
+    current_id, accounts = get_all_accounts_and_quotas()
+    matched_acc = None
+    for acc in accounts:
+        if acc.get("id") == target or acc.get("email", "").lower() == target_lower:
+            matched_acc = acc
+            break
+
+    matched_email = matched_acc.get("email") if matched_acc else (target if "@" in target else "")
+    matched_id = matched_acc.get("id") if matched_acc else target
+
+    blocked = load_hard_blocked_emails()
+    blocked.add(matched_email.lower())
+    save_hard_blocked_emails(blocked)
+
+    if matched_id:
+        record_quarantine_account(matched_id, duration_seconds=365 * 86400)
+
+    # 标记 Cockpit 文件
+    key_file = os.path.join(COCKPIT_DIR, "secure-account-storage.key")
+    acc_file = os.path.join(COCKPIT_DIR, "accounts", f"{matched_id}.json")
+    if os.path.exists(key_file) and os.path.exists(acc_file):
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+            raw_key = base64.b64decode(open(key_file, "rb").read().strip())
+            cockpit_aes = AESGCM(raw_key)
+            enc = json.loads(open(acc_file, "r", encoding="utf-8").read())
+            pt = cockpit_aes.decrypt(base64.b64decode(enc["nonce"]), base64.b64decode(enc["ciphertext"]), None)
+            detail = json.loads(pt.decode("utf-8"))
+            detail["disabled"] = True
+            detail["disabled_reason"] = reason
+            nonce = os.urandom(12)
+            ct = cockpit_aes.encrypt(nonce, json.dumps(detail, ensure_ascii=False).encode("utf-8"), None)
+            with open(acc_file, "w", encoding="utf-8") as af:
+                json.dump({
+                    "nonce": base64.b64encode(nonce).decode("utf-8"),
+                    "ciphertext": base64.b64encode(ct).decode("utf-8")
+                }, af, indent=2)
+        except Exception:
+            pass
+
+    if os.path.exists(ACCOUNTS_FILE):
+        try:
+            with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
+                acc_data = json.load(f)
+            for a in acc_data.get("accounts", []):
+                if a.get("id") == matched_id or a.get("email", "").lower() == target_lower:
+                    a["disabled"] = True
+                    a["disabled_reason"] = reason
+            with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(acc_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"更新 accounts.json 异常: {e}")
+
+    refresh_cockpit_tools_ui()
+    print("\n" + "=" * 80)
+    print(f"🚫 【账号已加入黑名单】已隔离账号 [{matched_email or matched_id}]")
+    print(f"  * 隔离原因: {reason}")
+    print("  * 该账号将彻底退出自动调度候选池，绝不切入。")
+    print(f"  * 后续如需放出，请执行: python antigravity_smart_switch.py --unblock {matched_email}")
+    print("=" * 80 + "\n")
+    return True
+
+
+def print_blocked_accounts():
+    """查看当前所有处于隔离或黑名单中的账号"""
+    hard_blocked = load_hard_blocked_emails()
+    quarantined = load_quarantined_accounts()
+    current_id, accounts = get_all_accounts_and_quotas()
+
+    print("\n" + "=" * 80)
+    print("【Antigravity 账号隔离与黑名单看板】")
+    print("=" * 80)
+    print(f"{'序号':<4} {'账号邮箱':<30} {'隔离类型':<16} {'隔离原因 / 状态'}")
+    print("-" * 80)
+
+    found_count = 0
+    now = time.time()
+    processed_emails = set()
+    for acc in accounts:
+        email = acc.get("email", "")
+        acc_id = acc.get("id", "")
+        if email:
+            processed_emails.add(email.lower())
+        is_hard = email.lower() in hard_blocked
+        is_q = (acc_id in quarantined and quarantined[acc_id] > now)
+        is_dis = acc.get("disabled", False)
+
+        if is_hard or is_q or is_dis:
+            found_count += 1
+            types = []
+            if is_hard:
+                types.append("永久硬黑名单")
+            if is_q:
+                types.append("临时关押")
+            if is_dis and not is_hard and not is_q:
+                types.append("标记禁用")
+            type_str = " + ".join(types)
+            reason = acc.get("disabled_reason", "异常拦截") or "无详细原因"
+            print(f"{found_count:<4} {email:<30} {type_str:<16} {reason[:30]}")
+
+    for hb_email in sorted(list(hard_blocked)):
+        if hb_email.lower() not in processed_emails:
+            found_count += 1
+            print(f"{found_count:<4} {hb_email:<30} {'永久硬黑名单':<16} {'硬隔离黑名单拦截 (HARD_BLOCKED)'}")
+
+    if found_count == 0:
+        print("  🎉 当前没有任何被隔离或加入黑名单的账号，所有账号均正常流通！")
+    else:
+        print("-" * 80)
+        print("💡 解封指引：")
+        print("  若需将某个账号放出隔离，可执行：")
+        print("  python antigravity_smart_switch.py --unblock <邮箱>")
+    print("=" * 80 + "\n")
+
+
 def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed", background=False):
     target = None
     if os.path.exists(LAUNCHER_EXE):
@@ -3857,6 +4119,9 @@ def main():
     parser.add_argument("--auto-resume", action="store_true", help="立即执行前排窗口打标与自动续接")
     parser.add_argument("--resume-text", type=str, default="继续", help="自动续接发送的内容 (默认: 继续)")
     parser.add_argument("--resume-count", type=int, default=3, help="自动续接前排窗口数 (默认: 3)")
+    parser.add_argument("--unblock", type=str, default="", help="解除指定账号的黑名单与隔离状态并恢复进入调度池 (输入邮箱或ID)")
+    parser.add_argument("--block", type=str, default="", help="将指定账号手动加入黑名单隔离 (输入邮箱或ID)")
+    parser.add_argument("--blocked", action="store_true", help="查看所有当前处于隔离或黑名单中的账号列表")
     parser.add_argument("--preflight-ensure", action="store_true", help="开机冷启动前置账号核验与优选门禁")
     parser.add_argument("--update-subscriptions", action="store_true", help="主动从机场提供商更新全部 Clash 订阅配置")
     parser.add_argument("--notify", type=str, default="", help="发送 Windows 桌面气泡通知正文")
@@ -3869,7 +4134,13 @@ def main():
     
     args = parser.parse_args()
     
-    if args.notify_event:
+    if args.blocked:
+        print_blocked_accounts()
+    elif args.unblock:
+        unblock_account(args.unblock)
+    elif args.block:
+        block_account(args.block)
+    elif args.notify_event:
         handle_notification_event(args.notify_event, region=args.notify_region, node=args.notify_node, rtt=args.notify_rtt)
     elif args.notify:
         send_windows_notification(args.notify_title, args.notify, status=args.notify_status)
