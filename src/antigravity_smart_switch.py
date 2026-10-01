@@ -199,6 +199,9 @@ def record_quarantine_account(account_id, duration_seconds=1800):
     """将触发 429 报错的账号加入临时关押名单，避免短时间内再次被优选"""
     try:
         data = load_quarantined_accounts()
+        # 降噪防抖：若该账号已在关押名单且剩余有效时间超过 1 小时，无需重复写盘和刷屏日志
+        if account_id in data and (data[account_id] - time.time() > 3600):
+            return
         expire_at = time.time() + duration_seconds
         data[account_id] = expire_at
         os.makedirs(os.path.dirname(QUARANTINE_ACCOUNTS_FILE), exist_ok=True)
@@ -547,13 +550,15 @@ def get_recent_brain_active_conversations(exclude_cids=None, max_age_seconds=180
                                 data = json.loads(last_line) if last_line else {}
                                 is_active = False
                                 # 严格判定未完成/运行中状态 (排除已经输出完文本等待人类输入的闲置会话)
-                                if data.get("type") == "PLANNER_RESPONSE" and bool(data.get("tool_calls")):
+                                if data.get("type") == "USER_INPUT":
                                     is_active = True
-                                elif data.get("type") == "GENERIC" and age < 60:
+                                elif data.get("status") and data.get("status") != "DONE":
                                     is_active = True
-                                elif data.get("source") == "system" and "server restart" in str(data.get("content", "")):
+                                elif data.get("source") == "system" and "server restart" in str(data.get("content", "")).lower():
                                     is_active = True
-                                elif data.get("source") == "MODEL" and not data.get("content") and age < 45:
+                                elif data.get("type") == "ERROR_MESSAGE" and age < 120:
+                                    is_active = True
+                                elif data.get("type") == "PLANNER_RESPONSE" and bool(data.get("tool_calls")) and age < 60:
                                     is_active = True
 
                                 if is_active:
@@ -602,31 +607,47 @@ def snapshot_active_and_running_tasks():
                     const search = window.location.search || '';
                     const relativeUrl = (urlPath || '/c') + search;
 
-                    // 1. 嗅探当前前台主会话是否正在运行 (Stop 按钮或加载中 Spinner)
+                    // 1. 嗅探当前前台主会话是否正在运行 (精准排除 opacity-0 假阳性与侧边栏常驻 Stop 按钮)
+                    function isVisible(el) {
+                        if (!el || el.offsetParent === null) return false;
+                        const r = el.getBoundingClientRect();
+                        if (r.width === 0 || r.height === 0) return false;
+                        const cs = window.getComputedStyle(el);
+                        if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') <= 0.05) return false;
+                        if (el.closest('.opacity-0')) return false;
+                        let cur = el.parentElement;
+                        while (cur && cur !== document.body) {
+                            const pcs = window.getComputedStyle(cur);
+                            if (pcs.display === 'none' || pcs.visibility === 'hidden' || parseFloat(pcs.opacity || '1') <= 0.05) return false;
+                            cur = cur.parentElement;
+                        }
+                        return true;
+                    }
+
                     let currentIsRunning = false;
-                    const stopButtons = Array.from(document.querySelectorAll('button')).filter(b => {
-                        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                        const testid = (b.getAttribute('data-testid') || '').toLowerCase();
-                        const text = (b.innerText || '').trim().toLowerCase();
-                        if (aria.includes('固定') || aria.includes('pin') || testid.includes('pin')) return false;
-                        const isStop = testid === 'stop-button' ||
-                                       aria.includes('stop') ||
-                                       aria.includes('停止') ||
-                                       (aria.includes('取消') && !aria.includes('固定')) ||
-                                       text.includes('stop') ||
-                                       text.includes('停止');
-                        const r = b.getBoundingClientRect();
-                        return isStop && r.width > 0 && r.height > 0 && b.offsetParent !== null;
+                    const inputContainer = document.querySelector('[data-testid="agent-input-box"], form');
+                    if (inputContainer) {
+                        const stops = Array.from(inputContainer.querySelectorAll('button')).filter(b => {
+                            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                            const testid = (b.getAttribute('data-testid') || '').toLowerCase();
+                            const txt = (b.innerText || '').trim().toLowerCase();
+                            const isStop = testid === 'stop-button' || aria.includes('stop') || aria.includes('停止') || txt.includes('停止');
+                            return isStop && isVisible(b);
+                        });
+                        if (stops.length > 0) {
+                            currentIsRunning = true;
+                        }
+                    }
+
+                    const mainGenerating = Array.from(document.querySelectorAll('[data-is-generating="true"], .animate-spin')).filter(el => {
+                        const r = el.getBoundingClientRect();
+                        return r.left >= 200 && isVisible(el) && !el.closest('aside, nav, [data-testid*="sidebar"]');
                     });
-                    const paneSpins = Array.from(document.querySelectorAll('.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"]')).filter(s => {
-                        const r = s.getBoundingClientRect();
-                        return r.width > 0 && r.left >= 250; // 仅限主区域
-                    });
-                    if (stopButtons.length > 0 || paneSpins.length > 0) {
+                    if (mainGenerating.length > 0) {
                         currentIsRunning = true;
                     }
 
-                    // 2. 嗅探侧边栏中所有处于转圈态的后台任务
+                    // 2. 嗅探侧边栏中真正处于转圈态的后台任务
                     const sidebarRows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
                     const spinningSidebarTasks = [];
                     let activeSidebarTitle = document.title || '';
@@ -636,7 +657,8 @@ def snapshot_active_and_running_tasks():
                         const href = a ? (a.getAttribute('href') || '') : '';
                         const titleDiv = r.querySelector('.truncate');
                         const title = titleDiv ? titleDiv.innerText.trim() : (r.innerText.split('\\n')[0] || '').trim();
-                        const isSpinning = !!r.querySelector('.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"], [class*="spin"]');
+                        const spinner = r.querySelector('.animate-spin, svg.lucide-loader, svg.lucide-loader-2, [data-is-generating="true"], [class*="spin"]');
+                        const isSpinning = spinner && isVisible(spinner);
 
                         if ((href && url.includes(href)) || r.classList.contains('bg-sidebar-secondary')) {
                             if (title) activeSidebarTitle = title;
@@ -920,6 +942,94 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     if resp.get("id") == seq:
                         return resp
 
+            async def submit_and_verify(task_name="主会话", max_wait_sec=6.0):
+                """通过原生 Enter 键序列 + 物理坐标点击 + 严格闭环验证循环，确保任务真正提交并进入生成态"""
+                # 1. 尝试全量 CDP 原生 Enter 键序列 (携带标准 key/code 与 text)
+                try:
+                    await cdp_call("Input.dispatchKeyEvent", {
+                        "type": "rawKeyDown",
+                        "windowsVirtualKeyCode": 13,
+                        "nativeVirtualKeyCode": 13,
+                        "key": "Enter",
+                        "code": "Enter",
+                        "unmodifiedText": "\r",
+                        "text": "\r"
+                    })
+                    await cdp_call("Input.dispatchKeyEvent", {
+                        "type": "char",
+                        "text": "\r",
+                        "unmodifiedText": "\r"
+                    })
+                    await cdp_call("Input.dispatchKeyEvent", {
+                        "type": "keyUp",
+                        "windowsVirtualKeyCode": 13,
+                        "nativeVirtualKeyCode": 13,
+                        "key": "Enter",
+                        "code": "Enter",
+                        "unmodifiedText": "\r",
+                        "text": "\r"
+                    })
+                except Exception as e:
+                    logger.debug(f"CDP 派发 Enter 按键序列异常: {e}")
+
+                # 2. 尝试 DOM 与物理坐标双重点击发送按钮
+                click_send_js = """
+                (() => {
+                    const btn = document.querySelector('button[data-testid="send-button"], [data-testid="agent-input-box"] button[aria-label*="Send" i], [data-testid="agent-input-box"] button[aria-label*="发送" i]');
+                    if (btn && !btn.disabled) {
+                        const r = btn.getBoundingClientRect();
+                        btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                        btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                        btn.click();
+                        return { clicked: true, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                    }
+                    return { clicked: false };
+                })()
+                """
+                click_res = await cdp_call("Runtime.evaluate", {"expression": click_send_js, "returnByValue": True})
+                click_val = click_res.get("result", {}).get("result", {}).get("value") or {}
+                if click_val.get("x") and click_val.get("y"):
+                    try:
+                        bx, by = float(click_val["x"]), float(click_val["y"])
+                        await cdp_call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": bx, "y": by})
+                        await cdp_call("Input.dispatchMouseEvent", {"type": "mousePressed", "button": "left", "clickCount": 1, "x": bx, "y": by})
+                        await asyncio.sleep(0.05)
+                        await cdp_call("Input.dispatchMouseEvent", {"type": "mouseReleased", "button": "left", "clickCount": 1, "x": bx, "y": by})
+                    except Exception as e:
+                        logger.debug(f"派发物理鼠标点击异常: {e}")
+
+                # 3. 严格实机闭环状态校验循环 (最多轮询 max_wait_sec 秒)
+                verify_js = """
+                (() => {
+                    const ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
+                    const txt = ed ? (ed.innerText || '').trim() : '';
+                    const stopBtn = document.querySelector('button[data-testid="stop-button"], [data-testid="agent-input-box"] button[aria-label*="Stop" i], [data-testid="agent-input-box"] button[aria-label*="停止" i]');
+                    const isGenerating = !!document.querySelector('[data-is-generating="true"]');
+                    const hasStop = !!(stopBtn && !stopBtn.disabled && stopBtn.offsetParent !== null && !stopBtn.closest('.opacity-0'));
+                    return {
+                        isEmpty: txt.length === 0,
+                        hasStop: hasStop,
+                        isGenerating: isGenerating,
+                        currentText: txt
+                    };
+                })()
+                """
+                start_v = time.time()
+                last_v = {}
+                while time.time() - start_v < max_wait_sec:
+                    await asyncio.sleep(0.4)
+                    v_res = await cdp_call("Runtime.evaluate", {"expression": verify_js, "returnByValue": True})
+                    last_v = v_res.get("result", {}).get("result", {}).get("value") or {}
+                    if last_v.get("isEmpty") or last_v.get("hasStop") or last_v.get("isGenerating"):
+                        logger.info(f"✅ [{task_name}] 物理闭环验证成功！(输入框清空={last_v.get('isEmpty')}, 停止按钮亮起={last_v.get('hasStop')}, 生成中={last_v.get('isGenerating')})")
+                        return True
+                    # 若 1.6 秒后仍未清空且未进入生成态，补触一次发送按钮
+                    if time.time() - start_v >= 1.6:
+                        await cdp_call("Runtime.evaluate", {"expression": click_send_js, "returnByValue": True})
+
+                logger.warning(f"⚠️ [{task_name}] 续接提交未能闭环验证 (文本残留: '{last_v.get('currentText', '')[:25]}')，请人工确认！")
+                return False
+
             # 检查当前页面健康度
             try:
                 chk_res = await cdp_call("Runtime.evaluate", {
@@ -970,7 +1080,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     align_res = await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
                     if align_res.get("result", {}).get("result", {}).get("value"):
                         logger.info(f"🧭 [会话对齐] 正在对齐恢复切号前真实工作会话 ({target_rel})...")
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(2.5)
 
             # 若前台任务切号前确实在运行，向前台派发“继续”
             if current_tasks:
@@ -981,15 +1091,15 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 prep_front_js = f"""
                 (async () => {{
                     let ed = null;
-                    for (let r = 0; r < 20; r++) {{
+                    for (let r = 0; r < 30; r++) {{
                         ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
-                        if (ed) break;
+                        if (ed && ed.offsetParent !== null) break;
                         await new Promise(res => setTimeout(res, 250));
                     }}
                     if (!ed) return {{ status: "no_editor" }};
 
-                    const stopBtn = document.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
-                    if (stopBtn && !{json.dumps(bool(force_send))}) return {{ status: "already_generating" }};
+                    const stopBtn = document.querySelector('button[data-testid="stop-button"], [data-testid="agent-input-box"] button[aria-label*="Stop" i], [data-testid="agent-input-box"] button[aria-label*="停止" i]');
+                    if (stopBtn && !stopBtn.disabled && stopBtn.offsetParent !== null && !stopBtn.closest('.opacity-0') && !{json.dumps(bool(force_send))}) return {{ status: "already_generating" }};
 
                     ed.focus();
                     try {{
@@ -1028,14 +1138,15 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         await cdp_call("Input.insertText", {"text": str(text)})
                         logger.info(f"已向前台主会话键入 '{text}'，等待 {wait_enter_sec:.1f} 秒沉淀后提交...")
                         await asyncio.sleep(wait_enter_sec)
+                    elif p_status == "ready_has_text":
+                        logger.info(f"前台主会话已存在 '{text}'，直接执行闭环提交验证...")
+                        await asyncio.sleep(0.5)
                     else:
                         logger.info(f"前台主会话检测到已有草稿，等待 {wait_enter_sec:.1f} 秒沉淀后提交...")
                         await asyncio.sleep(wait_enter_sec)
 
-                    await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                    await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                    logger.info(f"✅ 前台主会话 [{t_title}] 成功发送 '{text}' 续接！")
-                    results.append({"title": t_title, "success": True, "text": text, "is_current": True})
+                    is_ok = await submit_and_verify(t_title, max_wait_sec=6.0)
+                    results.append({"title": t_title, "success": is_ok, "text": text, "is_current": True, "verified": is_ok})
                     if c_task.get("href"):
                         resumed_hrefs.add(normalize_target_path(c_task["href"]))
                     await asyncio.sleep(0.5)
@@ -1063,20 +1174,20 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     }})()
                     """
                     await cdp_call("Runtime.evaluate", {"expression": nav_js})
-                    await asyncio.sleep(1.8)
+                    await asyncio.sleep(2.5)
 
                     type_and_send_js = f"""
                     (async () => {{
                         let ed = null;
-                        for (let r = 0; r < 15; r++) {{
+                        for (let r = 0; r < 25; r++) {{
                             ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
-                            if (ed) break;
+                            if (ed && ed.offsetParent !== null) break;
                             await new Promise(res => setTimeout(res, 200));
                         }}
                         if (!ed) return {{ status: "no_editor" }};
 
-                        const stopBtn = document.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="取消" i], button[data-testid="stop-button"], button[aria-label*="Cancel" i]');
-                        if (stopBtn && !{json.dumps(bool(force_send))}) return {{ status: "already_generating" }};
+                        const stopBtn = document.querySelector('button[data-testid="stop-button"], [data-testid="agent-input-box"] button[aria-label*="Stop" i], [data-testid="agent-input-box"] button[aria-label*="停止" i]');
+                        if (stopBtn && !stopBtn.disabled && stopBtn.offsetParent !== null && !stopBtn.closest('.opacity-0') && !{json.dumps(bool(force_send))}) return {{ status: "already_generating" }};
 
                         ed.focus();
                         try {{
@@ -1103,10 +1214,8 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     elif t_val.get("status") == "ready":
                         await cdp_call("Input.insertText", {"text": str(text)})
                         await asyncio.sleep(wait_enter_sec)
-                        await cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                        await cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "unmodifiedText": "\r", "text": "\r"})
-                        logger.info(f"✅ 侧边栏任务 [{s_title}] 成功补发 '{text}' 续接！")
-                        results.append({"title": s_title, "success": True, "text": text, "sidebar": True})
+                        is_ok = await submit_and_verify(s_title, max_wait_sec=6.0)
+                        results.append({"title": s_title, "success": is_ok, "text": text, "sidebar": True, "verified": is_ok})
                         resumed_hrefs.add(s_href)
                         await asyncio.sleep(0.8)
 
@@ -3001,14 +3110,22 @@ def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
             # 4. 自动故障转移：立即强制切下一个健康账号！
             return run_smart_switch(threshold=threshold, force=True)
     else:
-        logger.info("⏭ [步骤 5/5] 自动续接已关闭，跳过发送'继续'（可在启动器设置中开启）")
+        if not _auto_resume_enabled:
+            logger.info("⏭ [步骤 5/5] 用户已在启动器设置中关闭自动续接，跳过发送'继续'")
+        else:
+            logger.info("ℹ️ [步骤 5/5] 切号前会话均处于空闲状态，无需发送'继续'无缝接力（自动断点雷达待命中）")
     clear_pending_switch()
     reset_language_server_log_pos()
 
     # 6. 切换成功：按规则【发桌面也发飞书】
     mode_desc = "无缝热重启（编辑器窗口未关闭）" if hot_restart_success else "完整重启"
     succ_title = "Antigravity 切换成功"
-    resume_desc = "智能断点任务已自动发送'继续'无缝接力！" if should_resume else "自动续接已关闭"
+    if should_resume:
+        resume_desc = f"智能断点任务 ({len(running_tasks)}个) 已自动发送'继续'无缝接力！"
+    elif not _auto_resume_enabled:
+        resume_desc = "自动续接已手动关闭"
+    else:
+        resume_desc = "切号前会话均为空闲态，无需续接（自动接力待命中）"
     succ_msg = (
         f"✅ 账号已成功切换至: {best_acc['email']}\n"
         f"🔥 切换模式: {mode_desc}\n"
