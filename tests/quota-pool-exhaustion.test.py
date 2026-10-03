@@ -33,6 +33,10 @@ def account(account_id, weekly, five_hour=100.0, *, current=False, disabled=Fals
 
 
 module = load_module()
+assert module.is_transient_quota_transport_error("Network error: error sending request for url (http)")
+assert module.is_transient_quota_transport_error("HTTPS proxy error: connection timed out")
+assert not module.is_transient_quota_transport_error("invalid_grant: reauthentication required")
+assert not module.is_transient_quota_transport_error("account suspended for terms violation")
 notifications = []
 incidents = []
 module.send_windows_notification = lambda title, message, **kwargs: notifications.append((title, message)) or True
@@ -91,6 +95,7 @@ try:
 except RuntimeError as re:
     assert (
         "当前所有备选账号的 5小时或周额度均已耗尽" in str(re)
+        or "全池备选账号周额度均已低于或等于 5.0%" in str(re)
         or "全池备选账号周额度均已低于 5.0%" in str(re)
     )
 

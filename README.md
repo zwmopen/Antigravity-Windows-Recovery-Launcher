@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-v2.9.1-blue.svg" alt="版本 v2.9.1" />
+  <img src="https://img.shields.io/badge/版本-v2.9.4-blue.svg" alt="版本 v2.9.4" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线沙盒-127.0.0.1:17897-teal.svg" alt="专线沙盒" />
   <img src="https://img.shields.io/badge/算力调度-四级智能优先级-orange.svg" alt="算力调度" />
@@ -211,6 +211,10 @@ Google Antigravity 的周额度按固定周期刷新，**未用完的额度到�
 
 | 日期 (时间) | 执行者 | 记录 |
 |---|---|---|
-| 2026-10-01 08:35 | 反重力 | 全面重构中文 README.md：定位为全能启动器与自愈引擎全局说明书，有机融合五大核心支柱与解封体系 (v2.9.1) |
+| 2026-10-01 08:35 | 反重力 | 全面重构中文 README.md：定位为全能启动器与自愈引擎全局说明书，有机融合五大核心支柱与解封体系 (v2.9.4) |
 | 2026-09-18 23:41 | 反重力 | make antigravity cold startup enterable before login |
 | 2026-09-17 23:11 | 💻 本地 PC / 反重力 | 初始化创建文档并补齐变更记录历史 |
+
+## 2026-10-03 切号维护
+
+算力中心优先调用本机已安装的切号组件。手动按钮、后台守护与启动器通过同一 account-switch.lock 排他执行；COCK 原生自动切号保持关闭，由启动器守护负责自动调度。临时额度查询网络错误不再禁用账号；日志轮转被其他进程占用时继续追加，日志可能暂时超过大小上限。COCK 自身直接手动切号不经过此锁，维护时应避免同时使用多个手动入口。

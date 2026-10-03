@@ -225,10 +225,20 @@ def remove_quarantined_account(account_id):
         logger.debug(f"解除关押账号异常: {e}")
 
 
+class SharedRotatingFileHandler(RotatingFileHandler):
+    """Keep writing when another Windows process holds the rollover file."""
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError:
+            if self.stream is None:
+                self.stream = self._open()
+
+
 # 全局文件日志：确保无论 CLI 测试、脚本调用还是后台守护，日志均可落盘
 try:
     os.makedirs(os.path.dirname(DAEMON_LOG_FILE), exist_ok=True)
-    _shared_file_handler = RotatingFileHandler(DAEMON_LOG_FILE, maxBytes=1024 * 1024, backupCount=2, encoding="utf-8")
+    _shared_file_handler = SharedRotatingFileHandler(DAEMON_LOG_FILE, maxBytes=1024 * 1024, backupCount=2, encoding="utf-8", delay=True)
     _shared_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
     logger.addHandler(_shared_file_handler)
 except Exception:
@@ -1503,15 +1513,28 @@ def get_all_accounts_and_quotas():
                         err_msg = f"{err_obj.get('reason', '')} {err_obj.get('message', '')} {err_obj.get('code', '')}".strip()
                     else:
                         err_msg = str(err_obj)
-                    is_special = True
                     err_lower = err_msg.lower()
-                    if any(k in err_lower for k in ["appeal", "申诉", "tos_violation"]):
+                    # Quota refresh transport failures are not proof that the
+                    # Google account needs re-authentication. Cockpit can
+                    # persist errors such as "Network error: error sending
+                    # request for url (http)" in quota_error; treating every
+                    # error object as account-invalid disables the entire pool
+                    # during a transient network outage.
+                    transient_transport_error = is_transient_quota_transport_error(err_lower)
+                    if transient_transport_error:
+                        is_special = False
+                        special_reason = ""
+                    elif any(k in err_lower for k in ["appeal", "申诉", "tos_violation"]):
+                        is_special = True
                         special_reason = f"需申诉 / 违规限制 ({err_msg[:50]})"
                     elif any(k in err_lower for k in ["verify", "verification", "需验证", "reauth", "consent"]):
+                        is_special = True
                         special_reason = f"需网页验证 / 重新授权 ({err_msg[:50]})"
                     elif any(k in err_lower for k in ["suspended", "banned", "封禁", "冻结", "locked"]):
+                        is_special = True
                         special_reason = f"已封禁 / 账号冻结 ({err_msg[:50]})"
                     else:
+                        is_special = True
                         special_reason = f"需网页验证 / 异常拦截 ({err_msg[:50]})"
                 elif disabled:
                     is_special = True
@@ -1728,6 +1751,16 @@ def get_all_accounts_and_quotas():
             pass
 
     return current_id, results
+
+
+def is_transient_quota_transport_error(error_text):
+    """Transport failures during quota refresh must not disable an account."""
+    lowered = str(error_text or "").lower()
+    return any(marker in lowered for marker in (
+        "network error", "error sending request", "connection reset",
+        "connection refused", "timed out", "timeout", "dns",
+        "tls handshake", "proxy error", "temporarily unavailable",
+    ))
 
 
 def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=None):
@@ -2898,6 +2931,18 @@ def launch_antigravity_via_launcher(recovery_reason="cockpit_account_changed", b
 
 
 def run_smart_switch(threshold=5.0, target=None, dry_run=False, force=False):
+    # All launcher, dashboard and daemon callers share this cross-process lock.
+    lock = AutoResumeLock(os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "account-switch.lock"))
+    if not lock.acquire():
+        logger.info("已有反重力切号正在执行，本次请求跳过。")
+        return "busy"
+    try:
+        return _run_smart_switch_locked(threshold, target, dry_run, force)
+    finally:
+        lock.release()
+
+
+def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=False):
     current_id, accounts = get_all_accounts_and_quotas()
     curr_acc = next((a for a in accounts if a["is_current"]), None)
     curr_email = curr_acc["email"] if curr_acc else "未知"
