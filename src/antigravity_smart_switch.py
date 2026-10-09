@@ -1426,14 +1426,17 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
 
 def load_cockpit_server_info():
     if not os.path.exists(SERVER_FILE):
-        raise FileNotFoundError(f"Cockpit server.json 未找到: {SERVER_FILE} (Cockpit Tools 是否已运行?)")
-    with open(SERVER_FILE, "r", encoding="utf-8-sig") as f:
-        data = json.load(f)
-    return {
-        "ws_port": data.get("ws_port", 19528),
-        "auth_token": data.get("auth_token", ""),
-        "pid": data.get("pid", 0)
-    }
+        return None
+    try:
+        with open(SERVER_FILE, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+        return {
+            "ws_port": data.get("ws_port", 19528),
+            "auth_token": data.get("auth_token", ""),
+            "pid": data.get("pid", 0)
+        }
+    except Exception:
+        return None
 
 
 def get_all_accounts_and_quotas():
@@ -1498,7 +1501,7 @@ def get_all_accounts_and_quotas():
                 if email.lower() in HARD_BLOCKED_EMAILS:
                     is_special = True
                     special_reason = "永久封禁/失效账号硬黑名单拦截 (HARD_BLOCKED)"
-                elif detail.get("disabled"):
+                elif detail.get("disabled") and not is_transient_quota_transport_error(str(detail.get("disabled_reason") or "").lower()):
                     is_special = True
                     special_reason = detail.get("disabled_reason") or "账号已标记禁用"
                 elif not token_info or (not token_info.get("access_token") and not token_info.get("refresh_token")):
@@ -1536,7 +1539,7 @@ def get_all_accounts_and_quotas():
                     else:
                         is_special = True
                         special_reason = f"需网页验证 / 异常拦截 ({err_msg[:50]})"
-                elif disabled:
+                elif disabled and not is_transient_quota_transport_error(str(disabled_reason or "").lower()):
                     is_special = True
                     special_reason = disabled_reason or "账号已禁用"
                 else:
@@ -1557,8 +1560,13 @@ def get_all_accounts_and_quotas():
                             ct = cockpit_aes.encrypt(nonce, json.dumps(detail, ensure_ascii=False).encode("utf-8"), None)
                             with open(acc_file, "w", encoding="utf-8") as af:
                                 json.dump({
+                                    "version": enc.get("version", 1),
+                                    "kind": enc.get("kind", "antigravity"),
+                                    "algorithm": enc.get("algorithm", "AES-256-GCM"),
+                                    "key_id": enc.get("key_id", "local-secure-account-storage-v1"),
                                     "nonce": base64.b64encode(nonce).decode("utf-8"),
-                                    "ciphertext": base64.b64encode(ct).decode("utf-8")
+                                    "ciphertext": base64.b64encode(ct).decode("utf-8"),
+                                    "encrypted_at": int(time.time())
                                 }, af, indent=2)
                         except Exception:
                             pass
@@ -2468,58 +2476,67 @@ def write_antigravity_windows_credential(account_id):
 
 async def switch_account_via_websocket(server_info, target_account_id, timeout=25.0):
     if not websockets:
-        raise ImportError("未安装 websockets 库")
+        logger.warning("未安装 websockets 库，跳过 WebSocket 切号")
+        return False
     
-    ws_port = server_info["ws_port"]
-    auth_token = server_info["auth_token"]
+    if not server_info:
+        logger.warning("未获取到 Cockpit server_info，跳过 WebSocket 切号")
+        return False
+    
+    ws_port = server_info.get("ws_port", 19528)
+    auth_token = server_info.get("auth_token", "")
     ws_url = f"ws://127.0.0.1:{ws_port}?token={auth_token}"
     
     logger.info(f"正在连接 Cockpit WebSocket 接口: ws://127.0.0.1:{ws_port} ...")
-    async with websockets.connect(ws_url) as ws:
-        ready_msg = await asyncio.wait_for(ws.recv(), timeout=3.0)
-        ready_data = json.loads(ready_msg)
-        if ready_data.get("type") != "event.ready":
-            logger.warning(f"收到非预期的握手消息: {ready_msg}")
-        
-        req_id = f"smart_switch_{int(time.time() * 1000)}"
-        payload = {
-            "type": "request.switch_account",
-            "payload": {
-                "request_id": req_id,
-                "account_id": target_account_id
+    try:
+        async with websockets.connect(ws_url, open_timeout=4.0) as ws:
+            ready_msg = await asyncio.wait_for(ws.recv(), timeout=3.0)
+            ready_data = json.loads(ready_msg)
+            if ready_data.get("type") != "event.ready":
+                logger.warning(f"收到非预期的握手消息: {ready_msg}")
+            
+            req_id = f"smart_switch_{int(time.time() * 1000)}"
+            payload = {
+                "type": "request.switch_account",
+                "payload": {
+                    "request_id": req_id,
+                    "account_id": target_account_id
+                }
             }
-        }
-        
-        logger.info(f"正在发送切号指令 (target_id={target_account_id}) ...")
-        await ws.send(json.dumps(payload))
-        
-        start_t = time.time()
-        while time.time() - start_t < timeout:
-            # 1. 优先瞬时核验 accounts.json (Cockpit 通常在 1.5~2.5 秒内完成落盘)
-            try:
-                if os.path.exists(ACCOUNTS_FILE):
-                    with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
-                        curr = json.load(f).get("current_account_id")
-                        if curr == target_account_id:
-                            logger.info("校验 accounts.json 确认当前账号已更新成功！")
-                            return True
-            except Exception:
-                pass
+            
+            logger.info(f"正在发送切号指令 (target_id={target_account_id}) ...")
+            await ws.send(json.dumps(payload))
+            
+            start_t = time.time()
+            while time.time() - start_t < timeout:
+                # 1. 优先瞬时核验 accounts.json (Cockpit 通常在 1.5~2.5 秒内完成落盘)
+                try:
+                    if os.path.exists(ACCOUNTS_FILE):
+                        with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
+                            curr = json.load(f).get("current_account_id")
+                            if curr == target_account_id:
+                                logger.info("校验 accounts.json 确认当前账号已更新成功！")
+                                return True
+                except Exception:
+                    pass
 
-            # 2. 接收 WebSocket 广播消息
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=1.5)
-                data = json.loads(raw)
-                msg_type = data.get("type", "")
-                if msg_type in ("event.account_switched", "response.plugin_switch_account", "response.success"):
-                    logger.info("Cockpit 已确认凭据写入完成！")
-                    return True
-                elif msg_type in ("event.switch_error", "response.error"):
-                    err = data.get("payload", {}).get("error", "未知错误")
-                    logger.error(f"Cockpit 切号报错: {err}")
-                    return False
-            except asyncio.TimeoutError:
-                pass
+                # 2. 接收 WebSocket 广播消息
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=1.5)
+                    data = json.loads(raw)
+                    msg_type = data.get("type", "")
+                    if msg_type in ("event.account_switched", "response.plugin_switch_account", "response.success"):
+                        logger.info("Cockpit 已确认凭据写入完成！")
+                        return True
+                    elif msg_type in ("event.switch_error", "response.error"):
+                        err = data.get("payload", {}).get("error", "未知错误")
+                        logger.error(f"Cockpit 切号报错: {err}")
+                        return False
+                except asyncio.TimeoutError:
+                    pass
+    except Exception as e:
+        logger.warning(f"Cockpit WebSocket 交互异常或端口拒绝连接 ({e})，将平滑回退至系统凭据原子直写")
+        return False
     
     # 超时后最终兜底核验
     try:
@@ -2731,8 +2748,13 @@ def unblock_account(target_email_or_id):
             ct = cockpit_aes.encrypt(nonce, json.dumps(detail, ensure_ascii=False).encode("utf-8"), None)
             with open(acc_file, "w", encoding="utf-8") as af:
                 json.dump({
+                    "version": enc.get("version", 1),
+                    "kind": enc.get("kind", "antigravity"),
+                    "algorithm": enc.get("algorithm", "AES-256-GCM"),
+                    "key_id": enc.get("key_id", "local-secure-account-storage-v1"),
                     "nonce": base64.b64encode(nonce).decode("utf-8"),
-                    "ciphertext": base64.b64encode(ct).decode("utf-8")
+                    "ciphertext": base64.b64encode(ct).decode("utf-8"),
+                    "encrypted_at": int(time.time())
                 }, af, indent=2)
             cockpit_unblocked = True
         except Exception as e:
@@ -2803,8 +2825,13 @@ def block_account(target_email_or_id, reason="用户手动封禁隔离"):
             ct = cockpit_aes.encrypt(nonce, json.dumps(detail, ensure_ascii=False).encode("utf-8"), None)
             with open(acc_file, "w", encoding="utf-8") as af:
                 json.dump({
+                    "version": enc.get("version", 1),
+                    "kind": enc.get("kind", "antigravity"),
+                    "algorithm": enc.get("algorithm", "AES-256-GCM"),
+                    "key_id": enc.get("key_id", "local-secure-account-storage-v1"),
                     "nonce": base64.b64encode(nonce).decode("utf-8"),
-                    "ciphertext": base64.b64encode(ct).decode("utf-8")
+                    "ciphertext": base64.b64encode(ct).decode("utf-8"),
+                    "encrypted_at": int(time.time())
                 }, af, indent=2)
         except Exception:
             pass
@@ -3049,8 +3076,13 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     # （反重力保持运行！绝不提前杀窗口。若切号失败，反重力完好无损）
     # =========================================================================
     logger.info(f"⚡ [步骤 1/5] 先切号：向 Cockpit Tools 发送切号指令至目标账号 [{best_acc['email']}] (反重力保持运行中)...")
-    server_info = load_cockpit_server_info()
-    ok = asyncio.run(switch_account_via_websocket(server_info, best_acc["id"]))
+    ok = False
+    try:
+        server_info = load_cockpit_server_info()
+        ok = asyncio.run(switch_account_via_websocket(server_info, best_acc["id"]))
+    except Exception as e:
+        logger.warning(f"Cockpit Tools WebSocket 交互异常 ({e})，正在执行 Windows 原生系统凭据原子直写兜底...")
+        ok = False
     if not ok:
         logger.warning("Cockpit Tools WebSocket 未返回确认，正在执行 Windows 原生系统凭据原子直写兜底...")
 
