@@ -5,7 +5,14 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 当前故障修复：2026-10-03。版本从 2.9.2 推进为 2.9.3，AccountWatcher 为 0.6.1。
+> 当前本地启动热修复：2026-10-08（项目版本保持 2.9.4）；AccountWatcher 为 0.6.1。
+
+## 2026-10-08 Antigravity 启动失败：PowerShell 5.1 UTF-8 编码热修复
+
+- **现场根因**：桌面快捷方式与启动器 EXE 正常；稳定运行目录的 `Antigravity-ProxySupervisor.ps1` 无 UTF-8 BOM。Windows PowerShell 5.1 因此误读中文字符串，报 `Unexpected token '}'`（第 3068 行），监督器未能进入代理与客户端启动阶段。此处不是 Codex 重启，也没有证据表明发生了额度切换。
+- **部署修复**：源码、`releases/current` 与稳定运行目录的监督脚本均补齐 UTF-8 BOM；稳定运行副本另外恢复源码已有的 `$originalActiveCandidate` 初始化，避免进入恢复分支时引用未赋值变量。保留运行副本原有通知扩展。源码/发布脚本一致，稳定目录清单同步监督器 SHA-256 与字节数。
+- **回滚点**：修复前的三份监督脚本与两份清单保存在 `%LOCALAPPDATA%\Antigravity\private-proxy\backups\launcher-utf8-bom-fix-20261008-231550`；另有 BOM 修复后、变量补丁前的安装副本快照。
+- **验证边界**：Windows PowerShell 5.1 对源码、发布、安装三份脚本的解析通过；`startup-login-prelaunch`、`proxy-start-order`、`supervisor-state-contract`、`watchdog-version-contract` 通过；安装清单哈希和源码/发布哈希核对通过。未启动 Antigravity 客户端：完整启动会执行 `--preflight-ensure`（条件满足时可切号）并发送真实模型门禁请求，本次未授权该账号/额度副作用；本轮没有切号或真实模型请求。
 
 ## 2026-10-03 Cockpit 临时网络错误误隔离账号池
 

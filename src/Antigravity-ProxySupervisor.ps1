@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$TargetNodeOverride = '',
     [string]$ExpectedEgressCountryOverride = '',
@@ -446,6 +446,7 @@ function Test-IndexedProfileUsable {
 
 function Resolve-MihomoPath {
     $knownPaths = @(
+        (Join-Path $env:LOCALAPPDATA 'Antigravity\private-proxy\bin\antigravity-mihomo.exe'),
         (Join-Path $env:ProgramFiles 'Clash Verge\verge-mihomo.exe'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Clash Verge\verge-mihomo.exe'),
         'D:\Program Files\Clash Verge\verge-mihomo.exe',
@@ -1046,7 +1047,7 @@ function Get-OwnedMihomoProcess {
     if ($null -eq $processInfo) {
         return $null
     }
-    if ($processInfo.Name -notmatch '^(verge-mihomo|mihomo|mihomo-windows-amd64|clash-meta)(\.exe)?$') {
+    if ($processInfo.Name -notmatch '^(verge-mihomo|mihomo|mihomo-windows-amd64|clash-meta|antigravity-mihomo)(\.exe)?$') {
         return $null
     }
 
@@ -1063,7 +1064,7 @@ function Get-MihomoProcessForPort {
     $owner = @(Get-ListeningOwner -ListenPort $ListenPort)
     if ($owner.Count -eq 0) { return $null }
     $processInfo = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + [int]$owner[0].OwningProcess) -ErrorAction SilentlyContinue
-    if ($null -eq $processInfo -or $processInfo.Name -notmatch '^(verge-mihomo|mihomo|mihomo-windows-amd64|clash-meta)(\.exe)?$') { return $null }
+    if ($null -eq $processInfo -or $processInfo.Name -notmatch '^(verge-mihomo|mihomo|mihomo-windows-amd64|clash-meta|antigravity-mihomo)(\.exe)?$') { return $null }
     if ([string]$processInfo.CommandLine -notmatch '(?i)mihomo-antigravity\.yaml') { return $null }
     return $processInfo
 }
@@ -1717,6 +1718,17 @@ function Write-PrivateConfig {
         '    proxies:',
         ('      - ' + $routeTarget),
         'rules:',
+        '  - DOMAIN-KEYWORD,douyin,DIRECT',
+        '  - DOMAIN-SUFFIX,douyin.com,DIRECT',
+        '  - DOMAIN-SUFFIX,douyincdn.com,DIRECT',
+        '  - DOMAIN-SUFFIX,amemv.com,DIRECT',
+        '  - DOMAIN-SUFFIX,snssdk.com,DIRECT',
+        '  - DOMAIN-SUFFIX,bytedance.com,DIRECT',
+        '  - DOMAIN-SUFFIX,pstatp.com,DIRECT',
+        '  - DOMAIN-SUFFIX,volces.com,DIRECT',
+        '  - DOMAIN-SUFFIX,zijieapi.com,DIRECT',
+        '  - DOMAIN-SUFFIX,feishu.cn,DIRECT',
+        '  - DOMAIN-SUFFIX,cn,DIRECT',
         '  - MATCH,ANTIGRAVITY-ROUTE'
     )
 

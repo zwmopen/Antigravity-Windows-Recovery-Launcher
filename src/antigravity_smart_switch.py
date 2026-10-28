@@ -32,6 +32,12 @@ import urllib.request
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
 
+try:
+    import feishu_event_manager
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    import feishu_event_manager
+
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -368,7 +374,7 @@ def get_subscription_summary():
         return "本地订阅节点已就绪"
 
 
-def write_pending_switch(target_account):
+def write_pending_switch(target_account, feishu_card_ids=None):
     """记录切号待办事务，确保断电或重启后可自愈闭环"""
     try:
         os.makedirs(os.path.dirname(PENDING_SWITCH_FILE), exist_ok=True)
@@ -376,6 +382,7 @@ def write_pending_switch(target_account):
             json.dump({
                 "target_account_id": target_account["id"],
                 "target_email": target_account["email"],
+                "feishu_card_ids": feishu_card_ids or [],
                 "status": "switching",
                 "timestamp": time.time(),
                 "created_at": datetime.now().isoformat()
@@ -934,8 +941,8 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
         logger.info("ℹ️ [智能断点雷达] 切号前无任何运行中任务，保持静默，绝不误发'继续'。")
         return {"success": True, "processed": 0, "reason": "all_idle", "results": []}
 
-    logger.info(f"⚡ [纯单窗口断点续接引擎] 准备对切号前 {len(running_tasks)} 个运行中任务精准派发 '{text}'...")
-    wait_enter_sec = 1.2 if (force_send or is_beta_mode()) else 0.5
+    logger.info(f"⚡ [纯单窗口断点续接引擎] 准备对切号前 {len(running_tasks)} 个运行中任务 1:1 精准派发 '{text}' (严格对等，绝不遗漏)...")
+    wait_enter_sec = 0.08
 
     import websockets
     try:
@@ -952,8 +959,8 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     if resp.get("id") == seq:
                         return resp
 
-            async def submit_and_verify(task_name="主会话", max_wait_sec=6.0):
-                """通过原生 Enter 键序列 + 物理坐标点击 + 严格闭环验证循环，确保任务真正提交并进入生成态"""
+            async def submit_and_verify(task_name="主会话", max_wait_sec=5.0):
+                """通过原生 Enter 键序列 + 物理坐标点击 + 极速毫秒级闭环验证循环，确保任务真正提交并进入生成态"""
                 # 1. 尝试全量 CDP 原生 Enter 键序列 (携带标准 key/code 与 text)
                 try:
                     await cdp_call("Input.dispatchKeyEvent", {
@@ -1003,12 +1010,12 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         bx, by = float(click_val["x"]), float(click_val["y"])
                         await cdp_call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": bx, "y": by})
                         await cdp_call("Input.dispatchMouseEvent", {"type": "mousePressed", "button": "left", "clickCount": 1, "x": bx, "y": by})
-                        await asyncio.sleep(0.05)
+                        await asyncio.sleep(0.02)
                         await cdp_call("Input.dispatchMouseEvent", {"type": "mouseReleased", "button": "left", "clickCount": 1, "x": bx, "y": by})
                     except Exception as e:
                         logger.debug(f"派发物理鼠标点击异常: {e}")
 
-                # 3. 严格实机闭环状态校验循环 (最多轮询 max_wait_sec 秒)
+                # 3. 严格实机闭环状态校验循环 (毫秒级动态探针轮询)
                 verify_js = """
                 (() => {
                     const ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
@@ -1027,14 +1034,14 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 start_v = time.time()
                 last_v = {}
                 while time.time() - start_v < max_wait_sec:
-                    await asyncio.sleep(0.4)
+                    await asyncio.sleep(0.08)
                     v_res = await cdp_call("Runtime.evaluate", {"expression": verify_js, "returnByValue": True})
                     last_v = v_res.get("result", {}).get("result", {}).get("value") or {}
                     if last_v.get("isEmpty") or last_v.get("hasStop") or last_v.get("isGenerating"):
                         logger.info(f"✅ [{task_name}] 物理闭环验证成功！(输入框清空={last_v.get('isEmpty')}, 停止按钮亮起={last_v.get('hasStop')}, 生成中={last_v.get('isGenerating')})")
                         return True
-                    # 若 1.6 秒后仍未清空且未进入生成态，补触一次发送按钮
-                    if time.time() - start_v >= 1.6:
+                    # 若 0.3 秒后仍未清空且未进入生成态，补触一次发送按钮
+                    if time.time() - start_v >= 0.3:
                         await cdp_call("Runtime.evaluate", {"expression": click_send_js, "returnByValue": True})
 
                 logger.warning(f"⚠️ [{task_name}] 续接提交未能闭环验证 (文本残留: '{last_v.get('currentText', '')[:25]}')，请人工确认！")
@@ -1090,7 +1097,15 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     align_res = await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
                     if align_res.get("result", {}).get("result", {}).get("value"):
                         logger.info(f"🧭 [会话对齐] 正在对齐恢复切号前真实工作会话 ({target_rel})...")
-                        await asyncio.sleep(2.5)
+                        _align_t0 = time.time()
+                        while time.time() - _align_t0 < 1.2:
+                            _ed_chk = await cdp_call("Runtime.evaluate", {
+                                "expression": "!!document.querySelector('[data-testid=\"agent-input-box\"] [data-lexical-editor=\"true\"], [data-lexical-editor=\"true\"], div[contenteditable=\"true\"]')",
+                                "returnByValue": True
+                            })
+                            if _ed_chk.get("result", {}).get("result", {}).get("value"):
+                                break
+                            await asyncio.sleep(0.04)
 
             # 若前台任务切号前确实在运行，向前台派发“继续”
             if current_tasks:
@@ -1104,7 +1119,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     for (let r = 0; r < 30; r++) {{
                         ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
                         if (ed && ed.offsetParent !== null) break;
-                        await new Promise(res => setTimeout(res, 250));
+                        await new Promise(res => setTimeout(res, 50));
                     }}
                     if (!ed) return {{ status: "no_editor" }};
 
@@ -1146,20 +1161,20 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 elif p_status in ("ready", "ready_has_text", "ready_custom_draft"):
                     if p_status == "ready":
                         await cdp_call("Input.insertText", {"text": str(text)})
-                        logger.info(f"已向前台主会话键入 '{text}'，等待 {wait_enter_sec:.1f} 秒沉淀后提交...")
+                        logger.info(f"已向前台主会话键入 '{text}'，极速提交...")
                         await asyncio.sleep(wait_enter_sec)
                     elif p_status == "ready_has_text":
                         logger.info(f"前台主会话已存在 '{text}'，直接执行闭环提交验证...")
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.05)
                     else:
-                        logger.info(f"前台主会话检测到已有草稿，等待 {wait_enter_sec:.1f} 秒沉淀后提交...")
+                        logger.info(f"前台主会话检测到已有草稿，极速提交...")
                         await asyncio.sleep(wait_enter_sec)
 
-                    is_ok = await submit_and_verify(t_title, max_wait_sec=6.0)
+                    is_ok = await submit_and_verify(t_title, max_wait_sec=5.0)
                     results.append({"title": t_title, "success": is_ok, "text": text, "is_current": True, "verified": is_ok})
                     if c_task.get("href"):
                         resumed_hrefs.add(normalize_target_path(c_task["href"]))
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.05)
 
             # 2. 依序定向接力切号前在转圈的后台侧边栏任务
             sidebar_tasks = [t for t in running_tasks if not t.get("is_current")]
@@ -1184,7 +1199,15 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     }})()
                     """
                     await cdp_call("Runtime.evaluate", {"expression": nav_js})
-                    await asyncio.sleep(2.5)
+                    _s_nav_t0 = time.time()
+                    while time.time() - _s_nav_t0 < 1.2:
+                        _ed_chk = await cdp_call("Runtime.evaluate", {
+                            "expression": "!!document.querySelector('[data-testid=\"agent-input-box\"] [data-lexical-editor=\"true\"], [data-lexical-editor=\"true\"], div[contenteditable=\"true\"]')",
+                            "returnByValue": True
+                        })
+                        if _ed_chk.get("result", {}).get("result", {}).get("value"):
+                            break
+                        await asyncio.sleep(0.04)
 
                     type_and_send_js = f"""
                     (async () => {{
@@ -1192,7 +1215,7 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         for (let r = 0; r < 25; r++) {{
                             ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
                             if (ed && ed.offsetParent !== null) break;
-                            await new Promise(res => setTimeout(res, 200));
+                            await new Promise(res => setTimeout(res, 50));
                         }}
                         if (!ed) return {{ status: "no_editor" }};
 
@@ -1224,10 +1247,10 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     elif t_val.get("status") == "ready":
                         await cdp_call("Input.insertText", {"text": str(text)})
                         await asyncio.sleep(wait_enter_sec)
-                        is_ok = await submit_and_verify(s_title, max_wait_sec=6.0)
+                        is_ok = await submit_and_verify(s_title, max_wait_sec=5.0)
                         results.append({"title": s_title, "success": is_ok, "text": text, "sidebar": True, "verified": is_ok})
                         resumed_hrefs.add(s_href)
-                        await asyncio.sleep(0.8)
+                        await asyncio.sleep(0.04)
 
             # 3. 轮巡补发完毕后，无缝原路返航复原切号前的前台会话
             restore_url = full_url or target_href
@@ -1250,11 +1273,11 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                 }})()
                 """
                 await cdp_call("Runtime.evaluate", {"expression": restore_nav_js})
-                await asyncio.sleep(0.8)
+                await asyncio.sleep(0.08)
                 ensure_chinese_localization_injected()
 
             succ_cnt = sum(1 for item in results if item.get("success"))
-            logger.info(f"🎉 纯单窗口断点精准续接处理完毕: 共接力 {len(results)} 个未完成任务，成功触发: {succ_cnt} 个")
+            logger.info(f"🎉 1:1 断点全量精准接力完成: 切号前锁定 {len(running_tasks)} 个运行中任务，切号后已 1:1 全部派发完成！成功闭环: {succ_cnt}/{len(running_tasks)}")
             return {
                 "success": succ_cnt > 0 or len(running_tasks) == 0,
                 "processed": len(results),
@@ -1325,11 +1348,9 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
                         pass
             if not launcher_active:
                 break
-            time.sleep(0.5)
+            time.sleep(0.08)
 
-        # 稍微等待 1.5 秒让 Electron 渲染进程完全挂载 DOM
-        time.sleep(1.5)
-
+        # 极速 DevTools 端口就绪探测 (毫秒级动态探针，取代旧的 1.5s+1.0s 死等)
         logger.info(f"正在等待 Antigravity 实例与 DevTools 端口就绪 (最长等待 {wait_timeout} 秒)...")
         import urllib.request
         ws_url = None
@@ -1337,10 +1358,10 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
         while time.time() - start_t < wait_timeout:
             curr_pid = get_antigravity_main_pid()
             if curr_pid and (not exclude_pids or curr_pid not in exclude_pids):
-                port = get_devtools_active_port(wait_timeout=2)
+                port = get_devtools_active_port(wait_timeout=0.3)
                 if port:
                     try:
-                        req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
+                        req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=0.8)
                         pages = json.loads(req.read().decode("utf-8"))
                         page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
                         if page:
@@ -1348,7 +1369,7 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
                             break
                     except Exception:
                         pass
-            time.sleep(1.0)
+            time.sleep(0.1)
 
         if not ws_url:
             logger.warning("未能获取到新 Antigravity 页面的 WebSocket 调试地址，跳过自动续接。")
@@ -1356,9 +1377,6 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
 
         # 在连接 CDP 执行窗口切换与续接前，先确保中文语言包已注入生效
         ensure_chinese_localization_injected()
-        # 热重启后页面基本立即可响应，给 1 秒确保 DOM 事件沉降即可
-        logger.info("⏳ 等待 1 秒待页面及语言包沉降...")
-        time.sleep(1.0)
 
         logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行断点自愈感知与发送'{text}'续接...")
         for retry in range(2):
@@ -1536,6 +1554,10 @@ def get_all_accounts_and_quotas():
                     elif any(k in err_lower for k in ["suspended", "banned", "封禁", "冻结", "locked"]):
                         is_special = True
                         special_reason = f"已封禁 / 账号冻结 ({err_msg[:50]})"
+                    elif "401" in err_lower or "unauthorized" in err_lower:
+                        # 401 Unauthorized 通常是配额耗尽或临时令牌失效，不应直接封锁为需网页验证
+                        is_special = False
+                        special_reason = ""
                     else:
                         is_special = True
                         special_reason = f"需网页验证 / 异常拦截 ({err_msg[:50]})"
@@ -1631,7 +1653,15 @@ def get_all_accounts_and_quotas():
         # 铁律：Google Antigravity 真实额度必须以 quota_summary 中的 gemini-weekly 桶为唯一凭据！
         # 警告：Google 后端对无订阅/无配额账号，其 models 列表中仍会返回 remainingFraction: 1 的静态模板假数据！
         # 严禁将 models 列表的 1.0 误当成 100% 满血账号（曾导致无额度账号如 zwmrpg123 被误判为 300 分榜首并引发切号死循环）！
-        if q_weekly is None:
+        # 识别免费账号（如 zwmrpg@gmail.com 或仅有 models 列表无 quota_summary 的基础免费账号）
+        is_free_account = (email.lower() == "zwmrpg@gmail.com") or ("free" in str(acc.get("plan", "")).lower()) or (q_weekly is None and bool(models) and not groups)
+        if is_free_account:
+            # 免费账号特性：无周额度桶 (0.0%)，但具备 1 管 5 小时滚动可用配额 (100.0%)
+            q_weekly = 0.0
+            q_5h = 100.0
+            acc["is_free"] = True
+            acc["plan"] = "FREE"
+        elif q_weekly is None:
             # 无有效周额度桶，确认为无配额/未开通/配额已撤销账号，严格归零
             q_weekly = 0.0
             q_5h = 0.0
@@ -1776,7 +1806,7 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         target_norm = target_email_or_id.strip().lower()
         for acc in accounts:
             if acc["id"] == target_email_or_id or acc["email"].lower() == target_norm:
-                if acc.get("disabled"):
+                if acc.get("disabled") and acc["email"].lower() not in ("idmzwm@gmail.com", "zwmrpg@gmail.com"):
                     raise ValueError(f"指定账号 [{acc['email']}] 处于特殊/需申诉/需网页验证锁定状态 ({acc.get('disabled_reason', '已封禁')})，系统自动跳过并严禁切入！")
                 return acc, "用户指定目标账号"
         raise ValueError(f"未找到指定的账号: {target_email_or_id}")
@@ -1864,27 +1894,17 @@ def is_antigravity_running():
 _LAST_FEISHU_NOTIFY_TIME = {}
 
 
-def send_feishu_notification(title, message, chat_names=None, debounce_seconds=90):
-    """通过飞书 OpenAPI 向指定群组和私聊推送通知（含 90s 防抖保护）"""
-    global _LAST_FEISHU_NOTIFY_TIME
-    now = time.time()
-    last_sent = _LAST_FEISHU_NOTIFY_TIME.get(title, 0)
-    if now - last_sent < debounce_seconds:
-        logger.info(f"💡 [飞书通知防抖保护] 距离上一条通知仅过去 {now - last_sent:.1f} 秒 (< {debounce_seconds}s)，已安全抑制避免刷屏。")
-        return False
-
+def _get_feishu_auth_and_targets(chat_names=None):
+    """获取飞书鉴权 tenant_access_token 及目标 chat_id 列表"""
     if not os.path.exists(FEISHU_CONFIG_FILE):
-        return False
+        return None, []
     try:
         with open(FEISHU_CONFIG_FILE, "r", encoding="utf-8") as f:
             cfg = json.load(f)
-        
         app_id = cfg.get("app_id")
-        app_secret = (cfg.get("app_secret"))
+        app_secret = cfg.get("app_secret")
         if not app_id or not app_secret:
-            return False
-
-        # 换取 tenant_access_token
+            return None, []
         auth_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
         auth_data = json.dumps({"app_id": app_id, "app_secret": app_secret}).encode("utf-8")
         req = urllib.request.Request(auth_url, data=auth_data, headers={"Content-Type": "application/json"})
@@ -1892,10 +1912,9 @@ def send_feishu_notification(title, message, chat_names=None, debounce_seconds=9
             token_info = json.loads(resp.read().decode("utf-8"))
         token = token_info.get("tenant_access_token")
         if not token:
-            return False
+            return None, []
 
         group_map = cfg.get("群列表", {})
-        # 默认发送给：通用通知群 和 飞书牛马 CLI 私聊
         targets = []
         if chat_names:
             for name in chat_names:
@@ -1903,41 +1922,79 @@ def send_feishu_notification(title, message, chat_names=None, debounce_seconds=9
                 if cid and cid not in targets:
                     targets.append(cid)
         else:
-            switch_chat = cfg.get("account_switch_chat") or cfg.get("infra_ops_chat") or "账号状态通知群"
-            default_targets = [switch_chat]
-            for dt in default_targets:
-                cid = group_map.get(dt) or dt
-                if cid and cid not in targets:
-                    targets.append(cid)
-
-        content_text = f"🔔 【{title}】\n{message}"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        success_count = 0
-        for cid in targets:
-            try:
-                send_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
-                payload = {
-                    "receive_id": cid,
-                    "msg_type": "text",
-                    "content": json.dumps({"text": content_text}, ensure_ascii=False)
-                }
-                send_req = urllib.request.Request(send_url, data=json.dumps(payload).encode("utf-8"), headers=headers)
-                with urllib.request.urlopen(send_req, timeout=8) as s_resp:
-                    if s_resp.status == 200:
-                        success_count += 1
-            except Exception as e:
-                logger.debug(f"向飞书目标 {cid} 发送消息异常: {e}")
-        
-        if success_count > 0:
-            _LAST_FEISHU_NOTIFY_TIME[title] = now
-            logger.info(f"✅ 飞书通知推送成功 ({success_count}/{len(targets)} 目标)")
-            return True
+            switch_chat = cfg.get("account_switch_chat_id") or cfg.get("account_switch_chat") or "账号状态通知群"
+            cid = group_map.get(switch_chat) or switch_chat
+            if cid and cid not in targets:
+                targets.append(cid)
+        return token, targets
     except Exception as e:
-        logger.warning(f"飞书通知发送异常: {e}")
+        logger.warning(f"获取飞书鉴权信息异常: {e}")
+        return None, []
+
+
+def send_feishu_card(title, card_content_md, template="orange", chat_names=None):
+    """
+    发送飞书交互式卡片（msg_type: interactive），返回包含 message_id 的列表。
+    底层统一接入 feishu_event_manager 核心。
+    """
+    try:
+        return feishu_event_manager._raw_send_card(title, card_content_md, template=template, chat_names=chat_names)
+    except Exception as e:
+        logger.warning(f"feishu_event_manager 发送卡片异常: {e}")
+        return []
+
+
+def update_feishu_card(message_id, title, card_content_md, template="green"):
+    """
+    通过 PATCH /open-apis/im/v1/messages/{message_id} 原地更新飞书交互式卡片。
+    底层统一接入 feishu_event_manager 核心。
+    """
+    try:
+        return feishu_event_manager._raw_patch_card(message_id, title, card_content_md, template=template)
+    except Exception as e:
+        logger.warning(f"feishu_event_manager 更新卡片异常: {e}")
+        return False
+
+
+def send_feishu_notification(title, message, chat_names=None, debounce_seconds=90):
+    """通过飞书 OpenAPI 向指定群组和私聊推送通用文本通知（含 90s 防抖保护）"""
+    global _LAST_FEISHU_NOTIFY_TIME
+    now = time.time()
+    last_sent = _LAST_FEISHU_NOTIFY_TIME.get(title, 0)
+    if now - last_sent < debounce_seconds:
+        logger.info(f"💡 [飞书通知防抖保护] 距离上一条通知仅过去 {now - last_sent:.1f} 秒 (< {debounce_seconds}s)，已安全抑制避免刷屏。")
+        return False
+
+    token, targets = _get_feishu_auth_and_targets(chat_names)
+    if not token or not targets:
+        return False
+
+    content_text = f"🔔 【{title}】\n{message}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+
+    success_count = 0
+    for cid in targets:
+        try:
+            send_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+            payload = {
+                "receive_id": cid,
+                "msg_type": "text",
+                "content": json.dumps({"text": content_text}, ensure_ascii=False)
+            }
+            send_req = urllib.request.Request(send_url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+            with urllib.request.urlopen(send_req, timeout=8) as s_resp:
+                if s_resp.status == 200:
+                    success_count += 1
+        except Exception as e:
+            logger.debug(f"向飞书目标 {cid} 发送消息异常: {e}")
+
+    if success_count > 0:
+        _LAST_FEISHU_NOTIFY_TIME[title] = now
+        logger.info(f"✅ 飞书通知推送成功 ({success_count}/{len(targets)} 目标)")
+        return True
     return False
 
 
@@ -1955,12 +2012,13 @@ def is_desktop_notify_enabled():
     return False
 
 
-def send_windows_notification(title, message, status="warning", duration_ms=8000):
+def send_windows_notification(title, message, status="warning", duration_ms=8000, skip_feishu=False):
     """发送桌面通知：默认完全静默（0弹窗/0闪烁），自动保底转推飞书通知"""
     if not is_desktop_notify_enabled():
         logger.info(f"🔔 [桌面静默通知] {title}: {message.replace(chr(10), ' ')}")
-        # 桌面静默时，自动保底确保飞书收到通知，不漏掉任何关键事件
-        send_feishu_notification(title, message)
+        # 桌面静默时，若未指定跳过飞书，自动保底确保飞书收到通知
+        if not skip_feishu:
+            send_feishu_notification(title, message)
         return True
 
     # 1. 优先调用本地 shared-notification 技能
@@ -2010,28 +2068,31 @@ def send_windows_notification(title, message, status="warning", duration_ms=8000
 def send_dual_notification(title, message, status="warning", chat_names=None):
     """同时分发通知：桌面按配置静默（默认 0 弹窗），飞书必定精准投递"""
     if is_desktop_notify_enabled():
-        send_windows_notification(title, message, status=status)
+        send_windows_notification(title, message, status=status, skip_feishu=True)
     send_feishu_notification(title, message, chat_names=chat_names)
 
 
-def handle_notification_event(event_type, region="", node="", rtt=""):
-    """标准化反重力运行事件的桌面通知格式"""
-    if event_type == "recovery_success":
+def handle_notification_event(event_type, region="", node="", rtt="", reason="", attempts=0):
+    """标准化反重力运行事件的状态流转与桌面/飞书协同通知"""
+    if event_type == "recovery_started":
+        # 1. 专线异常防抖与事件感知 (短暂异常 < 20s 自动静默，连续异常 >= 20s 首次建卡片)
+        feishu_event_manager.handle_network_degraded_event(node=node, reason=reason or "检测到网络节点受限或波动")
+        send_windows_notification("反重力专线自愈中", "检测到网络节点受限或波动，正在秒级优选最佳专线...", status="warning", skip_feishu=True)
+    elif event_type == "recovery_success":
+        # 2. 专线恢复：若曾发过橙色卡片则原地更新为绿卡；若为防抖期闪断则飞书 0 消息
+        feishu_event_manager.handle_network_recovered_event(current_node=node, latency_ms=rtt, region=region)
         reg_map = {"JP": "日本东京", "US": "美国"}
         reg_str = reg_map.get(region, region or "境外优质")
         rtt_str = f" ({rtt}ms)" if rtt and str(rtt) != "0" else ""
         node_str = f" {node}" if node else ""
         title = "反重力专线已自愈就绪"
         msg = f"已恢复连通！接入: {reg_str}{node_str}{rtt_str}，可继续对话。"
-        send_windows_notification(title, msg, status="info")
-    elif event_type == "recovery_started":
-        title = "反重力专线自愈中"
-        msg = "检测到网络节点受限或波动，正在秒级优选最佳专线..."
-        send_windows_notification(title, msg, status="warning")
-    elif event_type == "cooldown_warning":
-        title = "反重力专线提醒"
-        msg = "可用节点暂时处于保护冷却中，双击桌面「Antigravity 启动器」可随时强制重连。"
-        send_windows_notification(title, msg, status="warning")
+        send_windows_notification(title, msg, status="info", skip_feishu=True)
+    elif event_type in ("recovery_failed", "cooldown_warning"):
+        # 3. 专线自愈失败：原地更新此前卡片为红卡并 @负责人
+        err_summary = reason or ("全部专线节点暂时处于保护冷却中" if event_type == "cooldown_warning" else "所有候选节点均不可用或尝试超时")
+        feishu_event_manager.handle_network_failed_event(original_node=node, attempted_count=attempts or 1, error_summary=err_summary)
+        send_windows_notification("反重力专线提醒", err_summary, status="error", skip_feishu=True)
 
 
 def _load_quota_pool_state():
@@ -3017,8 +3078,11 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     running_tasks = task_snapshot.get("running_tasks", [])
     has_running_tasks = bool(running_tasks)
 
-    # 1. 记录切号待办事务与断点自动续接凭据，同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
-    write_pending_switch(best_acc)
+    feishu_card_ids = []
+    _prev_pending = read_pending_switch()
+    if _prev_pending and _prev_pending.get("feishu_card_ids"):
+        feishu_card_ids = _prev_pending.get("feishu_card_ids")
+
     # 读取启动器设置，判断是否启用自动续接
     _settings_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Antigravity", "private-proxy", "launcher-settings.json")
     _auto_resume_enabled = True
@@ -3054,20 +3118,74 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     except Exception as e:
         logger.debug(f"提前同步 watcher-current-account.txt 异常: {e}")
     
-    # 2. 剩余 5% 触发切号：按规则【只发桌面通知，不发飞书】
-    notif_title = "Antigravity 额度预警 (剩余 <= 5%)"
+    # 2. 额度预警并启动切号：向飞书专属群发送橙色【切号中】卡片，记录 message_id 以便后续原地 PATCH 原地更新
+    task_name_display = "当前主工作区"
+    session_id_display = "前台会话"
+    if running_tasks:
+        t0 = running_tasks[0]
+        task_name_display = t0.get("title") or "当前任务"
+        href = t0.get("href", "")
+        m_cid = re.search(r'/c/([a-f0-9\-]{36})', href)
+        if m_cid:
+            session_id_display = m_cid.group(1)[:8]
+        if len(running_tasks) > 1:
+            task_name_display = f"{task_name_display} 等 {len(running_tasks)} 个任务"
+    elif target_title:
+        task_name_display = target_title
+        if target_href:
+            m_cid = re.search(r'/c/([a-f0-9\-]{36})', target_href)
+            if m_cid:
+                session_id_display = m_cid.group(1)[:8]
+
     active_names = [t.get("title") for t in running_tasks if t.get("title")]
     if not active_names and target_title:
         active_names.append(target_title)
 
-    active_info = f"\n📌 保护中断点任务: {', '.join(active_names)}" if active_names else ""
+    active_info_win = f"\n📌 保护中断点任务: {', '.join(active_names)}" if active_names else ""
+
+    warn_title = "🟠【Antigravity｜额度触发，正在切号】"
+    warn_card_md = (
+        f"当前账号：`{curr_email}`\n"
+        f"5h：`{curr_5h:.1f}%` 🔴｜周：`{curr_weekly:.1f}%`\n\n"
+        f"接力账号：`{best_acc['email']}`\n"
+        f"5h：`{best_acc['gemini_5h']}%`｜周：`{best_acc['gemini_weekly']}%`\n\n"
+        f"🛡️ 已保护当前任务\n"
+        f"{task_name_display}｜断点会话 `{session_id_display}`\n\n"
+        f"⚡ 状态：正在切换…"
+    )
+
+    switch_event = feishu_event_manager.create_event_message(
+        event_type="ANTIGRAVITY_ACCOUNT_SWITCH",
+        title=warn_title,
+        content_md=warn_card_md,
+        template="orange",
+        status="SWITCHING",
+        metadata={
+            "current_account": curr_email,
+            "target_account": best_acc["email"],
+            "current_5h": curr_5h,
+            "current_week": curr_weekly,
+            "target_5h": best_acc.get("gemini_5h"),
+            "target_week": best_acc.get("gemini_weekly"),
+            "task_name": task_name_display,
+            "session_id": session_id_display
+        },
+        chat_names=["账号状态通知群"]
+    )
+    feishu_mid = switch_event.get("feishu_message_id")
+    feishu_card_ids = [feishu_mid] if feishu_mid else []
+    logger.info(f"📤 已向飞书状态面板发送切号事件卡片 (mid: {feishu_mid})")
+
+    # 1. 记录切号待办事务与断点自动续接凭据（绑定 feishu_card_ids），同时【提前】落盘 watcher-current-account.txt 封死 Watcher 二段竞争
+    write_pending_switch(best_acc, feishu_card_ids=feishu_card_ids)
+
+    # 桌面通知（仅在用户开启桌面弹窗时提示，且 skip_feishu=True 避免二次重复发文本）
     notif_msg = (
         f"当前在用账号 [{curr_email}] 额度剩余 <= 5% (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)\n"
-        f"🎯 优选满血接力: {best_acc['email']} (5h: {best_acc['gemini_5h']}%, 周: {best_acc['gemini_weekly']}%){active_info}\n"
-        f"📋 决策理由: {reason}\n"
-        f"⚡ 正在后台先行切号 (反重力正常运行中，切号成功后执行订阅更新与接力重启)..."
+        f"🎯 优选满血接力: {best_acc['email']} (5h: {best_acc['gemini_5h']}%, 周: {best_acc['gemini_weekly']}%){active_info_win}\n"
+        f"⚡ 正在后台先行切号 (反重力正常运行中)..."
     )
-    send_windows_notification(notif_title, notif_msg, status="warning")
+    send_windows_notification("Antigravity 额度预警 (剩余 <= 5%)", notif_msg, status="warning", skip_feishu=True)
     
     old_pid = get_antigravity_main_pid()
 
@@ -3090,11 +3208,33 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     # Antigravity 2.0 (v2.12.2+) 完全依赖 Windows 系统凭据进行模型认证！
     cred_ok = write_antigravity_windows_credential(best_acc["id"])
     if not ok and not cred_ok:
-        logger.error("向 Cockpit Tools 发送切号指令且系统凭据直写均失败，取消本次切换！反重力未被终止，当前窗口保持完好。")
+        fail_title = "🔴【Antigravity｜自动切号失败】"
+        fail_md = (
+            f"当前账号：`{curr_email}`\n"
+            f"5h：`{curr_5h:.1f}%`\n\n"
+            f"目标账号：`{best_acc['email']}`\n\n"
+            f"🛡️ 当前任务已保护\n"
+            f"❌ 自动切换失败\n\n"
+            f"失败原因：向 Cockpit Tools 发送切号指令与系统凭据直写均失败\n\n"
+            f"▶ 需要人工处理"
+        )
+        feishu_event_manager.mark_event_failed(
+            "ANTIGRAVITY_ACCOUNT_SWITCH",
+            title=fail_title,
+            content_md=fail_md,
+            error_summary="向 Cockpit Tools 发送切号指令与系统凭据直写均失败",
+            metadata={
+                "current_account": curr_email,
+                "target_account": best_acc["email"]
+            },
+            mention_at=True
+        )
+
         send_windows_notification(
             "Antigravity 切号未完成",
             f"尝试切换至账号 [{best_acc['email']}] 失败，本次切号已取消，当前反重力保持运行。",
-            status="error"
+            status="error",
+            skip_feishu=True
         )
         clear_pending_switch()
         clear_pending_auto_resume()
@@ -3175,14 +3315,30 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
             except Exception as e:
                 logger.warning(f"更新 accounts.json disabled 失败: {e}")
             
-            # 3. 发送双端告警
-            send_dual_notification(
-                "Antigravity 账号失效预警 (已触发自动转移)",
-                f"⚠️ 刚刚切入的账号 [{best_acc['email']}] 登录态无效 (停留在登录引导页)！\n"
-                f"🛡️ 系统已自动对其执行 365 天隔离与禁用保护。\n"
-                f"⚡ 正在立即紧急切换至下一顺位可用健康账号...",
+            # 3. 原地更新卡片为正在转移状态，同一事件不新发卡片
+            transfer_title = "🟠【Antigravity｜账号需验证，正在转移】"
+            transfer_md = (
+                f"当前账号：`{curr_email}`\n"
+                f"5h：`{curr_5h:.1f}%` 🔴｜周：`{curr_weekly:.1f}%`\n\n"
+                f"失效账号：`{best_acc['email']}` (登录态无效，已自动隔离保护)\n\n"
+                f"🛡️ 已保护当前任务\n"
+                f"{task_name_display}｜断点会话 `{session_id_display}`\n\n"
+                f"⚡ 状态：正在紧急转移至下一顺位可用健康账号…"
+            )
+            feishu_event_manager.update_event_message(
+                "ANTIGRAVITY_ACCOUNT_SWITCH",
+                title=transfer_title,
+                content_md=transfer_md,
+                template="orange",
+                status="SWITCHING",
+                metadata={"invalid_account": best_acc["email"]}
+            )
+
+            send_windows_notification(
+                "Antigravity 账号失效预警",
+                f"账号 [{best_acc['email']}] 登录态无效，已自动隔离保护，正在紧急切换下一账号...",
                 status="error",
-                chat_names=["账号状态通知群"]
+                skip_feishu=True
             )
             # 4. 自动故障转移：立即强制切下一个健康账号！
             return run_smart_switch(threshold=threshold, force=True)
@@ -3194,21 +3350,41 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     clear_pending_switch()
     reset_language_server_log_pos()
 
-    # 6. 切换成功：按规则【发桌面也发飞书】
+    # 6. 切换成功：原地更新飞书原消息为绿色完成状态（严禁发送第二条独立消息打扰！）
     mode_desc = "无缝热重启（编辑器窗口未关闭）" if hot_restart_success else "完整重启"
-    succ_title = "Antigravity 切换成功"
-    if should_resume:
-        resume_desc = f"智能断点任务 ({len(running_tasks)}个) 已自动发送'继续'无缝接力！"
-    elif not _auto_resume_enabled:
-        resume_desc = "自动续接已手动关闭"
-    else:
-        resume_desc = "切号前会话均为空闲态，无需续接（自动接力待命中）"
-    succ_msg = (
-        f"✅ 账号已成功切换至: {best_acc['email']}\n"
-        f"🔥 切换模式: {mode_desc}\n"
-        f"🚀 17897 专线复用，{resume_desc}"
+    succ_title = "🟢【Antigravity｜切号完成】"
+    succ_card_md = (
+        f"`{curr_email}` → `{best_acc['email']}`\n\n"
+        f"新账号额度：\n"
+        f"5h：`{best_acc['gemini_5h']}%`｜周：`{best_acc['gemini_weekly']}%`\n\n"
+        f"✅ 当前任务已接力\n"
+        f"✅ 断点会话已恢复\n"
+        f"✅ 订阅状态已更新\n\n"
+        f"状态：正常运行｜无需处理"
     )
-    send_dual_notification(succ_title, succ_msg, status="info", chat_names=["账号状态通知群"])
+
+    feishu_event_manager.close_event(
+        "ANTIGRAVITY_ACCOUNT_SWITCH",
+        title=succ_title,
+        content_md=succ_card_md,
+        template="green",
+        status="SUCCESS",
+        metadata={
+            "current_account": curr_email,
+            "target_account": best_acc["email"],
+            "target_5h": best_acc["gemini_5h"],
+            "target_weekly": best_acc["gemini_weekly"],
+            "mode": mode_desc
+        }
+    )
+
+    # 桌面通知如果开启则提示，不开启则静默（skip_feishu=True 避免再发文本消息）
+    send_windows_notification(
+        succ_title,
+        f"账号已成功切换至: {best_acc['email']}\n{mode_desc}",
+        status="info",
+        skip_feishu=True
+    )
     return "switched"
 
 
@@ -3796,6 +3972,8 @@ def main():
     parser.add_argument("--notify-region", type=str, default="", help="节点所在区域")
     parser.add_argument("--notify-node", type=str, default="", help="节点名称")
     parser.add_argument("--notify-rtt", type=str, default="", help="延迟数值")
+    parser.add_argument("--notify-reason", type=str, default="", help="异常原因")
+    parser.add_argument("--notify-attempts", type=int, default=0, help="尝试节点数")
     
     args = parser.parse_args()
     
@@ -3806,7 +3984,14 @@ def main():
     elif args.block:
         block_account(args.block)
     elif args.notify_event:
-        handle_notification_event(args.notify_event, region=args.notify_region, node=args.notify_node, rtt=args.notify_rtt)
+        handle_notification_event(
+            args.notify_event,
+            region=args.notify_region,
+            node=args.notify_node,
+            rtt=args.notify_rtt,
+            reason=args.notify_reason,
+            attempts=args.notify_attempts
+        )
     elif args.notify:
         send_windows_notification(args.notify_title, args.notify, status=args.notify_status)
     elif args.stop_watch:

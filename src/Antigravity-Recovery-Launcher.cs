@@ -950,7 +950,7 @@ namespace AntigravityLauncher
     internal class AntigravityHotLaunchChoiceForm : Form
     {
         internal HotLaunchAction Action { get; private set; }
-        private int remainingSeconds = 3;
+        private int remainingSeconds = ReadCountdownSeconds();
         private System.Windows.Forms.Timer countdownTimer;
         private HotLaunchButton btnActivate;
         private HotLaunchButton btnRepair;
@@ -959,6 +959,27 @@ namespace AntigravityLauncher
         private string egressBadgeText = "高速专线就绪";
         private string statusBadgeText = "● 运行中";
         private string subtitleText = "专线稳定畅通 · 点击秒切编辑器，或快速换节点自愈";
+
+        // 自动进入倒计时秒数，默认 5 秒，可在 launcher-settings.json 中用
+        // "activate_countdown_seconds" 调整(1~60)，无需重新编译。
+        private static int ReadCountdownSeconds()
+        {
+            try
+            {
+                string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity");
+                string configPath = Path.Combine(root, "private-proxy", "launcher-settings.json");
+                if (!File.Exists(configPath)) return 5;
+                string json = File.ReadAllText(configPath);
+                var match = System.Text.RegularExpressions.Regex.Match(json, "\"activate_countdown_seconds\"\\s*:\\s*(\\d+)");
+                if (match.Success)
+                {
+                    int parsed;
+                    if (int.TryParse(match.Groups[1].Value, out parsed) && parsed >= 1 && parsed <= 60) return parsed;
+                }
+            }
+            catch { }
+            return 5;
+        }
 
         internal AntigravityHotLaunchChoiceForm()
         {
@@ -971,6 +992,23 @@ namespace AntigravityLauncher
             ShowInTaskbar = true;
             TopMost = false;
             KeyPreview = true;
+
+            // 用户一旦与画面发生任何交互(鼠标移入/移动/点击/按键)，立即暂停自动倒计时，
+            // 把选择权交还给用户：倒计时只在用户完全未干预时才自动推进。
+            bool countdownPaused = false;
+            System.Action pauseCountdown = delegate
+            {
+                if (countdownPaused) return;
+                countdownPaused = true;
+                StopTimer();
+                if (btnActivate != null) btnActivate.ButtonText = "打开继续使用";
+            };
+            MouseEnter += delegate { pauseCountdown(); };
+            MouseMove += delegate { pauseCountdown(); };
+            MouseDown += delegate { pauseCountdown(); };
+            MouseClick += delegate { pauseCountdown(); };
+            KeyDown += delegate { pauseCountdown(); };
+            PreviewKeyDown += delegate { pauseCountdown(); };
 
             appIcon = Program.LoadIconOrPng(Program.IconPath);
 
@@ -1028,7 +1066,7 @@ namespace AntigravityLauncher
                 }
             };
 
-            btnActivate = new HotLaunchButton("打开继续使用 (3s)")
+            btnActivate = new HotLaunchButton("打开继续使用 (" + remainingSeconds + "s)")
             {
                 Location = new Point(20, 78),
                 Size = new Size(212, 46)
