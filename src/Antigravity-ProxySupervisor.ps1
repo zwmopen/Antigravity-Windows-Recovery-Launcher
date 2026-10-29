@@ -1154,6 +1154,13 @@ function Get-CandidateNodeDefinitions {
     if ($indexedVergeProfiles.Count -gt 0) {
         foreach ($profile in $indexedVergeProfiles) {
             if (-not (Test-IndexedProfileUsable -Profile $profile)) { continue }
+            $profilePriority = 30
+            # 锁定 1.17T 大流量订阅为最高优先级必选源 (RVc3ckc4DDH4 / 三毛机场共享月付)
+            if ([string]$profile.Id -eq 'RVc3ckc4DDH4' -or [string]$profile.DisplayName -match '1\.17|共享|1200') {
+                $profilePriority = 5
+            } elseif ([string]$profile.Id -eq 'RRjkhbY0ep0h' -or [string]$profile.DisplayName -match '年') {
+                $profilePriority = 90
+            }
             $profileSources += [pscustomobject]@{
                 Path = [string]$profile.Path
                 SourceKey = ('clash-verge-cache-' + [string]$profile.Id)
@@ -1161,7 +1168,7 @@ function Get-CandidateNodeDefinitions {
                 SourceType = 'subscription-cache'
                 UpdatedAt = $profile.UpdatedAt
                 ExpiresAt = $profile.ExpiresAt
-                Priority = 30
+                Priority = $profilePriority
             }
         }
     } else {
