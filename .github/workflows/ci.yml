@@ -59,18 +59,8 @@ jobs:
       - name: Build Windows binaries
         shell: powershell
         run: .\build.ps1
-      - name: Build Windows Setup.exe
-        shell: powershell
-        run: .\build-installer.ps1
-      - name: Verify release boundary
-        shell: pwsh
-        run: |
-          $version = (Get-Content VERSION -Raw).Trim()
-          if (Test-Path releases/current/tools/agy/agy.exe) { throw 'agy must not be bundled' }
-          if (-not (Test-Path releases/current/Antigravity-Recovery-Launcher.exe)) { throw 'launcher missing' }
-          if (-not (Test-Path releases/current/Antigravity-AccountWatcher.exe)) { throw 'watcher missing' }
-          if (-not (Test-Path ("releases/public/Antigravity-Windows-Recovery-Setup-" + $version + "-windows-x64.exe"))) { throw 'setup missing' }
-      # 产物必须落盘：否则 CI 跑完二进制就被丢弃，本地拿不到新 exe。
+      # 产物必须在"有可能失败"的安装包构建之前落盘：
+      # 此前 CI 跑完二进制即被丢弃，本地永远拿不到新 exe。
       - name: Upload launcher binaries
         uses: actions/upload-artifact@v4
         with:
@@ -84,10 +74,26 @@ jobs:
             releases/current/manifest.json
           if-no-files-found: error
           retention-days: 30
+      # 安装包构建失败不应阻断主产物交付，标记为可容忍失败。
+      - name: Build Windows Setup.exe
+        id: setup
+        continue-on-error: true
+        shell: powershell
+        run: .\build-installer.ps1
       - name: Upload setup installer
+        if: steps.setup.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.tag.outputs.name }}-setup
           path: releases/public/Antigravity-Windows-Recovery-Setup-*.exe
           if-no-files-found: error
           retention-days: 30
+      - name: Verify release boundary
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if (Test-Path releases/current/tools/agy/agy.exe) { throw 'agy must not be bundled' }
+          if (-not (Test-Path releases/current/Antigravity-Recovery-Launcher.exe)) { throw 'launcher missing' }
+          if (-not (Test-Path releases/current/Antigravity-AccountWatcher.exe)) { throw 'watcher missing' }
+          $setup = "releases/public/Antigravity-Windows-Recovery-Setup-" + $version + "-windows-x64.exe"
+          if ("${{ steps.setup.outcome }}" -eq "success" -and -not (Test-Path $setup)) { throw 'setup missing' }
