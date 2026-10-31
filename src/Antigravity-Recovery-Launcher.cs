@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.6.22.0")]
-[assembly: AssemblyFileVersion("1.6.22.0")]
-[assembly: AssemblyInformationalVersion("1.6.22")]
+[assembly: AssemblyVersion("1.6.23.0")]
+[assembly: AssemblyFileVersion("1.6.23.0")]
+[assembly: AssemblyInformationalVersion("1.6.23")]
 
 namespace AntigravityLauncher
 {
@@ -34,9 +34,19 @@ namespace AntigravityLauncher
 
         private const string SingleInstanceMutexName = @"Local\AntigravityLauncherSingleInstance";
         private const string BackgroundMutexName = @"Local\AntigravitySelfHealingLauncherBackground";
+        private const string ManagerPanelWindowTitle = "Antigravity 管理面板";
         internal const string SupervisorMutexName = @"Local\AntigravitySupervisorRun";
 
         private static Mutex singleInstanceMutex;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowW", SetLastError = true)]
+        private static extern IntPtr FindWindowW(string lpClassName, string lpWindowName);
+
+        private static bool IsManagerPanelOpen()
+        {
+            try { return FindWindowW(null, ManagerPanelWindowTitle) != IntPtr.Zero; }
+            catch { return false; }
+        }
 
         internal static void TraceLog(string msg)
         {
@@ -66,6 +76,7 @@ namespace AntigravityLauncher
             TraceLog("Main invoked: " + (args != null ? string.Join(" ", args) : "null"));
             bool backgroundMode = HasArgument(args, "--background");
             bool forceLaunch = HasArgument(args, "--force-launch");
+            bool managerOwnsRecovery = forceLaunch && IsManagerPanelOpen();
             bool betaMode = HasArgument(args, "--beta");
 
             // Beta 模式：写入 beta.flag 文件，供 Python 守护进程读取以启用测试版行为
@@ -82,16 +93,23 @@ namespace AntigravityLauncher
             }
 
             // 1. 后台静默自愈模式 (由 AccountWatcher 调度，无任何 UI)
-            if (backgroundMode)
+            if (backgroundMode || managerOwnsRecovery)
             {
-                TraceLog("Running in backgroundMode");
+                TraceLog(managerOwnsRecovery
+                    ? "Manager panel is open; keeping recovery UI in the manager and running the capsule headless."
+                    : "Running in backgroundMode");
                 bool backgroundCreated;
                 using (var backgroundMutex = new Mutex(true, BackgroundMutexName, out backgroundCreated))
                 {
                     if (!backgroundCreated) return 0;
                     if (!File.Exists(ScriptPath)) return 2;
-                    int backgroundResult = RunBackgroundRepair(GetRecoveryReason(args));
-                    if (backgroundResult == 0) EnsureWatcherRunning();
+                    string recoveryReason = managerOwnsRecovery ? "UserRequestedRepair" : GetRecoveryReason(args);
+                    int backgroundResult = RunBackgroundRepair(recoveryReason, managerOwnsRecovery);
+                    if (backgroundResult == 0)
+                    {
+                        EnsureWatcherRunning();
+                        if (managerOwnsRecovery) ActivateExistingAntigravity();
+                    }
                     return backgroundResult;
                 }
             }
@@ -551,7 +569,7 @@ namespace AntigravityLauncher
             }
         }
 
-        private static int RunBackgroundRepair(string recoveryReason)
+        private static int RunBackgroundRepair(string recoveryReason, bool prelaunchClient = false)
         {
             var output = new StringBuilder();
             var error = new StringBuilder();
@@ -560,7 +578,7 @@ namespace AntigravityLauncher
                 var psi = new ProcessStartInfo
                 {
                     FileName = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-                    Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + ScriptPath + "\" -RecoveryReason " + recoveryReason,
+                    Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + ScriptPath + "\" -RecoveryReason " + recoveryReason + (prelaunchClient ? " -PrelaunchClient" : ""),
                     WorkingDirectory = AppDirectory,
                     UseShellExecute = false,
                     CreateNoWindow = true,

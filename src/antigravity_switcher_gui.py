@@ -1,17 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-antigravity_switcher_gui.py — Antigravity 管理面板 (Neumorphic & Liquid Glass Edition)
-基于 CustomTkinter 构建的现代化、呼吸感软拟态与液态玻璃桌面中枢：
-1. 视觉风格 (Neumorphic & Liquid Glass)：
-   - 彻底告别生硬矩形块，全控件 100% 圆角 (corner_radius 14~20)，悬浮微拟态卡片与呼吸感间距
-   - 1:1 对齐《人生游戏系统》与《团队工作台》三套同源设计系统：
+antigravity_switcher_gui.py — Antigravity 管理面板 (Compact Neumorphic & Liquid Glass Edition)
+基于 CustomTkinter 构建的高集成、紧凑精致软拟态与液态玻璃桌面中枢：
+1. 视觉风格与尺寸调优 (Compact Neumorphic & Liquid Glass)：
+   - 窗口尺寸精准收敛至 800x500，彻底解决“面板过大、元素分散、多层浮动卡片碎裂”的问题；
+   - 头部卡片一体化融合：品牌标题、5秒自愈/拉起主按钮、状态胶囊、守护开关与倒计时合为一体；
+   - 账号与网络采用高密度通透 Treeview，底部操作栏与选中信息横向集成同一行；
+   - 1:1 对齐《人生游戏系统》与《团队工作台》三大设计系统：
      🎨 拟态浅色 (#e0e5ec / #4d5b6d / #3b82f6)
      💧 液态玻璃 (#eaf4fd / #f4f9ff / #0284c7)
      🌙 拟态深色 (#1e1e2e / #f4f4f5 / #38bdf8)
-2. 交互逻辑 (智能 5 秒倒计时 & 自愈拉起)：
+2. 交互逻辑 (智能 5 秒倒计时 & 自愈分支)：
    - 若客户端已在运行：5 秒未操作自动平滑激活主窗口
    - 若客户端未运行：5 秒未操作自动执行网络自愈、挂载专线并拉起客户端 (跑网络/测速/自愈全流程)
-   - 任何交互 (点击、按键、切换 Tab) 瞬间暂停倒计时并永久常驻
+   - 任何交互 (点击、按键、双击、切换 Tab) 瞬间暂停倒计时并永久常驻
 3. 信息命名 (极简纯粹，绝不花里胡哨)：
    - 三大 Tab 直观命名：【账号】、【网络】、【日志】
    - 核心功能按键精炼命名：【⚡ 智能盲切】、【🔄 切换账号】、【🔓 解除隔离】、【💬 恢复会话】等
@@ -34,7 +36,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 import ctypes
 try:
-    myappid = "antigravity.studio.gui.ctk.v6"
+    myappid = "antigravity.studio.gui.ctk.v6.compact"
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 except Exception:
     pass
@@ -93,6 +95,9 @@ ICON_PATH = next((p for p in ICON_CANDIDATES if os.path.exists(p)), None)
 
 THEME_CONFIG_FILE = Path(os.path.expanduser("~/.antigravity_cockpit/hub_theme_config.json"))
 SETTINGS_FILE = os.path.join(PROXY_DIR, "launcher-settings.json")
+SINGLE_INSTANCE_MUTEX_NAME = "Local\\Antigravity.ManagerPanel.v6"
+SINGLE_INSTANCE_WINDOW_TITLE = "Antigravity 管理面板"
+SINGLE_INSTANCE_MUTEX_HANDLE = None
 
 # 人生游戏系统 & 团队工作台 1:1 同源高阶设计系统
 THEMES = {
@@ -103,7 +108,7 @@ THEMES = {
         "appearance": "Light",
         "bg": "#e0e5ec",
         "panel": "#e0e5ec",
-        "card": "#e0e5ec",
+        "card": "#e8edf4",
         "card_border": "#c8d4e2",
         "ink": "#4d5b6d",
         "muted": "#7a8b9e",
@@ -114,7 +119,7 @@ THEMES = {
         "restart_hover": "#2e3742",
         "restart_fg": "#ffffff",
         "btn_sec_bg": "#e0e5ec",
-        "btn_sec_border": "#ffffff",
+        "btn_sec_border": "#c8d4e2",
         "btn_sec_hover": "#d6dee7",
         "btn_sec_fg": "#4d5b6d",
         "tree_bg": "#e8edf4",
@@ -234,6 +239,62 @@ def save_theme_id(theme_id):
     except Exception:
         pass
 
+def _focus_existing_panel():
+    try:
+        user32 = ctypes.windll.user32
+        target_hwnd = None
+        def enum_cb(hwnd, lparam):
+            nonlocal target_hwnd
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buff = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buff, length + 1)
+                    if buff.value == SINGLE_INSTANCE_WINDOW_TITLE:
+                        target_hwnd = hwnd
+                        return False
+            return True
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+        user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+        if target_hwnd:
+            user32.ShowWindow(target_hwnd, 9)
+            user32.SetForegroundWindow(target_hwnd)
+    except Exception:
+        pass
+
+def acquire_single_instance():
+    global SINGLE_INSTANCE_MUTEX_HANDLE
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_bool
+        ctypes.set_last_error(0)
+        handle = kernel32.CreateMutexW(None, True, SINGLE_INSTANCE_MUTEX_NAME)
+        if not handle:
+            return False
+        if ctypes.get_last_error() == 183:
+            kernel32.CloseHandle(handle)
+            _focus_existing_panel()
+            return False
+        SINGLE_INSTANCE_MUTEX_HANDLE = handle
+        return True
+    except Exception:
+        return True
+
+def release_single_instance():
+    global SINGLE_INSTANCE_MUTEX_HANDLE
+    if SINGLE_INSTANCE_MUTEX_HANDLE:
+        try:
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+            kernel32.CloseHandle.restype = ctypes.c_bool
+            kernel32.CloseHandle(SINGLE_INSTANCE_MUTEX_HANDLE)
+        except Exception:
+            pass
+        finally:
+            SINGLE_INSTANCE_MUTEX_HANDLE = None
 
 def format_reset_time(dt_utc, quota_val):
     if quota_val is not None and quota_val >= 99.5:
@@ -274,7 +335,6 @@ def format_reset_time(dt_utc, quota_val):
         return f"{day_str} {time_str} ({cd})"
     except Exception:
         return str(dt_utc)
-
 
 def get_network_nodes_data():
     sup_state_file = os.path.join(PROXY_DIR, "supervisor-state.json")
@@ -385,7 +445,6 @@ def get_network_nodes_data():
     ))
     return node_list
 
-
 def get_recent_incidents(max_items=20):
     fpath = os.path.join(PROXY_DIR, "incident-history.json")
     if not os.path.exists(fpath):
@@ -399,8 +458,7 @@ def get_recent_incidents(max_items=20):
         pass
     return []
 
-
-def get_recent_log_lines(filename, max_lines=150):
+def get_recent_log_lines(filename, max_lines=120):
     fpath = os.path.join(PROXY_DIR, filename)
     if not os.path.exists(fpath):
         return [f"日志文件不存在: {fpath}\n"]
@@ -415,17 +473,21 @@ def get_recent_log_lines(filename, max_lines=150):
 class AntigravityModernStudio(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Antigravity 管理面板")
-        self.geometry("940x630")
-        self.minsize(900, 590)
+        self.title(SINGLE_INSTANCE_WINDOW_TITLE)
+        
+        # 紧凑精致视口：800x500，拒绝过大分散
+        window_w = 800
+        window_h = 500
+        self.geometry(f"{window_w}x{window_h}")
+        self.minsize(760, 470)
 
         # 屏幕绝对居中
         try:
             ws = self.winfo_screenwidth()
             hs = self.winfo_screenheight()
-            x = max(0, (ws - 940) // 2)
-            y = max(0, (hs - 630) // 2)
-            self.geometry(f"940x630+{x}+{y}")
+            x = max(0, (ws - window_w) // 2)
+            y = max(0, (hs - window_h) // 2)
+            self.geometry(f"{window_w}x{window_h}+{x}+{y}")
         except Exception:
             pass
 
@@ -469,7 +531,7 @@ class AntigravityModernStudio(ctk.CTk):
         self._build_ui()
         self.apply_theme(self.theme_id)
 
-        # 绑定用户全局交互暂停倒计时
+        # 绑定全局交互暂停倒计时并常驻
         self.bind_all("<Button-1>", lambda e: self.pause_countdown())
         self.bind_all("<Key>", lambda e: self.pause_countdown())
 
@@ -511,13 +573,13 @@ class AntigravityModernStudio(ctk.CTk):
 
         if self.countdown_seconds > 0:
             self.btn_open_main.configure(text=f"▶ {action_name} ({self.countdown_seconds}s)")
-            status_desc = "应用在运行 · 5秒后激活窗口 · 点击常驻" if is_running else "应用未启动 · 5秒后自愈网络并拉起 · 点击常驻"
+            status_desc = "应用运行中 · 5秒后激活 · 点击常驻" if is_running else "应用未启动 · 5秒后自愈拉起 · 点击常驻"
             self.lbl_countdown_hint.configure(text=f"⏳ {status_desc}")
             self.countdown_seconds -= 1
             self.timer_id = self.after(1000, self._start_countdown)
         else:
             self.btn_open_main.configure(text=f"▶ {action_name}")
-            self.lbl_countdown_hint.configure(text="🟢 已自动触发启动流程 · 面板常驻运行")
+            self.lbl_countdown_hint.configure(text="🟢 已自动触发 · 面板常驻就绪")
             self.on_open_main_clicked(from_timer=True)
 
     def pause_countdown(self):
@@ -533,9 +595,9 @@ class AntigravityModernStudio(ctk.CTk):
         is_running = is_antigravity_running()
         action_name = "进入主界面" if is_running else "启动并自愈"
         self.btn_open_main.configure(text=f"▶ {action_name}")
-        self.lbl_countdown_hint.configure(text="🟢 面板已常驻 · 自动就绪")
+        self.lbl_countdown_hint.configure(text="🟢 面板常驻 · 操作就绪")
 
-    def show_toast(self, message, level="info", duration_ms=3500):
+    def show_toast(self, message, level="info", duration_ms=3200):
         t = self.theme
         color_map = {
             "info": (t["toast_bg"], t["toast_fg"], t["toast_border"]),
@@ -546,7 +608,7 @@ class AntigravityModernStudio(ctk.CTk):
         bg, fg, border = color_map.get(level, (t["toast_bg"], t["toast_fg"], t["toast_border"]))
         self.toast_banner.configure(fg_color=bg, border_color=border, border_width=1)
         self.lbl_toast.configure(text=message, text_color=fg)
-        self.toast_banner.pack(fill="x", padx=18, pady=(2, 6), before=self.tabview)
+        self.toast_banner.pack(fill="x", padx=16, pady=(1, 4), before=self.tabview)
 
         if self.toast_timer_id:
             try:
@@ -570,20 +632,16 @@ class AntigravityModernStudio(ctk.CTk):
         ctk.set_appearance_mode(t["appearance"])
         self.configure(fg_color=t["bg"])
 
-        # 头部与卡片刷新
+        # 头部一体化卡片
         self.header_frame.configure(fg_color=t["panel"], border_color=t["card_border"])
         self.lbl_title.configure(text_color=t["ink"])
         self.lbl_countdown_hint.configure(text_color=t["muted"])
         self.switch_guard.configure(text_color=t["ink"], progress_color=t["primary"])
+        self.lbl_header_status.configure(text_color=t["muted"])
 
         self.btn_open_main.configure(fg_color=t["primary"], hover_color=t["primary_hover"], text_color=t["primary_fg"])
         self.btn_restart_repair.configure(fg_color=t["restart_btn"], hover_color=t["restart_hover"], text_color=t["restart_fg"])
         self.btn_refresh.configure(fg_color=t["btn_sec_bg"], border_color=t["btn_sec_border"], text_color=t["btn_sec_fg"], hover_color=t["btn_sec_hover"])
-
-        # 状态胶囊条
-        self.badges_bar.configure(fg_color="transparent")
-        for badge in [self.badge_account, self.badge_network, self.badge_cdp]:
-            badge.configure(fg_color=t["card"], border_color=t["card_border"], text_color=t["ink"])
 
         # Tabview 拟态/玻璃通透样式
         self.tabview.configure(
@@ -599,13 +657,12 @@ class AntigravityModernStudio(ctk.CTk):
 
         # Tab 1 账号
         self.tree_acc_frame.configure(fg_color=t["card"], border_color=t["card_border"])
-        self.lbl_acc_detail.configure(fg_color=t["card"], border_color=t["card_border"], text_color=t["muted"])
+        self.lbl_acc_detail.configure(text_color=t["ink"])
         self.btn_smart.configure(fg_color=t["primary"], hover_color=t["primary_hover"], text_color=t["primary_fg"])
         for b in [self.btn_switch, self.btn_unblock, self.btn_resume]:
             b.configure(fg_color=t["btn_sec_bg"], border_color=t["btn_sec_border"], text_color=t["btn_sec_fg"], hover_color=t["btn_sec_hover"])
 
         # Tab 2 网络
-        self.net_banner.configure(fg_color=t["card"], border_color=t["card_border"])
         self.lbl_net_active.configure(text_color=t["ink"])
         self.tree_net_frame.configure(fg_color=t["card"], border_color=t["card_border"])
         self.btn_switch_node.configure(fg_color=t["primary"], hover_color=t["primary_hover"], text_color=t["primary_fg"])
@@ -624,7 +681,7 @@ class AntigravityModernStudio(ctk.CTk):
         for b in [self.btn_log_refresh, self.btn_open_log_dir]:
             b.configure(fg_color=t["btn_sec_bg"], border_color=t["btn_sec_border"], text_color=t["btn_sec_fg"], hover_color=t["btn_sec_hover"])
 
-        # 底部提示与主题切换
+        # 底部提示与风格切换
         self.lbl_tips.configure(text_color=t["muted"])
         self.seg_theme.configure(
             selected_color=t["primary"],
@@ -634,13 +691,13 @@ class AntigravityModernStudio(ctk.CTk):
             text_color=t["ink"]
         )
 
-        # 刷新 ttk.Treeview 现代样式
+        # 刷新 ttk.Treeview 现代紧凑样式
         self.style.configure(
             "Treeview",
             background=t["tree_bg"],
             foreground=t["tree_fg"],
             fieldbackground=t["tree_bg"],
-            rowheight=34,
+            rowheight=28,
             font=(FONT_FAMILY, 9),
             borderwidth=0,
             relief="flat"
@@ -657,11 +714,11 @@ class AntigravityModernStudio(ctk.CTk):
             font=(FONT_FAMILY, 9, "bold"),
             borderwidth=0,
             relief="flat",
-            padding=(6, 6)
+            padding=(6, 4)
         )
         self.style.map(
             "Treeview.Heading",
-            background=[("active", t["border_subtle"] if "border_subtle" in t else t["card_border"])],
+            background=[("active", t["card_border"])],
             foreground=[("active", t["primary"])]
         )
 
@@ -677,30 +734,72 @@ class AntigravityModernStudio(ctk.CTk):
         self.net_tree.tag_configure("odd", background=t["tree_odd"], foreground=t["tree_fg"])
 
     def _build_ui(self):
-        # 1. 顶部区域：呼吸感微拟态浮动卡片
-        self.header_frame = ctk.CTkFrame(self, corner_radius=16, border_width=1.5)
-        self.header_frame.pack(fill="x", padx=18, pady=(12, 6))
+        # 1. 顶部区域：一体化紧凑卡片 (解决“过大分散”的核心关键)
+        self.header_frame = ctk.CTkFrame(self, corner_radius=14, border_width=1)
+        self.header_frame.pack(fill="x", padx=16, pady=(10, 4))
 
-        title_box = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        title_box.pack(side="left", padx=16, pady=10)
+        # 头部第 1 行：标题 + 核心操作按钮
+        top_row = ctk.CTkFrame(self.header_frame, fg_color="transparent")
+        top_row.pack(fill="x", padx=14, pady=(8, 4))
 
         self.lbl_title = ctk.CTkLabel(
-            title_box,
-            text="Antigravity 管理面板",
-            font=(FONT_FAMILY, 14, "bold")
+            top_row,
+            text="⚡ Antigravity 管理面板",
+            font=(FONT_FAMILY, 13, "bold")
         )
-        self.lbl_title.pack(anchor="w")
+        self.lbl_title.pack(side="left")
 
-        sub_box = ctk.CTkFrame(title_box, fg_color="transparent")
-        sub_box.pack(anchor="w", pady=(3, 0))
+        top_btn_bar = ctk.CTkFrame(top_row, fg_color="transparent")
+        top_btn_bar.pack(side="right")
+
+        self.btn_open_main = ctk.CTkButton(
+            top_btn_bar,
+            text="▶ 进入主界面 (5s)",
+            command=self.on_open_main_clicked,
+            corner_radius=15,
+            font=(FONT_FAMILY, 9, "bold"),
+            height=30,
+            width=125
+        )
+        self.btn_open_main.pack(side="left", padx=3)
+
+        self.btn_restart_repair = ctk.CTkButton(
+            top_btn_bar,
+            text="⚡ 智能自愈重启",
+            command=self.on_restart_and_reload_account_clicked,
+            corner_radius=15,
+            font=(FONT_FAMILY, 9, "bold"),
+            height=30,
+            width=96
+        )
+        self.btn_restart_repair.pack(side="left", padx=3)
+
+        self.btn_refresh = ctk.CTkButton(
+            top_btn_bar,
+            text="🔄",
+            command=self.refresh_data,
+            corner_radius=15,
+            font=(FONT_FAMILY, 9, "bold"),
+            height=30,
+            width=32,
+            border_width=1
+        )
+        self.btn_refresh.pack(side="left", padx=3)
+
+        # 头部第 2 行：专线守护开关 + 倒计时提示 + 状态胶囊横条 (内嵌于卡片内，告别分散悬浮)
+        sub_row = ctk.CTkFrame(self.header_frame, fg_color="transparent")
+        sub_row.pack(fill="x", padx=14, pady=(0, 8))
+
+        sub_left = ctk.CTkFrame(sub_row, fg_color="transparent")
+        sub_left.pack(side="left")
 
         self.switch_guard = ctk.CTkSwitch(
-            sub_box,
+            sub_left,
             text="专线守护",
             font=(FONT_FAMILY, 9, "bold"),
             command=self._toggle_guard_switch,
-            width=36,
-            height=18
+            width=32,
+            height=16
         )
         if self.guard_switch_enabled:
             self.switch_guard.select()
@@ -709,108 +808,44 @@ class AntigravityModernStudio(ctk.CTk):
         self.switch_guard.pack(side="left")
 
         self.lbl_countdown_hint = ctk.CTkLabel(
-            sub_box,
-            text="⏳ 5秒未操作将自动启动 · 点击任何地方常驻",
+            sub_left,
+            text="⏳ 5秒未操作自动启动 · 点击常驻",
             font=(FONT_FAMILY, 9)
         )
-        self.lbl_countdown_hint.pack(side="left", padx=(12, 0))
+        self.lbl_countdown_hint.pack(side="left", padx=(10, 0))
 
-        # 顶部右侧控制按钮
-        top_btn_bar = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        top_btn_bar.pack(side="right", padx=16, pady=10)
-
-        self.btn_open_main = ctk.CTkButton(
-            top_btn_bar,
-            text="▶ 进入主界面 (5s)",
-            command=self.on_open_main_clicked,
-            corner_radius=18,
-            font=(FONT_FAMILY, 10, "bold"),
-            height=34,
-            width=130
+        # 头部右侧内联状态指标
+        self.lbl_header_status = ctk.CTkLabel(
+            sub_row,
+            text="账号: 加载中... | 专线: 检测中...",
+            font=(FONT_FAMILY, 9)
         )
-        self.btn_open_main.pack(side="left", padx=4)
+        self.lbl_header_status.pack(side="right")
 
-        self.btn_restart_repair = ctk.CTkButton(
-            top_btn_bar,
-            text="⚡ 智能自愈重启",
-            command=self.on_restart_and_reload_account_clicked,
-            corner_radius=18,
-            font=(FONT_FAMILY, 10, "bold"),
-            height=34,
-            width=110
-        )
-        self.btn_restart_repair.pack(side="left", padx=4)
-
-        self.btn_refresh = ctk.CTkButton(
-            top_btn_bar,
-            text="🔄",
-            command=self.refresh_data,
-            corner_radius=18,
-            font=(FONT_FAMILY, 10, "bold"),
-            height=34,
-            width=38,
-            border_width=1.5
-        )
-        self.btn_refresh.pack(side="left", padx=4)
-
-        # 2. 状态胶囊横幅 (纯净3卡，间距通透)
-        self.badges_bar = ctk.CTkFrame(self, fg_color="transparent")
-        self.badges_bar.pack(fill="x", padx=18, pady=2)
-
-        self.badge_account = ctk.CTkLabel(
-            self.badges_bar,
-            text="账号: 加载中...",
-            font=(FONT_FAMILY, 9, "bold"),
-            corner_radius=12,
-            height=28,
-            padx=12
-        )
-        self.badge_account.pack(side="left", padx=(0, 8))
-
-        self.badge_network = ctk.CTkLabel(
-            self.badges_bar,
-            text="专线: 检测中...",
-            font=(FONT_FAMILY, 9, "bold"),
-            corner_radius=12,
-            height=28,
-            padx=12
-        )
-        self.badge_network.pack(side="left", padx=8)
-
-        self.badge_cdp = ctk.CTkLabel(
-            self.badges_bar,
-            text="通道: 探测中...",
-            font=(FONT_FAMILY, 9, "bold"),
-            corner_radius=12,
-            height=28,
-            padx=12
-        )
-        self.badge_cdp.pack(side="left", padx=8)
-
-        # 3. In-App 静默反馈横幅
-        self.toast_banner = ctk.CTkFrame(self, corner_radius=12, height=32)
+        # 2. In-App 静默反馈横幅
+        self.toast_banner = ctk.CTkFrame(self, corner_radius=10, height=28)
         self.lbl_toast = ctk.CTkLabel(self.toast_banner, text="", font=(FONT_FAMILY, 9, "bold"))
-        self.lbl_toast.pack(side="left", padx=12, pady=4)
+        self.lbl_toast.pack(side="left", padx=10, pady=3)
         btn_close_toast = ctk.CTkButton(
             self.toast_banner,
             text="✕",
             command=self._hide_toast,
-            width=20,
-            height=20,
-            corner_radius=10,
+            width=18,
+            height=18,
+            corner_radius=9,
             fg_color="transparent",
             text_color="#64748b",
             hover_color="#e2e8f0"
         )
-        btn_close_toast.pack(side="right", padx=8, pady=4)
+        btn_close_toast.pack(side="right", padx=6, pady=3)
 
-        # 4. 中部三大简洁 Tab 栏：【账号】、【网络】、【日志】
+        # 3. 中部三大简洁 Tab 栏：【账号】、【网络】、【日志】
         self.tabview = ctk.CTkTabview(
             self,
-            corner_radius=16,
-            border_width=1.5
+            corner_radius=14,
+            border_width=1
         )
-        self.tabview.pack(fill="both", expand=True, padx=18, pady=(4, 6))
+        self.tabview.pack(fill="both", expand=True, padx=16, pady=(2, 4))
 
         self.tab_accounts = self.tabview.add("账号")
         self.tab_network = self.tabview.add("网络")
@@ -820,9 +855,9 @@ class AntigravityModernStudio(ctk.CTk):
         self._build_network_tab()
         self._build_logs_tab()
 
-        # 5. 底部功能栏
+        # 4. 底部功能栏 (极简高度，不占地方)
         self.bottom_bar = ctk.CTkFrame(self, fg_color="transparent")
-        self.bottom_bar.pack(fill="x", padx=18, pady=(2, 10))
+        self.bottom_bar.pack(fill="x", padx=16, pady=(1, 6))
 
         self.lbl_tips = ctk.CTkLabel(
             self.bottom_bar,
@@ -834,7 +869,7 @@ class AntigravityModernStudio(ctk.CTk):
         theme_box = ctk.CTkFrame(self.bottom_bar, fg_color="transparent")
         theme_box.pack(side="right")
 
-        ctk.CTkLabel(theme_box, text="风格:", font=(FONT_FAMILY, 9)).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(theme_box, text="风格:", font=(FONT_FAMILY, 9)).pack(side="left", padx=(0, 4))
 
         theme_map = {"neo": "🎨 拟态浅色", "glass": "💧 液态玻璃", "midnight": "🌙 拟态深色"}
         rev_theme_map = {v: k for k, v in theme_map.items()}
@@ -847,17 +882,17 @@ class AntigravityModernStudio(ctk.CTk):
             theme_box,
             values=["🎨 拟态浅色", "💧 液态玻璃", "🌙 拟态深色"],
             command=_on_theme_select,
-            corner_radius=14,
+            corner_radius=12,
             font=(FONT_FAMILY, 9),
-            height=28
+            height=24
         )
         self.seg_theme.set(theme_map.get(self.theme_id, "🎨 拟态浅色"))
         self.seg_theme.pack(side="left")
 
     def _build_accounts_tab(self):
-        # 账号表格容器 (呼吸感圆角卡片)
-        self.tree_acc_frame = ctk.CTkFrame(self.tab_accounts, corner_radius=14, border_width=1.5)
-        self.tree_acc_frame.pack(fill="both", expand=True, padx=6, pady=(6, 4))
+        # 账号表格容器 (紧凑且精致的圆角卡片)
+        self.tree_acc_frame = ctk.CTkFrame(self.tab_accounts, corner_radius=12, border_width=1)
+        self.tree_acc_frame.pack(fill="both", expand=True, padx=4, pady=(4, 4))
 
         columns = ("status", "email", "gemini_5h", "reset_5h", "gemini_weekly", "reset_weekly", "score")
         self.tree = ttk.Treeview(
@@ -869,104 +904,93 @@ class AntigravityModernStudio(ctk.CTk):
         )
 
         col_defs = [
-            ("status", "状态", 75, "center"),
-            ("email", "账号", 240, "w"),
-            ("gemini_5h", "5h配额", 85, "center"),
-            ("reset_5h", "5h回血", 145, "center"),
-            ("gemini_weekly", "周额度", 85, "center"),
-            ("reset_weekly", "周重置", 145, "center"),
-            ("score", "评分", 80, "center"),
+            ("status", "状态", 65, "center"),
+            ("email", "账号", 210, "w"),
+            ("gemini_5h", "5h配额", 75, "center"),
+            ("reset_5h", "5h回血", 125, "center"),
+            ("gemini_weekly", "周额度", 75, "center"),
+            ("reset_weekly", "周重置", 125, "center"),
+            ("score", "评分", 65, "center"),
         ]
 
         for col_id, col_name, col_w, col_anchor in col_defs:
             self.tree.heading(col_id, text=col_name, command=lambda c=col_id: self._sort_accounts_by(c))
-            self.tree.column(col_id, width=col_w, minwidth=50, anchor=col_anchor)
+            self.tree.column(col_id, width=col_w, minwidth=40, anchor=col_anchor)
 
         scrollbar = ttk.Scrollbar(self.tree_acc_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
 
-        self.tree.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        scrollbar.pack(side="right", fill="y", pady=8, padx=(0, 6))
+        self.tree.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        scrollbar.pack(side="right", fill="y", pady=6, padx=(0, 4))
 
         self.tree.bind("<Double-1>", self.on_double_click)
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
-        # 选中账号实时说明横条
-        self.lbl_acc_detail = ctk.CTkLabel(
-            self.tab_accounts,
-            text="📌 点击账号可查看健康详细说明 · 双击账号可极速免杀秒切",
-            font=(FONT_FAMILY, 9),
-            corner_radius=10,
-            height=26,
-            anchor="w",
-            padx=12
-        )
-        self.lbl_acc_detail.pack(fill="x", padx=6, pady=(2, 6))
+        # 账号底部条：横向融合【左侧选中信息】与【右侧动作按键】(杜绝层层垂直堆叠)
+        acc_bottom = ctk.CTkFrame(self.tab_accounts, fg_color="transparent")
+        acc_bottom.pack(fill="x", padx=4, pady=(2, 4))
 
-        # 账号专用动作栏 (统一精致圆角 pill 按钮)
-        acc_tools = ctk.CTkFrame(self.tab_accounts, fg_color="transparent")
-        acc_tools.pack(fill="x", padx=6, pady=2)
+        self.lbl_acc_detail = ctk.CTkLabel(
+            acc_bottom,
+            text="📌 点击账号查看说明 · 双击账号极速秒切",
+            font=(FONT_FAMILY, 9),
+            anchor="w"
+        )
+        self.lbl_acc_detail.pack(side="left", fill="x", expand=True, padx=(2, 8))
+
+        acc_tools = ctk.CTkFrame(acc_bottom, fg_color="transparent")
+        acc_tools.pack(side="right")
 
         self.btn_smart = ctk.CTkButton(
             acc_tools,
             text="⚡ 智能盲切",
             command=self.on_auto_switch_clicked,
-            corner_radius=16,
+            corner_radius=14,
             font=(FONT_FAMILY, 9, "bold"),
-            height=32,
-            width=100
+            height=28,
+            width=86
         )
-        self.btn_smart.pack(side="left", padx=(0, 8))
+        self.btn_smart.pack(side="left", padx=2)
 
         self.btn_switch = ctk.CTkButton(
             acc_tools,
             text="🔄 切换账号",
             command=self.on_switch_clicked,
-            corner_radius=16,
+            corner_radius=14,
             font=(FONT_FAMILY, 9, "bold"),
-            border_width=1.5,
-            height=32,
-            width=100
+            border_width=1,
+            height=28,
+            width=86
         )
-        self.btn_switch.pack(side="left", padx=8)
+        self.btn_switch.pack(side="left", padx=2)
 
         self.btn_unblock = ctk.CTkButton(
             acc_tools,
             text="🔓 解除隔离",
             command=self.on_unblock_clicked,
-            corner_radius=16,
+            corner_radius=14,
             font=(FONT_FAMILY, 9, "bold"),
-            border_width=1.5,
-            height=32,
-            width=100
+            border_width=1,
+            height=28,
+            width=86
         )
-        self.btn_unblock.pack(side="left", padx=8)
+        self.btn_unblock.pack(side="left", padx=2)
 
         self.btn_resume = ctk.CTkButton(
             acc_tools,
             text="💬 恢复会话",
             command=self.on_resume_clicked,
-            corner_radius=16,
+            corner_radius=14,
             font=(FONT_FAMILY, 9, "bold"),
-            border_width=1.5,
-            height=32,
-            width=100
+            border_width=1,
+            height=28,
+            width=86
         )
-        self.btn_resume.pack(side="left", padx=8)
+        self.btn_resume.pack(side="left", padx=2)
 
     def _build_network_tab(self):
-        self.net_banner = ctk.CTkFrame(self.tab_network, corner_radius=12, border_width=1.5, height=34)
-        self.net_banner.pack(fill="x", padx=6, pady=(6, 6))
-
-        self.lbl_net_active = ctk.CTkLabel(
-            self.net_banner,
-            text="当前专线: 日本专线 (延迟: 318ms · 端口: 17897 · 状态: 正常保活中)",
-            font=(FONT_FAMILY, 9, "bold")
-        )
-        self.lbl_net_active.pack(side="left", padx=14, pady=6)
-
-        self.tree_net_frame = ctk.CTkFrame(self.tab_network, corner_radius=14, border_width=1.5)
-        self.tree_net_frame.pack(fill="both", expand=True, padx=6, pady=4)
+        self.tree_net_frame = ctk.CTkFrame(self.tab_network, corner_radius=12, border_width=1)
+        self.tree_net_frame.pack(fill="both", expand=True, padx=4, pady=(4, 4))
 
         net_columns = ("status", "country", "name", "rtt", "proto", "source")
         self.net_tree = ttk.Treeview(
@@ -978,83 +1002,95 @@ class AntigravityModernStudio(ctk.CTk):
         )
 
         net_col_defs = [
-            ("status", "状态", 100, "center"),
-            ("country", "地区", 100, "center"),
-            ("name", "专线节点名称", 340, "w"),
-            ("rtt", "延迟", 90, "center"),
-            ("proto", "协议", 80, "center"),
-            ("source", "订阅源", 140, "w"),
+            ("status", "状态", 80, "center"),
+            ("country", "地区", 75, "center"),
+            ("name", "专线节点名称", 300, "w"),
+            ("rtt", "延迟", 75, "center"),
+            ("proto", "协议", 65, "center"),
+            ("source", "订阅源", 120, "w"),
         ]
 
         for col_id, col_name, col_w, col_anchor in net_col_defs:
             self.net_tree.heading(col_id, text=col_name, command=lambda c=col_id: self._sort_network_by(c))
-            self.net_tree.column(col_id, width=col_w, minwidth=50, anchor=col_anchor)
+            self.net_tree.column(col_id, width=col_w, minwidth=40, anchor=col_anchor)
 
         net_scrollbar = ttk.Scrollbar(self.tree_net_frame, orient="vertical", command=self.net_tree.yview)
         self.net_tree.configure(yscrollcommand=net_scrollbar.set)
 
-        self.net_tree.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        net_scrollbar.pack(side="right", fill="y", pady=8, padx=(0, 6))
+        self.net_tree.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        net_scrollbar.pack(side="right", fill="y", pady=6, padx=(0, 4))
 
-        net_tools = ctk.CTkFrame(self.tab_network, fg_color="transparent")
-        net_tools.pack(fill="x", padx=6, pady=6)
+        # 网络底部条：横向融合【左侧在用状态】与【右侧节点操作】
+        net_bottom = ctk.CTkFrame(self.tab_network, fg_color="transparent")
+        net_bottom.pack(fill="x", padx=4, pady=(2, 4))
+
+        self.lbl_net_active = ctk.CTkLabel(
+            net_bottom,
+            text="🟢 当前专线: 检测中...",
+            font=(FONT_FAMILY, 9),
+            anchor="w"
+        )
+        self.lbl_net_active.pack(side="left", fill="x", expand=True, padx=(2, 8))
+
+        net_tools = ctk.CTkFrame(net_bottom, fg_color="transparent")
+        net_tools.pack(side="right")
 
         self.btn_switch_node = ctk.CTkButton(
             net_tools,
             text="🌐 切换节点",
             command=self.on_switch_node_clicked,
-            corner_radius=16,
+            corner_radius=14,
             font=(FONT_FAMILY, 9, "bold"),
-            height=32,
-            width=100
+            height=28,
+            width=86
         )
-        self.btn_switch_node.pack(side="left", padx=(0, 8))
+        self.btn_switch_node.pack(side="left", padx=2)
 
         self.btn_heal_net = ctk.CTkButton(
             net_tools,
             text="⚡ 自愈测速",
             command=self.on_heal_network_clicked,
-            corner_radius=16,
+            corner_radius=14,
             font=(FONT_FAMILY, 9, "bold"),
-            border_width=1.5,
-            height=32,
-            width=100
+            border_width=1,
+            height=28,
+            width=86
         )
-        self.btn_heal_net.pack(side="left", padx=8)
+        self.btn_heal_net.pack(side="left", padx=2)
 
         self.btn_open_clash = ctk.CTkButton(
             net_tools,
             text="📁 配置文件",
             command=self.on_open_clash_dir_clicked,
-            corner_radius=16,
+            corner_radius=14,
             font=(FONT_FAMILY, 9, "bold"),
-            border_width=1.5,
-            height=32,
-            width=100
+            border_width=1,
+            height=28,
+            width=86
         )
-        self.btn_open_clash.pack(side="left", padx=8)
+        self.btn_open_clash.pack(side="left", padx=2)
 
     def _build_logs_tab(self):
         kpi_frame = ctk.CTkFrame(self.tab_logs, fg_color="transparent")
-        kpi_frame.pack(fill="x", padx=6, pady=(6, 6))
+        kpi_frame.pack(fill="x", padx=4, pady=(4, 2))
 
-        self.kpi_acc = ctk.CTkFrame(kpi_frame, corner_radius=12, border_width=1.5)
-        self.kpi_acc.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self.lbl_kpi_acc = ctk.CTkLabel(self.kpi_acc, text="【账号概况】加载中...", font=(FONT_FAMILY, 9), justify="left")
-        self.lbl_kpi_acc.pack(padx=10, pady=8)
+        self.kpi_acc = ctk.CTkFrame(kpi_frame, corner_radius=10, border_width=1)
+        self.kpi_acc.pack(side="left", fill="x", expand=True, padx=(0, 3))
+        self.lbl_kpi_acc = ctk.CTkLabel(self.kpi_acc, text="【账号】加载中...", font=(FONT_FAMILY, 9), justify="left")
+        self.lbl_kpi_acc.pack(padx=8, pady=4)
 
-        self.kpi_net = ctk.CTkFrame(kpi_frame, corner_radius=12, border_width=1.5)
-        self.kpi_net.pack(side="left", fill="x", expand=True, padx=4)
-        self.lbl_kpi_net = ctk.CTkLabel(self.kpi_net, text="【网络概况】加载中...", font=(FONT_FAMILY, 9), justify="left")
-        self.lbl_kpi_net.pack(padx=10, pady=8)
+        self.kpi_net = ctk.CTkFrame(kpi_frame, corner_radius=10, border_width=1)
+        self.kpi_net.pack(side="left", fill="x", expand=True, padx=3)
+        self.lbl_kpi_net = ctk.CTkLabel(self.kpi_net, text="【专线】加载中...", font=(FONT_FAMILY, 9), justify="left")
+        self.lbl_kpi_net.pack(padx=8, pady=4)
 
-        self.kpi_sys = ctk.CTkFrame(kpi_frame, corner_radius=12, border_width=1.5)
-        self.kpi_sys.pack(side="left", fill="x", expand=True, padx=(4, 0))
-        self.lbl_kpi_sys = ctk.CTkLabel(self.kpi_sys, text="【自愈概况】加载中...", font=(FONT_FAMILY, 9), justify="left")
-        self.lbl_kpi_sys.pack(padx=10, pady=8)
+        self.kpi_sys = ctk.CTkFrame(kpi_frame, corner_radius=10, border_width=1)
+        self.kpi_sys.pack(side="left", fill="x", expand=True, padx=(3, 0))
+        self.lbl_kpi_sys = ctk.CTkLabel(self.kpi_sys, text="【自愈】加载中...", font=(FONT_FAMILY, 9), justify="left")
+        self.lbl_kpi_sys.pack(padx=8, pady=4)
 
-        self.tree_inc_frame = ctk.CTkFrame(self.tab_logs, corner_radius=12, border_width=1.5, height=90)
-        self.tree_inc_frame.pack(fill="x", padx=6, pady=4)
+        self.tree_inc_frame = ctk.CTkFrame(self.tab_logs, corner_radius=10, border_width=1, height=85)
+        self.tree_inc_frame.pack(fill="x", padx=4, pady=2)
 
         inc_cols = ("timestamp", "incident_type", "summary", "action")
         self.inc_tree = ttk.Treeview(
@@ -1069,19 +1105,19 @@ class AntigravityModernStudio(ctk.CTk):
         self.inc_tree.heading("summary", text="说明")
         self.inc_tree.heading("action", text="动作")
 
-        self.inc_tree.column("timestamp", width=140, anchor="center")
-        self.inc_tree.column("incident_type", width=120, anchor="center")
-        self.inc_tree.column("summary", width=360, anchor="w")
-        self.inc_tree.column("action", width=220, anchor="w")
+        self.inc_tree.column("timestamp", width=120, anchor="center")
+        self.inc_tree.column("incident_type", width=100, anchor="center")
+        self.inc_tree.column("summary", width=340, anchor="w")
+        self.inc_tree.column("action", width=180, anchor="w")
 
         inc_scroll = ttk.Scrollbar(self.tree_inc_frame, orient="vertical", command=self.inc_tree.yview)
         self.inc_tree.configure(yscrollcommand=inc_scroll.set)
 
-        self.inc_tree.pack(side="left", fill="both", expand=True, padx=6, pady=6)
-        inc_scroll.pack(side="right", fill="y", pady=6, padx=(0, 4))
+        self.inc_tree.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+        inc_scroll.pack(side="right", fill="y", pady=4, padx=(0, 3))
 
         log_ctrl = ctk.CTkFrame(self.tab_logs, fg_color="transparent")
-        log_ctrl.pack(fill="x", padx=6, pady=4)
+        log_ctrl.pack(fill="x", padx=4, pady=2)
 
         ctk.CTkLabel(log_ctrl, text="日志源:", font=(FONT_FAMILY, 9, "bold")).pack(side="left", padx=(0, 4))
 
@@ -1089,128 +1125,154 @@ class AntigravityModernStudio(ctk.CTk):
             log_ctrl,
             values=["supervisor.log", "account-watcher.log", "smart-quota-watcher.log", "launcher-error.log"],
             state="readonly",
-            width=200,
-            corner_radius=12,
+            width=170,
+            corner_radius=10,
             font=(FONT_FAMILY, 9),
+            height=26,
             command=lambda e: self.load_selected_log()
         )
         self.log_combo.set("supervisor.log")
-        self.log_combo.pack(side="left", padx=4)
+        self.log_combo.pack(side="left", padx=2)
 
         self.btn_log_refresh = ctk.CTkButton(
             log_ctrl,
             text="🔄",
             command=self.load_selected_log,
-            corner_radius=12,
-            width=36,
-            height=28,
-            border_width=1.5
+            corner_radius=10,
+            width=28,
+            height=26,
+            border_width=1
         )
-        self.btn_log_refresh.pack(side="left", padx=4)
+        self.btn_log_refresh.pack(side="left", padx=2)
 
         self.btn_open_log_dir = ctk.CTkButton(
             log_ctrl,
             text="📁",
             command=self.on_open_log_dir_clicked,
-            corner_radius=12,
-            width=36,
-            height=28,
-            border_width=1.5
+            corner_radius=10,
+            width=28,
+            height=26,
+            border_width=1
         )
-        self.btn_open_log_dir.pack(side="left", padx=4)
+        self.btn_open_log_dir.pack(side="left", padx=2)
 
         self.log_filter_var = tk.StringVar()
-        ctk.CTkLabel(log_ctrl, text="🔍 过滤:", font=(FONT_FAMILY, 9)).pack(side="left", padx=(12, 4))
+        ctk.CTkLabel(log_ctrl, text="🔍 过滤:", font=(FONT_FAMILY, 9)).pack(side="left", padx=(8, 4))
         self.ent_filter = ctk.CTkEntry(
             log_ctrl,
             textvariable=self.log_filter_var,
-            width=160,
-            corner_radius=12,
-            height=28,
-            font=(FONT_FAMILY, 9)
+            placeholder_text="搜索日志...",
+            font=(FONT_FAMILY, 9),
+            corner_radius=10,
+            height=26
         )
-        self.ent_filter.pack(side="left", padx=4)
-        self.ent_filter.bind("<KeyRelease>", lambda e: self.apply_log_filter())
+        self.ent_filter.pack(side="left", fill="x", expand=True, padx=2)
+        self.ent_filter.bind("<KeyRelease>", lambda e: self.filter_log_view())
 
-        self.log_text_frame = ctk.CTkFrame(self.tab_logs, corner_radius=12, border_width=1.5)
-        self.log_text_frame.pack(fill="both", expand=True, padx=6, pady=4)
+        self.log_text_frame = ctk.CTkFrame(self.tab_logs, corner_radius=10, border_width=1)
+        self.log_text_frame.pack(fill="both", expand=True, padx=4, pady=(2, 4))
 
         self.log_text = tk.Text(
             self.log_text_frame,
-            font=("Consolas", 9),
-            wrap=tk.NONE,
+            wrap="none",
+            font=("Consolas", 8),
             borderwidth=0,
-            padx=8,
-            pady=8
+            relief="flat",
+            padx=6,
+            pady=4
         )
-        log_scroll_y = ttk.Scrollbar(self.log_text_frame, orient="vertical", command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=log_scroll_y.set)
+        text_scroll_y = ttk.Scrollbar(self.log_text_frame, orient="vertical", command=self.log_text.yview)
+        text_scroll_x = ttk.Scrollbar(self.log_text_frame, orient="horizontal", command=self.log_text.xview)
+        self.log_text.configure(yscrollcommand=text_scroll_y.set, xscrollcommand=text_scroll_x.set)
 
-        self.log_text.pack(side="left", fill="both", expand=True, padx=6, pady=6)
-        log_scroll_y.pack(side="right", fill="y", pady=6, padx=(0, 4))
+        self.log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=(4, 0))
+        text_scroll_y.pack(side="right", fill="y", pady=(4, 0), padx=(0, 3))
+        text_scroll_x.pack(side="bottom", fill="x", padx=4, pady=(0, 3))
 
     def refresh_data(self):
         def _fetch():
+            acc_list, cur_id = get_all_accounts_and_quotas()
+            cdp = get_devtools_active_port()
+            nodes = get_network_nodes_data()
+            inc = get_recent_incidents(15)
             try:
-                curr_id, accounts = get_all_accounts_and_quotas()
-                cdp = get_devtools_active_port()
-                is_run = is_antigravity_running()
-                sub = get_subscription_summary()
-                nodes = get_network_nodes_data()
-                incidents = get_recent_incidents(20)
-
-                self.current_id = curr_id
-                self.accounts = accounts
-                self.cdp_port = cdp
-                self.network_nodes = nodes
-                self.incidents = incidents
-
-                self.after(0, lambda: self._render_accounts_table())
-                self.after(0, lambda: self._render_network_table())
-                self.after(0, lambda: self._render_logs_and_stats(is_run, cdp, sub))
-            except Exception as e:
-                self.after(0, lambda: self.show_toast(f"刷新异常: {e}", level="danger"))
+                if self.winfo_exists():
+                    self.after(0, lambda: self._apply_data(acc_list, cur_id, cdp, nodes, inc))
+            except Exception:
+                pass
 
         threading.Thread(target=_fetch, daemon=True).start()
+
+    def _apply_data(self, acc_list, cur_id, cdp, nodes, inc):
+        self.accounts = acc_list or []
+        self.current_id = cur_id
+        self.cdp_port = cdp
+        self.network_nodes = nodes or []
+        self.incidents = inc or []
+
+        self._render_accounts_table()
+        self._render_network_table()
+        self._render_incidents_table()
+        self._update_badges()
+        self.load_selected_log()
+
+    def _update_badges(self):
+        cur_acc = next((a for a in self.accounts if a["id"] == self.current_id), None)
+        active_node = next((n for n in self.network_nodes if n.get("is_active")), None)
+
+        acc_txt = cur_acc.get("email", "未接入") if cur_acc else "未检测到有效账号"
+        net_txt = f"{active_node['flag']} ({active_node['rtt']}ms)" if active_node else "检测中..."
+        cdp_txt = f"CDP:{self.cdp_port}" if self.cdp_port else "CDP未挂载"
+
+        # 更新头部内联状态
+        self.lbl_header_status.configure(text=f"👤 {acc_txt}  |  🌐 {net_txt}  |  🔌 {cdp_txt}")
+
+        # 网络 Tab 说明
+        if active_node:
+            self.lbl_net_active.configure(
+                text=f"🟢 当前在用专线: {active_node['name']} · 延迟 {active_node['rtt']}ms · {active_node['proto']} · 运行保活中"
+            )
+        else:
+            self.lbl_net_active.configure(text="🟡 专线节点探活中 · 暂未获取到活跃出口...")
+
+        # 日志 Tab KPI
+        total = len(self.accounts)
+        healthy = len([a for a in self.accounts if not a.get("disabled") and not a.get("is_parked")])
+        self.lbl_kpi_acc.configure(text=f"【账号池】在用: {acc_txt}\n健康: {healthy}/{total} 候选")
+        
+        node_status = f"{active_node['flag']} {active_node['rtt']}ms" if active_node else "探活中"
+        self.lbl_kpi_net.configure(text=f"【专线链路】出口: {node_status}\n节点总数: {len(self.network_nodes)} 个")
+
+        guard_st = "运行中" if self.guard_switch_enabled else "已停用"
+        self.lbl_kpi_sys.configure(text=f"【守护引擎】自愈状态: {guard_st}\n通道: {cdp_txt}")
 
     def _render_accounts_table(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        curr_email = "未知"
-        curr_5h = 0.0
-        curr_weekly = 0.0
+        self._sort_accounts_data()
 
         for idx, acc in enumerate(self.accounts):
-            is_cur = acc.get("is_current", False) or (acc.get("id") == self.current_id)
-            if is_cur:
-                curr_email = acc.get("email", "")
-                curr_5h = acc.get("gemini_5h", 0.0)
-                curr_weekly = acc.get("gemini_weekly", 0.0)
-
+            is_cur = (acc["id"] == self.current_id)
             if is_cur:
                 status_text = "🟢 在用"
-            elif acc.get("disabled"):
-                status_text = "⛔ 隔离"
-            elif acc.get("is_parked"):
-                status_text = "⏳ 保护"
-            else:
-                status_text = "⚪ 候选"
-
-            reset_5h_text = format_reset_time(acc.get("reset_time_5h"), acc.get("gemini_5h"))
-            reset_weekly_text = format_reset_time(acc.get("reset_time_weekly"), acc.get("gemini_weekly"))
-
-            row_tag = "odd" if idx % 2 == 1 else "even"
-            if is_cur:
                 row_tag = "current"
             elif acc.get("disabled"):
+                status_text = "🔒 隔离"
                 row_tag = "quarantined"
             elif acc.get("is_parked"):
+                status_text = "⏸️ 保护"
                 row_tag = "parked"
+            else:
+                status_text = "⚪ 候选"
+                row_tag = "even" if idx % 2 == 0 else "odd"
+
+            reset_5h_text = format_reset_time(acc.get("reset_5h_dt"), acc.get("gemini_5h"))
+            reset_weekly_text = format_reset_time(acc.get("reset_weekly_dt"), acc.get("gemini_weekly"))
 
             self.tree.insert(
                 "",
-                tk.END,
+                "end",
                 iid=acc["id"],
                 values=(
                     status_text,
@@ -1224,108 +1286,67 @@ class AntigravityModernStudio(ctk.CTk):
                 tags=(row_tag,)
             )
 
-        self.badge_account.configure(text=f"账号: {curr_email} (5h: {curr_5h:.1f}% | 周: {curr_weekly:.1f}%)")
-
     def _render_network_table(self):
         for item in self.net_tree.get_children():
             self.net_tree.delete(item)
 
-        active_name = "未检测到活跃专线"
-        active_rtt = 0
-
         for idx, node in enumerate(self.network_nodes):
-            row_tag = "odd" if idx % 2 == 1 else "even"
             if node.get("is_active"):
                 row_tag = "active_node"
-                active_name = node.get("name")
-                active_rtt = node.get("rtt", 0)
             elif node.get("is_verified"):
                 row_tag = "verified_node"
-
-            rtt_val = node.get("rtt", 0)
-            rtt_str = f"{rtt_val} ms" if rtt_val > 0 else "-"
+            else:
+                row_tag = "even" if idx % 2 == 0 else "odd"
 
             self.net_tree.insert(
                 "",
-                tk.END,
+                "end",
                 iid=str(idx),
                 values=(
-                    node.get("status", "⚪ 候选"),
-                    node.get("flag", "-"),
-                    node.get("name", "-"),
-                    rtt_str,
+                    node.get("status", ""),
+                    node.get("flag", ""),
+                    node.get("name", ""),
+                    f"{node.get('rtt', 0)}ms",
                     node.get("proto", "SS"),
-                    node.get("source", "-")
+                    node.get("source", "")
                 ),
                 tags=(row_tag,)
             )
 
-        self.badge_network.configure(text=f"专线: {active_name} ({active_rtt}ms)")
-        self.lbl_net_active.configure(
-            text=f"当前专线: {active_name} (延迟: {active_rtt}ms · 端口: 17897 · 保活正常)"
-        )
-
-    def _render_logs_and_stats(self, is_run, cdp, sub):
-        if is_run and cdp:
-            self.badge_cdp.configure(text=f"通道: 🟢 在线 ({cdp})")
-        elif is_run:
-            self.badge_cdp.configure(text="通道: 🟢 客户端在运行")
-        else:
-            self.badge_cdp.configure(text="通道: ⚪ 离线 (等待启动)")
-
-        tot_acc = len(self.accounts)
-        full_acc = sum(1 for a in self.accounts if (a.get("gemini_5h", 0) >= 99 and a.get("gemini_weekly", 0) >= 99))
-        usable_acc = sum(1 for a in self.accounts if not a.get("disabled") and (a.get("gemini_weekly", 0) > 5 or a.get("gemini_5h", 0) > 10))
-        parked_acc = sum(1 for a in self.accounts if a.get("is_parked") or (a.get("gemini_weekly", 0) <= 5 and not a.get("disabled")))
-        banned_acc = sum(1 for a in self.accounts if a.get("disabled"))
-
-        self.lbl_kpi_acc.configure(
-            text=f"【账号概况】\n总纳管: {tot_acc} | 满血: {full_acc}\n可用: {usable_acc} | 保护: {parked_acc} | 隔离: {banned_acc}"
-        )
-
-        tot_nodes = len(self.network_nodes)
-        ver_nodes = sum(1 for n in self.network_nodes if n.get("is_verified"))
-        self.lbl_kpi_net.configure(
-            text=f"【网络概况】\n候选专线: {tot_nodes} 条 (JP/US 优选)\n放行已验证: {ver_nodes} 条 | 最优节点排在最前"
-        )
-
-        self.lbl_kpi_sys.configure(
-            text=f"【自愈概况】\n守护进程: 正常保活中\nCDP 端口: {cdp if cdp else '离线'}\n调度策略: 综合评分最优盲切"
-        )
-
+    def _render_incidents_table(self):
         for item in self.inc_tree.get_children():
             self.inc_tree.delete(item)
 
-        for inc in reversed(self.incidents[-10:]):
-            ts = inc.get("timestamp", "-")
-            if "T" in ts:
-                ts = ts.split(".")[0].replace("T", " ")
+        for inc in reversed(self.incidents):
+            ts = inc.get("timestamp", "")
+            if len(ts) >= 19:
+                ts = ts[5:19].replace("T", " ")
             self.inc_tree.insert(
                 "",
-                tk.END,
+                "end",
                 values=(
                     ts,
-                    inc.get("incident_type", "-"),
-                    inc.get("summary", "-"),
-                    inc.get("action_taken", "-")
+                    inc.get("incident_type", "INCIDENT"),
+                    inc.get("summary", ""),
+                    inc.get("action", "")
                 )
             )
 
-        self.load_selected_log()
-
     def load_selected_log(self):
-        log_name = self.log_combo.get()
-        lines = get_recent_log_lines(log_name, 150)
+        fname = self.log_combo.get()
+        lines = get_recent_log_lines(fname, max_lines=150)
         self.raw_log_lines = lines
-        self.apply_log_filter()
+        self.filter_log_view()
 
-    def apply_log_filter(self):
-        filt = self.log_filter_var.get().strip().lower()
-        self.log_text.delete("1.0", tk.END)
+    def filter_log_view(self):
+        kw = self.log_filter_var.get().strip().lower()
+        self.log_text.delete("1.0", "end")
+        matched = []
         for line in self.raw_log_lines:
-            if not filt or filt in line.lower():
-                self.log_text.insert(tk.END, line)
-        self.log_text.see(tk.END)
+            if not kw or kw in line.lower():
+                matched.append(line)
+        self.log_text.insert("end", "".join(matched))
+        self.log_text.see("end")
 
     def _sort_accounts_by(self, col):
         self.pause_countdown()
@@ -1334,20 +1355,28 @@ class AntigravityModernStudio(ctk.CTk):
         else:
             self.sort_col = col
             self.sort_desc = True
-
-        def _get_val(x):
-            if col == "gemini_5h":
-                return x.get("gemini_5h", 0.0)
-            if col == "gemini_weekly":
-                return x.get("gemini_weekly", 0.0)
-            if col == "score":
-                return x.get("cockpit_score", -999999.0)
-            if col == "email":
-                return x.get("email", "").lower()
-            return str(x.get(col, ""))
-
-        self.accounts.sort(key=_get_val, reverse=self.sort_desc)
         self._render_accounts_table()
+
+    def _sort_accounts_data(self):
+        def _get_val(a):
+            if self.sort_col == "gemini_5h":
+                return a.get("gemini_5h", 0.0)
+            if self.sort_col == "gemini_weekly":
+                return a.get("gemini_weekly", 0.0)
+            if self.sort_col == "score":
+                return a.get("cockpit_score", 0.0)
+            if self.sort_col == "email":
+                return a.get("email", "").lower()
+            if self.sort_col == "status":
+                return 0 if a["id"] == self.current_id else (1 if not a.get("disabled") else 2)
+            return a.get(self.sort_col, "")
+
+        self.accounts.sort(key=lambda x: (
+            x["id"] != self.current_id,
+            x.get("disabled", False),
+            x.get("is_parked", False),
+            -_get_val(x) if isinstance(_get_val(x), (int, float)) else _get_val(x)
+        ))
 
     def _sort_network_by(self, col):
         self.pause_countdown()
@@ -1383,7 +1412,7 @@ class AntigravityModernStudio(ctk.CTk):
             sc = acc.get("cockpit_score", 0.0)
             desc = acc.get("disabled_reason", "")
             if not desc:
-                desc = "配额见底静置保护中" if acc.get("is_parked") else "健康候选 · 综合评分良好"
+                desc = "静置保护" if acc.get("is_parked") else "健康候选"
             self.lbl_acc_detail.configure(
                 text=f"📌 选中: {email} | 5h: {g5:.1f}% | 周额: {gw:.1f}% | 评分: {sc:.0f} | 状态: {desc}"
             )
@@ -1490,7 +1519,7 @@ class AntigravityModernStudio(ctk.CTk):
         self.is_switching = True
         target = next((a for a in self.accounts if a["id"] == account_id), None)
         target_email = target.get("email", "") if target else account_id
-        self.badge_account.configure(text=f"正在秒切至: {target_email}...")
+        self.lbl_header_status.configure(text=f"正在秒切至: {target_email}...")
         self.show_toast(f"⚡ 正在免杀秒切至 【{target_email}】...", level="info", duration_ms=2500)
 
         def _run():
@@ -1521,7 +1550,7 @@ class AntigravityModernStudio(ctk.CTk):
             return
 
         self.is_switching = True
-        self.badge_account.configure(text="正在盲切最优账号...")
+        self.lbl_header_status.configure(text="正在盲切最优账号...")
         self.show_toast("⚡ 正在按综合评分盲切最优候选账号...", level="info", duration_ms=2500)
 
         def _run():
@@ -1656,8 +1685,14 @@ class AntigravityModernStudio(ctk.CTk):
 
 
 def main():
-    app = AntigravityModernStudio()
-    app.mainloop()
+    if not acquire_single_instance():
+        return
+    try:
+        app = AntigravityModernStudio()
+        app.protocol("WM_DELETE_WINDOW", app.destroy)
+        app.mainloop()
+    finally:
+        release_single_instance()
 
 
 if __name__ == "__main__":

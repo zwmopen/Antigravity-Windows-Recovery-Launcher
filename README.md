@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-v2.9.4-blue.svg" alt="版本 v2.9.4" />
+  <img src="https://img.shields.io/badge/版本-v2.9.6-blue.svg" alt="版本 v2.9.6" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线沙盒-127.0.0.1:17897-teal.svg" alt="专线沙盒" />
   <img src="https://img.shields.io/badge/算力调度-四级智能优先级-orange.svg" alt="算力调度" />
@@ -80,12 +80,14 @@
 
 ## 📸 界面展示
 
-> 💡 **告别臃肿控制台**：软件全面精简为**“平时完全静默、唤醒仅见精致胶囊”**的心流交互设计：
+> 💡 **单窗口算力中枢**：桌面入口只打开一个统一管理面板；冷启动恢复由面板托管，恢复胶囊不再叠开第二个窗口。
 
 | 热启动双态胶囊卡片 | 冷启动极速核验卡片（四行透明看板） |
 | :---: | :---: |
 | ![热启动胶囊](showcase/hot_launch_choice.png) | ![冷启动胶囊](showcase/cold_launch_capsule.png) |
 | *检测到编辑器运行时：3秒自动进入或一键自愈重连* | *冷启动时呼出：专线沙盒 / Google链路 / 模型生成 / 算力账号四维透明自检* |
+
+管理面板采用深海液态玻璃与香槟金配色，账号、网络、日志集中在同一窗口；圆角额度卡、宽屏留白和柔和呼吸描边保证状态清晰而不拥挤。面板已存在时，再次点击启动器会聚焦原窗口。
 
 ---
 

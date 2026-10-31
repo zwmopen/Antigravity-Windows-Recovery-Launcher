@@ -5,7 +5,15 @@
 # 开发交接
 
 > 这是项目唯一权威交接文档。新信息直接并入本文档，Git 保存历史。  
-> 当前本地启动热修复：2026-10-08（项目版本保持 2.9.4）；AccountWatcher 为 0.6.1。
+> 当前项目版本：2.9.6；C# 启动器为 1.6.23。2026-11-01 已完成管理面板流体主题与单窗口恢复修复。
+
+## 2026-11-01 管理面板流体主题与单窗口恢复
+
+- 管理面板改为宽屏深海液态玻璃与香槟金配色，加入圆角浮层、额度留白和低频呼吸描边；窗口尺寸乘以 CustomTkinter 控件缩放，并按屏幕可用面积限缩，修复 150% DPI 下状态和账号卡被裁切。
+- 定位双面板根因：管理面板冷启动倒计时会启动 `--force-launch`，原 C# 启动器又显示独立恢复胶囊。C# 现检测精确窗口标题 `Antigravity 管理面板`，检测到时在隐藏模式调用监督器并附带 `-PrelaunchClient`，成功后聚焦 Antigravity；管理面板缺席时仍显示恢复胶囊。
+- Python 管理面板保留命名互斥体；桌面 EXE 与直开 Python 入口都复用该面板，重复点击聚焦已打开窗口。
+- 源码与本地运行副本按哈希对齐；Python 语法编译和 C# 启动器编译通过；实机截图确认新的完整窗口布局。没有执行客户端冷启动、账号切换或真实模型门禁。
+- 回滚快照：`%LOCALAPPDATA%\Antigravity\private-proxy\backups\manager-panel-single-window-before-20261101`。
 
 ## 2026-10-08 Antigravity 启动失败：PowerShell 5.1 UTF-8 编码热修复
 
@@ -45,7 +53,7 @@
 
 ## 架构、模块和启动方式
 
-- `Antigravity-Recovery-Launcher.exe`：稳定桌面入口和克制玻璃中文实时状态窗口；从本次新增的脱敏事件显示独立代理、候选数量、Google/OAuth、出口、真实模型、中文注入和应用就绪状态，再调用监督器完成恢复。若后台恢复已先占用监督器，前台会等待并接管其结果。
+- `Antigravity-Recovery-Launcher.exe`：默认启动 CustomTkinter 算力管理面板；面板已存在时再次点击会聚焦原窗。面板发起冷启动或自愈时，EXE 检测该窗口并隐藏运行恢复流程、附带 `-PrelaunchClient`，避免额外显示第二个恢复胶囊；没有管理面板时仍使用胶囊显示进度。
 - `Antigravity-AccountWatcher.exe`：监控 Cockpit 当前账号、无代理 `--reuse-window` 实例，以及 17897 到 Google/OAuth 的持续健康；0.6.0 对地区 400 做 30 秒防抖、120 秒稳定观察和 15 分钟熔断，连续 3 次真实网络失败仍触发有界后台恢复。
 - `Antigravity-ProxySupervisor.ps1`：监督器 2.8.6 从 Clash Verge 与 Mihomo Party 订阅索引定位仍有效的本地缓存，发现跨来源日本/美国候选，维护失败冷却，配置/启动 17897，并以官方 `agy` 最小真实生成作为正式 17897 模型门禁；临时端口只做网络/出口预检，避免重复消耗额度；US/JP 共同进入低延迟池，不再按国家硬编码优先；新增脱敏候选数量、来源统计和失败状态事件供中文启动器显示。
 - `src/watchdog-restore-fix.ps1`：按监督器版本保护 private-proxy golden copy，隔离探针的局部超时配置不会触发误回滚。
@@ -68,7 +76,7 @@
 
 ## 版本、构建、发布和回滚
 
-- 当前源码恢复链版本：1.6.19；监督器 2.8.6、AccountWatcher 0.6.0、启动器 1.6.19。安装目录与源码副本必须用哈希分别核对，不能仅凭文件时间判断已经生效。
+- 当前项目版本：2.9.6；C# 启动器版本：1.6.23。`src/antigravity_switcher_gui.py` 是管理面板唯一源码真源；运行目录和工具副本均需核对 SHA-256。
 - 独立分享版仍为 0.4.0，且不包含监控组件、节点池或代理配置。
 - 构建：Windows .NET Framework 4.0 C# 编译器生成两个 winexe，脚本执行语法检查。
 - 发布：本地只更新 `releases/current` 并安装验证；远端 CI 生成 Setup/ZIP 并上传 Release。Setup 可安装到用户选择目录，ZIP 默认复制到 `%LOCALAPPDATA%\Antigravity\launcher`。桌面快捷方式和开机监控始终指向稳定运行目录，不依赖源码目录路径。

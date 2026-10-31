@@ -11,13 +11,15 @@ graph TD
     User["用户操作 / 桌面快捷方式"] --> Launcher["Antigravity-Recovery-Launcher.exe (交互前端)"]
     
     subgraph Frontend ["前台感知与交互层"]
-        Launcher -->|Antigravity 未运行| ColdForm["冷启动胶囊卡片 (极速核验进度)"]
-        Launcher -->|Antigravity 已运行| HotForm["热启动胶囊卡片 (3s代码速切 / ⚡切换最优专线)"]
+        Launcher -->|默认入口| Manager["算力管理面板 (账号 / 网络 / 日志)"]
+        Launcher -->|无管理面板且直接恢复| ColdForm["恢复胶囊卡片 (极速核验进度)"]
+        Manager -->|冷启动 / 自愈| SilentRecovery["面板托管恢复 (隐藏重复胶囊)"]
     end
 
     subgraph CoreEngine ["核心调度与控制层 (ProxySupervisor.ps1)"]
         ColdForm -->|执行冷启动| Supervisor["ProxySupervisor (核心调度引擎)"]
-        HotForm -->|点击专线切换| Supervisor
+        SilentRecovery -->|PrelaunchClient| Supervisor
+        Manager -->|点击专线切换| Supervisor
         
         Supervisor --> SubRadar["多源订阅雷达 (零配置解析 %APPDATA%)"]
         Supervisor --> SmartPool["Smart Pool 智能评分与候选优选 (0~1000分)"]
@@ -44,9 +46,8 @@ graph TD
 
 ### 2.1 交互前端 (Antigravity-Recovery-Launcher.exe)
 * **纯 C# / GDI+ 原生轻量开发**：零外部大型依赖，启动耗时 < 30ms，内存占用 < 8MB；
-* **双态情境感知**：
-  - **冷启动**：呼出半透明圆角胶囊卡片，实时投射专线检索、Google 通路握手与模型放行状态；
-  - **热启动**：检测到 Antigravity 已在运行时，呼出极简双选胶囊，提供【进入代码窗口 (3s)】与【⚡ 切换最优专线】，绝不强杀编辑器进程；
+* **单窗口管理与恢复**：默认入口打开 CustomTkinter 算力管理面板；面板已存在时聚焦原窗；恢复流程检测到该面板后在后台执行 `-PrelaunchClient`，复用账号/网络/日志面板，不再叠开恢复胶囊；
+* **独立恢复状态窗**：没有管理面板时，直接恢复仍可使用半透明圆角胶囊显示专线、Google 通路和模型门禁进度；
 * **防重入与多实例安全**：基于系统命名互斥体（Named Mutex），避免重复启动引发竞争。
 
 ### 2.2 核心调度引擎 (Antigravity-ProxySupervisor.ps1)
