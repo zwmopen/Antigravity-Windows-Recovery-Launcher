@@ -1,23 +1,20 @@
 # -*- coding: utf-8 -*-
 """
 antigravity_switcher_gui.py — 反重力 (Antigravity) 启动与算力调度中枢 (Management Studio)
-专业级、高颜值、极简直觉交互桌面面板：
-1. 整体布局与尺寸：
-   - 940x620 屏幕绝对居中弹出，现代应用质感，呼吸感留白与精细排版。
-2. 顶部核心功能栏：
-   - 专线自愈守护胶囊开关 [ 🛡️ 专线守护: 🟢 开启 / ⚪ 关闭 ]
-   - 5秒自动打开倒计时 [ ▶ 打开主界面 (5s) ] (任何点击交互即刻暂停倒计时并常驻)
-   - 智能自愈重启 [ ⚡ 智能自愈重启 ] (自动判断凭据变更或网络修复，无阻塞弹窗)
-3. 状态胶囊横幅与 In-App 静默通知：
-   - 活跃账号 / 专线链路 / CDP 免杀状态胶囊
-   - 无干扰 In-App Toast 横幅，彻底告别打断操作的系统 Modal 弹窗
-4. 中部三大核心 Tab 栏：
-   - 👤 算力账号大盘 (完美列宽预算、综合评分、精准回血倒计时、单击详情、双击免杀秒切)
-   - 🌐 专线网络大盘 (最优专线排在最上面，在用置顶、已验证次之、延迟升序)
-   - 📑 运行日志与统计 (KPI 指标看板、自愈审计台账、实时日志流与检索)
-5. 底部功能与同源主题切换器：
-   - 8810 控制台同源三大设计系统：🎨 拟态浅色 (neo) | 🌙 沉浸暗夜 (midnight) | 💎 玻璃拟态 (glass)
-   - Segmented Pill 分段控制按钮，毫秒级全局动态变色，持久化至 ~/.antigravity_cockpit/hub_theme_config.json
+专业级视觉重构 (v5.0)：
+1. 字体系统全面升级：
+   - 全面采用 Microsoft YaHei UI (微软雅黑 UI)，根治 Segoe UI 回退到中易宋体造成的奇形怪状、锯齿与大小不一
+   - 严格字阶体系 (标题 12pt Bold, 正文/表格 9pt, 按钮 9pt Bold, 徽标 8.5pt Bold)
+2. 色彩系统对齐 8810 控制台与 app-master-container：
+   - 极简清爽浅色 (neo): 告别灰暗水泥灰，采用干净通透的高级 Slate 白 (#f8fafc / #ffffff / #0f172a / #e2e8f0)
+   - 沉浸暗夜 (midnight): 深度宇宙暗夜黑 (#0b0f17 / #162032 / #1e293b / #f1f5f9 / #38bdf8)
+   - 玻璃拟态 (glass): 柔光通透冰晶蓝白 (#f0f7ff / #ffffff / #0f172a / #dbeafe)
+   - 彻底剔除刺眼花哨的“杂耍彩虹按钮”，采用现代克制、统一的层级设计 (主操作高亮，次操作精致轮廓)
+3. 交互与排版直觉：
+   - 940x620 屏幕居中弹出，呼吸感留白与精细间距
+   - 7 列严格分配 855px，横向零截断
+   - In-App Toast 静默通知，双击账号直接秒切，零弹窗打扰
+   - 5秒自动启动倒计时，任何交互瞬间常驻
 """
 
 import os
@@ -37,7 +34,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 import ctypes
 try:
-    myappid = "antigravity.studio.gui.v4"
+    myappid = "antigravity.studio.gui.v5"
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 except Exception:
     pass
@@ -96,145 +93,201 @@ ICON_PATH = next((p for p in ICON_CANDIDATES if os.path.exists(p)), None)
 THEME_CONFIG_FILE = Path(os.path.expanduser("~/.antigravity_cockpit/hub_theme_config.json"))
 SETTINGS_FILE = os.path.join(PROXY_DIR, "launcher-settings.json")
 
-# 8810 控制台同源设计系统色卡
+# 8810 控制台与 app-master-container 纯正高级配色卡
 THEMES = {
     "neo": {
         "id": "neo",
-        "name": "拟态浅色",
-        "icon": "🎨",
-        "bg": "#e8edf3",
-        "panel": "#e2eaf2",
-        "card": "#edf2f6",
-        "card_alt": "#dbe4ed",
-        "border": "#d1dbe4",
-        "ink": "#242c38",
-        "muted": "#61758a",
-        "dim": "#8b9baa",
-        "primary": "#2f7ff5",
-        "primary_hover": "#1d6fe8",
+        "name": "极简浅色",
+        "icon": "☀️",
+        # 背景：纯净现代明亮 Slate 50，告别灰暗水泥感
+        "bg": "#f8fafc",
+        "panel": "#ffffff",
+        "panel_subtle": "#f1f5f9",
+        "card": "#ffffff",
+        "card_alt": "#f8fafc",
+        "border": "#e2e8f0",
+        "border_subtle": "#edf2f7",
+        # 文字：Deep Slate 900，极高对比度、清晰锐利
+        "ink": "#0f172a",
+        "muted": "#64748b",
+        "dim": "#94a3b8",
+        # 主色：克制优雅的 Royal Blue，绝非刺眼荧光蓝
+        "primary": "#2563eb",
+        "primary_hover": "#1d4ed8",
         "primary_fg": "#ffffff",
-        "restart_btn": "#7c3aed",
-        "restart_hover": "#6d28d9",
-        "success": "#10b981",
+        # 重启按钮：轻奢曜石黑按钮，对比高级感
+        "restart_btn": "#0f172a",
+        "restart_hover": "#1e293b",
+        "restart_fg": "#ffffff",
+        # 语义色：温润护眼色调
+        "success": "#059669",
         "success_bg": "#d1fae5",
-        "warning": "#ecaa1c",
+        "success_fg": "#065f46",
+        "warning": "#d97706",
         "warning_bg": "#fef3c7",
-        "danger": "#ef4444",
+        "warning_fg": "#92400e",
+        "danger": "#dc2626",
         "danger_bg": "#fee2e2",
-        "active_row": "#dbeafe",
+        "danger_fg": "#991b1b",
+        # 表格配色：纯白底与细微斑马纹
+        "active_row": "#eff6ff",
         "active_row_fg": "#1d4ed8",
-        "select_bg": "#bfdbfe",
+        "select_bg": "#dbeafe",
         "select_fg": "#1e3a8a",
-        "tree_bg": "#edf2f6",
-        "tree_fg": "#242c38",
-        "tree_heading_bg": "#d5e0ec",
-        "tree_heading_fg": "#242c38",
-        "tab_active_bg": "#edf2f6",
-        "tab_active_fg": "#2f7ff5",
-        "tab_inactive_bg": "#d5e0ec",
-        "tab_inactive_fg": "#4b5563",
+        "tree_bg": "#ffffff",
+        "tree_fg": "#0f172a",
+        "tree_heading_bg": "#f1f5f9",
+        "tree_heading_fg": "#334155",
+        "tree_heading_border": "#e2e8f0",
+        "tree_even": "#ffffff",
+        "tree_odd": "#f8fafc",
+        # Tab 导航
+        "tab_active_bg": "#ffffff",
+        "tab_active_fg": "#2563eb",
+        "tab_inactive_bg": "#f1f5f9",
+        "tab_inactive_fg": "#64748b",
+        # 滚动条
         "scroll_bg": "#cbd5e1",
-        "scroll_trough": "#e8edf3",
-        "toast_bg": "#dbeafe",
+        "scroll_trough": "#f1f5f9",
+        # In-App Toast
+        "toast_bg": "#eff6ff",
         "toast_fg": "#1e40af",
-        "toast_border": "#93c5fd",
+        "toast_border": "#bfdbfe",
     },
     "midnight": {
         "id": "midnight",
         "name": "沉浸暗夜",
         "icon": "🌙",
-        "bg": "#0e141d",
-        "panel": "#16202e",
-        "card": "#1d293a",
-        "card_alt": "#121924",
+        # 背景：宇宙深黑，绝非廉价发灰
+        "bg": "#0b0f17",
+        "panel": "#162032",
+        "panel_subtle": "#101726",
+        "card": "#1e293b",
+        "card_alt": "#141d2b",
         "border": "#26354a",
-        "ink": "#e2e8f0",
-        "muted": "#8b9cb3",
+        "border_subtle": "#1e293b",
+        # 文字：Bright Slate 50，黑底白字清晰易读
+        "ink": "#f1f5f9",
+        "muted": "#94a3b8",
         "dim": "#64748b",
+        # 主色：赛博天蓝
         "primary": "#38bdf8",
         "primary_hover": "#0ea5e9",
         "primary_fg": "#0f172a",
-        "restart_btn": "#a855f7",
-        "restart_hover": "#9333ea",
+        # 重启按钮：深灰蓝卡片
+        "restart_btn": "#1e293b",
+        "restart_hover": "#334155",
+        "restart_fg": "#f1f5f9",
+        # 语义色
         "success": "#10b981",
         "success_bg": "#064e3b",
+        "success_fg": "#6ee7b7",
         "warning": "#f59e0b",
         "warning_bg": "#78350f",
+        "warning_fg": "#fcd34d",
         "danger": "#f43f5e",
         "danger_bg": "#881337",
+        "danger_fg": "#fca5a5",
+        # 表格配色
         "active_row": "#1e3a5f",
         "active_row_fg": "#38bdf8",
         "select_bg": "#0284c7",
         "select_fg": "#ffffff",
-        "tree_bg": "#16202e",
-        "tree_fg": "#e2e8f0",
-        "tree_heading_bg": "#1d293a",
-        "tree_heading_fg": "#e2e8f0",
-        "tab_active_bg": "#1d293a",
+        "tree_bg": "#162032",
+        "tree_fg": "#f1f5f9",
+        "tree_heading_bg": "#1e293b",
+        "tree_heading_fg": "#f1f5f9",
+        "tree_heading_border": "#26354a",
+        "tree_even": "#162032",
+        "tree_odd": "#111827",
+        # Tab 导航
+        "tab_active_bg": "#1e293b",
         "tab_active_fg": "#38bdf8",
-        "tab_inactive_bg": "#121924",
-        "tab_inactive_fg": "#8b9cb3",
-        "scroll_bg": "#2a3749",
-        "scroll_trough": "#0e141d",
-        "toast_bg": "#1e293b",
+        "tab_inactive_bg": "#101726",
+        "tab_inactive_fg": "#94a3b8",
+        # 滚动条
+        "scroll_bg": "#334155",
+        "scroll_trough": "#0b0f17",
+        # In-App Toast
+        "toast_bg": "#0f233a",
         "toast_fg": "#38bdf8",
         "toast_border": "#0369a1",
     },
     "glass": {
         "id": "glass",
-        "name": "玻璃拟态",
+        "name": "通透玻璃",
         "icon": "💎",
-        "bg": "#edf3f8",
-        "panel": "#e5edf5",
-        "card": "#f0f4f9",
-        "card_alt": "#dfe8f2",
-        "border": "#d5e2ed",
-        "ink": "#1e293b",
-        "muted": "#64748b",
-        "dim": "#738499",
-        "primary": "#3b82f6",
-        "primary_hover": "#2563eb",
+        # 背景：柔光冰晶蓝白
+        "bg": "#f0f7ff",
+        "panel": "#ffffff",
+        "panel_subtle": "#e8f2fc",
+        "card": "#ffffff",
+        "card_alt": "#f0f7ff",
+        "border": "#dbeafe",
+        "border_subtle": "#e2eaf5",
+        # 文字：Navy Slate
+        "ink": "#0f172a",
+        "muted": "#475569",
+        "dim": "#94a3b8",
+        # 主色：清爽蔚蓝
+        "primary": "#0284c7",
+        "primary_hover": "#0369a1",
         "primary_fg": "#ffffff",
-        "restart_btn": "#8b5cf6",
-        "restart_hover": "#7c3aed",
-        "success": "#10b981",
+        # 重启按钮
+        "restart_btn": "#0f172a",
+        "restart_hover": "#1e293b",
+        "restart_fg": "#ffffff",
+        # 语义色
+        "success": "#059669",
         "success_bg": "#d1fae5",
-        "warning": "#f59e0b",
+        "success_fg": "#065f46",
+        "warning": "#d97706",
         "warning_bg": "#fef3c7",
-        "danger": "#ef4444",
+        "warning_fg": "#92400e",
+        "danger": "#dc2626",
         "danger_bg": "#fee2e2",
-        "active_row": "#dbeafe",
-        "active_row_fg": "#1d4ed8",
-        "select_bg": "#bfdbfe",
-        "select_fg": "#1e3a8a",
-        "tree_bg": "#f0f4f9",
-        "tree_fg": "#1e293b",
-        "tree_heading_bg": "#dae6f1",
-        "tree_heading_fg": "#1e293b",
-        "tab_active_bg": "#f0f4f9",
-        "tab_active_fg": "#3b82f6",
-        "tab_inactive_bg": "#dae6f1",
-        "tab_inactive_fg": "#334155",
-        "scroll_bg": "#cbd5e1",
-        "scroll_trough": "#edf3f8",
+        "danger_fg": "#991b1b",
+        # 表格配色
+        "active_row": "#e0f2fe",
+        "active_row_fg": "#0369a1",
+        "select_bg": "#bae6fd",
+        "select_fg": "#0c4a6e",
+        "tree_bg": "#ffffff",
+        "tree_fg": "#0f172a",
+        "tree_heading_bg": "#e0f2fe",
+        "tree_heading_fg": "#0369a1",
+        "tree_heading_border": "#dbeafe",
+        "tree_even": "#ffffff",
+        "tree_odd": "#f8fbff",
+        # Tab 导航
+        "tab_active_bg": "#ffffff",
+        "tab_active_fg": "#0284c7",
+        "tab_inactive_bg": "#e0f2fe",
+        "tab_inactive_fg": "#475569",
+        # 滚动条
+        "scroll_bg": "#93c5fd",
+        "scroll_trough": "#f0f7ff",
+        # In-App Toast
         "toast_bg": "#e0f2fe",
         "toast_fg": "#0369a1",
-        "toast_border": "#bae6fd",
+        "toast_border": "#7dd3fc",
     }
 }
 
+# 字体严格使用 Windows 原生抗锯齿清晰字体 Microsoft YaHei UI (彻底根除 Segoe UI 回退宋体造成的奇形怪状)
+FONT_FAMILY = "Microsoft YaHei UI"
 FONTS = {
-    "title": ("Segoe UI", 13, "bold"),
-    "subtitle": ("Segoe UI", 8),
-    "btn_main": ("Segoe UI", 9, "bold"),
-    "btn": ("Segoe UI", 8, "bold"),
-    "btn_sm": ("Segoe UI", 8),
-    "tab": ("Segoe UI", 9, "bold"),
-    "head": ("Segoe UI", 9, "bold"),
-    "body": ("Segoe UI", 9),
-    "detail": ("Segoe UI", 8),
-    "badge": ("Segoe UI", 8, "bold"),
-    "mono": ("Consolas", 8),
+    "title": (FONT_FAMILY, 12, "bold"),
+    "subtitle": (FONT_FAMILY, 9),
+    "btn_main": (FONT_FAMILY, 9, "bold"),
+    "btn": (FONT_FAMILY, 9, "bold"),
+    "btn_sm": (FONT_FAMILY, 9),
+    "tab": (FONT_FAMILY, 9, "bold"),
+    "head": (FONT_FAMILY, 9, "bold"),
+    "body": (FONT_FAMILY, 9),
+    "detail": (FONT_FAMILY, 9),
+    "badge": (FONT_FAMILY, 9, "bold"),
+    "mono": ("Consolas", 9),
 }
 
 def get_saved_theme_id():
@@ -490,7 +543,7 @@ class AntigravityModernStudio:
         self._build_ui()
         self.apply_theme(self.theme_id)
 
-        # 绑定用户任何全局交互（点击、按键、Tab切换）以触发倒计时自动暂停
+        # 绑定用户任何全局交互以触发倒计时自动暂停
         self.root.bind_all("<Button-1>", lambda e: self.pause_countdown())
         self.root.bind_all("<Key>", lambda e: self.pause_countdown())
 
@@ -526,17 +579,20 @@ class AntigravityModernStudio:
         self.show_toast(f"🛡️ 专线自愈守护已切换为: 【{st_text}】", level="info")
 
     def _update_guard_switch_ui(self):
+        t = self.theme
         if self.guard_switch_enabled:
             self.btn_guard_switch.config(
                 text="🛡️ 专线守护: 🟢 开启",
-                bg=self.theme["card"],
-                fg=self.theme["success"]
+                bg=t["panel"],
+                fg=t["success"],
+                highlightbackground=t["border"]
             )
         else:
             self.btn_guard_switch.config(
                 text="🛡️ 专线守护: ⚪ 关闭",
-                bg=self.theme["card"],
-                fg=self.theme["muted"]
+                bg=t["panel"],
+                fg=t["muted"],
+                highlightbackground=t["border"]
             )
 
     def _start_countdown(self):
@@ -570,9 +626,9 @@ class AntigravityModernStudio:
         t = self.theme
         color_map = {
             "info": (t["toast_bg"], t["toast_fg"], t["toast_border"]),
-            "success": (t["success_bg"], t["success"], t["success"]),
-            "warning": (t["warning_bg"], t["warning"], t["warning"]),
-            "danger": (t["danger_bg"], t["danger"], t["danger"]),
+            "success": (t["success_bg"], t["success_fg"], t["success"]),
+            "warning": (t["warning_bg"], t["warning_fg"], t["warning"]),
+            "danger": (t["danger_bg"], t["danger_fg"], t["danger"]),
         }
         bg, fg, border = color_map.get(level, (t["toast_bg"], t["toast_fg"], t["toast_border"]))
         self.toast_banner.config(bg=bg, highlightbackground=border, highlightthickness=1)
@@ -600,12 +656,13 @@ class AntigravityModernStudio:
 
         self.root.configure(bg=t["bg"])
 
+        # Treeview 表格现代扁平样式
         self.style.configure(
             "Treeview",
             background=t["tree_bg"],
             foreground=t["tree_fg"],
             fieldbackground=t["tree_bg"],
-            rowheight=30,
+            rowheight=32,
             font=FONTS["body"],
             borderwidth=0,
             relief="flat"
@@ -616,6 +673,7 @@ class AntigravityModernStudio:
             foreground=[("selected", t["select_fg"])]
         )
 
+        # 表头
         self.style.configure(
             "Treeview.Heading",
             background=t["tree_heading_bg"],
@@ -623,7 +681,7 @@ class AntigravityModernStudio:
             font=FONTS["head"],
             borderwidth=0,
             relief="flat",
-            padding=(6, 5)
+            padding=(6, 6)
         )
         self.style.map(
             "Treeview.Heading",
@@ -631,12 +689,13 @@ class AntigravityModernStudio:
             foreground=[("active", t["primary"])]
         )
 
+        # Tab 导航栏
         self.style.configure("TNotebook", background=t["bg"], borderwidth=0)
         self.style.configure(
             "TNotebook.Tab",
             background=t["tab_inactive_bg"],
             foreground=t["tab_inactive_fg"],
-            padding=(18, 7),
+            padding=(16, 6),
             font=FONTS["tab"],
             borderwidth=0
         )
@@ -646,6 +705,7 @@ class AntigravityModernStudio:
             foreground=[("selected", t["tab_active_fg"]), ("active", t["ink"])]
         )
 
+        # 滚动条
         self.style.configure(
             "Vertical.TScrollbar",
             gripcount=0,
@@ -657,6 +717,7 @@ class AntigravityModernStudio:
             arrowcolor=t["muted"]
         )
 
+        # 框架底色统一
         for frame in [self.header_frame, self.top_btn_bar, self.badges_bar, self.bottom_bar,
                      self.tab_accounts, self.tab_network, self.tab_logs, self.acc_tools, self.net_tools]:
             try:
@@ -667,20 +728,24 @@ class AntigravityModernStudio:
         self.lbl_title.configure(bg=t["bg"], fg=t["ink"])
         self.lbl_countdown_hint.configure(bg=t["bg"], fg=t["muted"])
 
-        self.btn_open_main.configure(
-            bg=t["primary"],
-            fg=t["primary_fg"],
-            activebackground=t["primary_hover"],
-            activeforeground=t["primary_fg"]
-        )
-        self.btn_restart_repair.configure(
-            bg=t["restart_btn"],
-            fg="#ffffff",
-            activebackground=t["restart_hover"],
-            activeforeground="#ffffff"
-        )
+        # 顶部按钮美学与 Hover
+        def bind_hover(widget, n_bg, h_bg):
+            widget.config(bg=n_bg)
+            widget.bind("<Enter>", lambda e, w=widget, b=h_bg: w.config(bg=b))
+            widget.bind("<Leave>", lambda e, w=widget, b=n_bg: w.config(bg=b))
+
+        bind_hover(self.btn_open_main, t["primary"], t["primary_hover"])
+        self.btn_open_main.configure(fg=t["primary_fg"], highlightbackground=t["primary"])
+
+        bind_hover(self.btn_restart_repair, t["restart_btn"], t["restart_hover"])
+        self.btn_restart_repair.configure(fg=t["restart_fg"], highlightbackground=t["border"])
+
+        bind_hover(self.btn_refresh, t["card"], t["panel_subtle"])
+        self.btn_refresh.configure(fg=t["ink"], highlightbackground=t["border"])
+
         self._update_guard_switch_ui()
 
+        # 顶部微拟态胶囊卡片
         for badge in [self.badge_account, self.badge_network, self.badge_cdp]:
             badge.configure(bg=t["card"], fg=t["ink"], highlightbackground=t["border"])
 
@@ -688,35 +753,51 @@ class AntigravityModernStudio:
         self.lbl_net_active.configure(bg=t["card"], fg=t["ink"])
         self.lbl_acc_detail.configure(bg=t["card"], fg=t["muted"], highlightbackground=t["border"])
 
+        # 次级操作按钮优雅轮廓化与 Hover
+        bind_hover(self.btn_smart, t["primary"], t["primary_hover"])
+        self.btn_smart.configure(fg=t["primary_fg"], highlightbackground=t["primary"])
+
+        bind_hover(self.btn_switch_node, t["primary"], t["primary_hover"])
+        self.btn_switch_node.configure(fg=t["primary_fg"], highlightbackground=t["primary"])
+
+        for btn in [self.btn_switch, self.btn_unblock, self.btn_resume, self.btn_heal_net, self.btn_open_clash]:
+            bind_hover(btn, t["card"], t["panel_subtle"])
+            btn.configure(fg=t["ink"], highlightbackground=t["border"])
+
+        # KPI 概览卡片
         self.kpi_acc.configure(bg=t["card"], fg=t["ink"], highlightbackground=t["border"])
         self.kpi_net.configure(bg=t["card"], fg=t["ink"], highlightbackground=t["border"])
         self.kpi_sys.configure(bg=t["card"], fg=t["ink"], highlightbackground=t["border"])
 
-        self.log_text.configure(bg=t["panel"], fg=t["ink"], insertbackground=t["primary"])
+        self.log_text.configure(bg=t["card"], fg=t["ink"], insertbackground=t["primary"])
 
+        # 表格行标签颜色
         self.tree.tag_configure("current", background=t["active_row"], foreground=t["active_row_fg"])
-        self.tree.tag_configure("quarantined", background=t["danger_bg"], foreground=t["danger"])
-        self.tree.tag_configure("parked", background=t["warning_bg"], foreground=t["warning"])
-        self.tree.tag_configure("even", background=t["card"])
-        self.tree.tag_configure("odd", background=t["tree_bg"])
+        self.tree.tag_configure("quarantined", background=t["danger_bg"], foreground=t["danger_fg"])
+        self.tree.tag_configure("parked", background=t["warning_bg"], foreground=t["warning_fg"])
+        self.tree.tag_configure("even", background=t["tree_even"], foreground=t["tree_fg"])
+        self.tree.tag_configure("odd", background=t["tree_odd"], foreground=t["tree_fg"])
 
         self.net_tree.tag_configure("active_node", background=t["active_row"], foreground=t["active_row_fg"])
-        self.net_tree.tag_configure("verified_node", background=t["success_bg"], foreground=t["success"])
-        self.net_tree.tag_configure("even", background=t["card"])
-        self.net_tree.tag_configure("odd", background=t["tree_bg"])
+        self.net_tree.tag_configure("verified_node", background=t["success_bg"], foreground=t["success_fg"])
+        self.net_tree.tag_configure("even", background=t["tree_even"], foreground=t["tree_fg"])
+        self.net_tree.tag_configure("odd", background=t["tree_odd"], foreground=t["tree_fg"])
 
-        # 底部三主题分段胶囊按钮高亮
+        # 底部三主题分段胶囊按钮高亮与 Hover
         for tid, btn in self.theme_btns.items():
             if tid == theme_id:
-                btn.config(bg=t["primary"], fg=t["primary_fg"], relief="flat")
+                btn.config(bg=t["primary"], fg=t["primary_fg"], highlightbackground=t["primary"])
+                btn.unbind("<Enter>")
+                btn.unbind("<Leave>")
             else:
-                btn.config(bg=t["card"], fg=t["ink"], relief="flat")
+                bind_hover(btn, t["card"], t["panel_subtle"])
+                btn.config(fg=t["ink"], highlightbackground=t["border"])
 
     def _build_ui(self):
         # ==========================================
         # 1. 顶部区域：标题 + 开关 + 倒计时 + 双主控按钮
         # ==========================================
-        self.header_frame = tk.Frame(self.root, bg=self.theme["bg"], padx=14, pady=10)
+        self.header_frame = tk.Frame(self.root, bg=self.theme["bg"], padx=16, pady=10)
         self.header_frame.pack(fill=tk.X)
 
         # 顶部左侧：主标题 + 专线守护胶囊开关
@@ -742,6 +823,9 @@ class AntigravityModernStudio:
             command=self._toggle_guard_switch,
             font=FONTS["badge"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             padx=8,
             pady=2,
             cursor="hand2"
@@ -770,21 +854,23 @@ class AntigravityModernStudio:
             fg=self.theme["primary_fg"],
             font=FONTS["btn_main"],
             relief="flat",
+            bd=0,
             padx=14,
             pady=6,
             cursor="hand2"
         )
         self.btn_open_main.pack(side=tk.LEFT, padx=4)
 
-        # 按钮 2: 重启 (自动判断状态)
+        # 按钮 2: 智能重启 (现代极简曜石对比色)
         self.btn_restart_repair = tk.Button(
             self.top_btn_bar,
             text="⚡ 智能自愈重启",
             command=self.on_restart_and_reload_account_clicked,
             bg=self.theme["restart_btn"],
-            fg="#ffffff",
+            fg=self.theme["restart_fg"],
             font=FONTS["btn_main"],
             relief="flat",
+            bd=0,
             padx=14,
             pady=6,
             cursor="hand2"
@@ -792,24 +878,27 @@ class AntigravityModernStudio:
         self.btn_restart_repair.pack(side=tk.LEFT, padx=4)
 
         # 刷新按键
-        btn_refresh = tk.Button(
+        self.btn_refresh = tk.Button(
             self.top_btn_bar,
             text="🔄 刷新",
             command=self.refresh_data,
             bg=self.theme["card"],
-            fg=self.theme["muted"],
+            fg=self.theme["ink"],
             font=FONTS["btn"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             padx=10,
             pady=6,
             cursor="hand2"
         )
-        btn_refresh.pack(side=tk.LEFT, padx=4)
+        self.btn_refresh.pack(side=tk.LEFT, padx=4)
 
         # ==========================================
         # 2. 状态胶囊横幅 (卡片化微拟态)
         # ==========================================
-        self.badges_bar = tk.Frame(self.root, bg=self.theme["bg"], padx=14, pady=2)
+        self.badges_bar = tk.Frame(self.root, bg=self.theme["bg"], padx=16, pady=2)
         self.badges_bar.pack(fill=tk.X)
 
         self.badge_account = tk.Label(
@@ -857,7 +946,7 @@ class AntigravityModernStudio:
         # ==========================================
         # 3. In-App 静默反馈横幅 (替代弹出式 messagebox)
         # ==========================================
-        self.toast_banner = tk.Frame(self.root, bg=self.theme["toast_bg"], padx=12, pady=5)
+        self.toast_banner = tk.Frame(self.root, bg=self.theme["toast_bg"], padx=14, pady=5)
         self.lbl_toast = tk.Label(
             self.toast_banner,
             text="",
@@ -874,6 +963,7 @@ class AntigravityModernStudio:
             bg=self.theme["toast_bg"],
             fg=self.theme["muted"],
             relief="flat",
+            bd=0,
             cursor="hand2"
         )
         btn_close_toast.pack(side=tk.RIGHT)
@@ -882,7 +972,7 @@ class AntigravityModernStudio:
         # 4. 中部三大核心 Tab 栏
         # ==========================================
         self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=14, pady=(6, 4))
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=16, pady=(6, 4))
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self.pause_countdown())
 
         # Tab 1: 算力账号
@@ -892,7 +982,7 @@ class AntigravityModernStudio:
 
         # Tab 2: 专线网络 (最优网络排在最上面)
         self.tab_network = tk.Frame(self.notebook, bg=self.theme["bg"])
-        self.notebook.add(self.tab_network, text="  🌐 专线网络大盘 (最优排在最前面)  ")
+        self.notebook.add(self.tab_network, text="  🌐 专线网络大盘 (最优置顶)  ")
         self._build_network_tab()
 
         # Tab 3: 运行日志与统计
@@ -901,9 +991,9 @@ class AntigravityModernStudio:
         self._build_logs_tab()
 
         # ==========================================
-        # 5. 底部功能栏：提示 + 三套主题切换功能 (深色、浅色、玻璃拟态)
+        # 5. 底部功能栏：提示 + 三套主题切换功能
         # ==========================================
-        self.bottom_bar = tk.Frame(self.root, bg=self.theme["bg"], padx=14, pady=6)
+        self.bottom_bar = tk.Frame(self.root, bg=self.theme["bg"], padx=16, pady=6)
         self.bottom_bar.pack(fill=tk.X)
 
         lbl_tips = tk.Label(
@@ -915,7 +1005,7 @@ class AntigravityModernStudio:
         )
         lbl_tips.pack(side=tk.LEFT)
 
-        # 底部右侧：主题分段控制器 (拟态浅色 / 沉浸暗夜 / 玻璃拟态)
+        # 底部右侧：主题分段控制器 (极简浅色 / 沉浸暗夜 / 通透玻璃)
         theme_bar = tk.Frame(self.bottom_bar, bg=self.theme["bg"])
         theme_bar.pack(side=tk.RIGHT)
 
@@ -932,6 +1022,9 @@ class AntigravityModernStudio:
                 fg=self.theme["ink"],
                 font=FONTS["btn_sm"],
                 relief="flat",
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=self.theme["border"],
                 padx=10,
                 pady=3,
                 cursor="hand2"
@@ -943,7 +1036,7 @@ class AntigravityModernStudio:
         container = tk.Frame(self.tab_accounts, bg=self.theme["bg"], padx=2, pady=4)
         container.pack(fill=tk.BOTH, expand=True)
 
-        # 精确 7 列分配，总宽度 855px，完美容纳于 940px 窗口内，严禁截断
+        # 精确 7 列分配，总宽度 855px，完美铺满 940px 窗口
         columns = ("status", "email", "gemini_5h", "reset_5h", "gemini_weekly", "reset_weekly", "score")
         self.tree = ttk.Treeview(
             container,
@@ -983,8 +1076,8 @@ class AntigravityModernStudio:
             font=FONTS["detail"],
             bg=self.theme["card"],
             fg=self.theme["muted"],
-            padx=10,
-            pady=4,
+            padx=12,
+            pady=5,
             anchor="w",
             relief="flat",
             highlightthickness=1,
@@ -992,71 +1085,81 @@ class AntigravityModernStudio:
         )
         self.lbl_acc_detail.pack(fill=tk.X, pady=(2, 4))
 
-        # 账号专用动作栏
+        # 账号专用动作栏 (统一精致轮廓与主按钮层次)
         self.acc_tools = tk.Frame(self.tab_accounts, bg=self.theme["bg"], pady=2)
         self.acc_tools.pack(fill=tk.X)
 
-        btn_smart = tk.Button(
+        self.btn_smart = tk.Button(
             self.acc_tools,
             text="⚡ 智能盲切最优账号",
             command=self.on_auto_switch_clicked,
-            bg="#16a34a",
-            fg="#ffffff",
+            bg=self.theme["primary"],
+            fg=self.theme["primary_fg"],
             font=FONTS["btn"],
             relief="flat",
+            bd=0,
             padx=12,
-            pady=4,
+            pady=5,
             cursor="hand2"
         )
-        btn_smart.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_smart.pack(side=tk.LEFT, padx=(0, 6))
 
-        btn_switch = tk.Button(
+        self.btn_switch = tk.Button(
             self.acc_tools,
             text="🔄 切换至选定账号",
             command=self.on_switch_clicked,
-            bg="#2563eb",
-            fg="#ffffff",
+            bg=self.theme["card"],
+            fg=self.theme["ink"],
             font=FONTS["btn"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             padx=12,
-            pady=4,
+            pady=5,
             cursor="hand2"
         )
-        btn_switch.pack(side=tk.LEFT, padx=6)
+        self.btn_switch.pack(side=tk.LEFT, padx=6)
 
-        btn_unblock = tk.Button(
+        self.btn_unblock = tk.Button(
             self.acc_tools,
             text="🔓 解除误隔离",
             command=self.on_unblock_clicked,
-            bg="#b45309",
-            fg="#ffffff",
+            bg=self.theme["card"],
+            fg=self.theme["ink"],
             font=FONTS["btn"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             padx=12,
-            pady=4,
+            pady=5,
             cursor="hand2"
         )
-        btn_unblock.pack(side=tk.LEFT, padx=6)
+        self.btn_unblock.pack(side=tk.LEFT, padx=6)
 
-        btn_resume = tk.Button(
+        self.btn_resume = tk.Button(
             self.acc_tools,
             text="💬 断点续接 (打 1)",
             command=self.on_resume_clicked,
-            bg="#7c3aed",
-            fg="#ffffff",
+            bg=self.theme["card"],
+            fg=self.theme["ink"],
             font=FONTS["btn"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             padx=12,
-            pady=4,
+            pady=5,
             cursor="hand2"
         )
-        btn_resume.pack(side=tk.LEFT, padx=6)
+        self.btn_resume.pack(side=tk.LEFT, padx=6)
 
     def _build_network_tab(self):
         container = tk.Frame(self.tab_network, bg=self.theme["bg"], padx=2, pady=4)
         container.pack(fill=tk.BOTH, expand=True)
 
-        self.net_banner = tk.Frame(container, bg=self.theme["card"], padx=10, pady=6, highlightthickness=1, highlightbackground=self.theme["border"])
+        self.net_banner = tk.Frame(container, bg=self.theme["card"], padx=12, pady=6, highlightthickness=1, highlightbackground=self.theme["border"])
         self.net_banner.pack(fill=tk.X, pady=(0, 6))
 
         self.lbl_net_active = tk.Label(
@@ -1099,35 +1202,39 @@ class AntigravityModernStudio:
         self.net_tools = tk.Frame(self.tab_network, bg=self.theme["bg"], pady=4)
         self.net_tools.pack(fill=tk.X)
 
-        btn_switch_node = tk.Button(
+        self.btn_switch_node = tk.Button(
             self.net_tools,
             text="🌐 切换至选定专线",
             command=self.on_switch_node_clicked,
-            bg="#2563eb",
-            fg="#ffffff",
+            bg=self.theme["primary"],
+            fg=self.theme["primary_fg"],
             font=FONTS["btn"],
             relief="flat",
+            bd=0,
             padx=12,
-            pady=4,
+            pady=5,
             cursor="hand2"
         )
-        btn_switch_node.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_switch_node.pack(side=tk.LEFT, padx=(0, 6))
 
-        btn_heal_net = tk.Button(
+        self.btn_heal_net = tk.Button(
             self.net_tools,
             text="⚡ 专线全链路自愈",
             command=self.on_heal_network_clicked,
-            bg="#16a34a",
-            fg="#ffffff",
+            bg=self.theme["card"],
+            fg=self.theme["ink"],
             font=FONTS["btn"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             padx=12,
-            pady=4,
+            pady=5,
             cursor="hand2"
         )
-        btn_heal_net.pack(side=tk.LEFT, padx=6)
+        self.btn_heal_net.pack(side=tk.LEFT, padx=6)
 
-        btn_open_clash = tk.Button(
+        self.btn_open_clash = tk.Button(
             self.net_tools,
             text="📁 打开 Clash 配置目录",
             command=self.on_open_clash_dir_clicked,
@@ -1135,11 +1242,14 @@ class AntigravityModernStudio:
             fg=self.theme["ink"],
             font=FONTS["btn_sm"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             padx=10,
-            pady=4,
+            pady=5,
             cursor="hand2"
         )
-        btn_open_clash.pack(side=tk.LEFT, padx=6)
+        self.btn_open_clash.pack(side=tk.LEFT, padx=6)
 
     def _build_logs_tab(self):
         container = tk.Frame(self.tab_logs, bg=self.theme["bg"], padx=2, pady=4)
@@ -1240,6 +1350,9 @@ class AntigravityModernStudio:
             fg=self.theme["ink"],
             font=FONTS["btn_sm"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             padx=8,
             pady=1,
             cursor="hand2"
@@ -1254,6 +1367,9 @@ class AntigravityModernStudio:
             fg=self.theme["ink"],
             font=FONTS["btn_sm"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             padx=8,
             pady=1,
             cursor="hand2"
@@ -1266,12 +1382,12 @@ class AntigravityModernStudio:
         ent_filter.pack(side=tk.LEFT, padx=2)
         ent_filter.bind("<KeyRelease>", lambda e: self.apply_log_filter())
 
-        log_text_box = tk.Frame(container, bg=self.theme["panel"])
+        log_text_box = tk.Frame(container, bg=self.theme["card"])
         log_text_box.pack(fill=tk.BOTH, expand=True, pady=(2, 0))
 
         self.log_text = tk.Text(
             log_text_box,
-            bg=self.theme["panel"],
+            bg=self.theme["card"],
             fg=self.theme["ink"],
             insertbackground=self.theme["primary"],
             font=FONTS["mono"],
@@ -1526,7 +1642,7 @@ class AntigravityModernStudio:
             )
 
     # ==========================================
-    # 顶部双功能按键动作
+    # 顶部主按键动作
     # ==========================================
     def on_open_main_clicked(self, from_timer=False):
         """打开主界面 (激活窗口或拉起新实例，面板永不退出)"""
