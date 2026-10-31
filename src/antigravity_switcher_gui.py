@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
 """
 antigravity_switcher_gui.py — 反重力 (Antigravity) 启动与算力调度中枢 (Management Studio)
-尺寸适中 (880x600 居中优雅面板)：
-1. 顶部区域：
-   - 专线自愈守护开关 [ 🟢 守护开 / ⚪ 守护关 ]
-   - 5 秒自动打开倒计时按钮 [▶ 打开主界面 (5s)] (点击交互即刻暂停常驻)
-   - 自动状态判断的重启按钮 [⚡ 重启网络自愈 / ⚡ 重启并载入账号]
-2. 中部三大 Tab 栏：
-   - 👤 算力账号大盘 (配额、精确回血、综合分、双击免杀秒切)
-   - 🌐 专线网络大盘 (最优网络排在最上面，在用置顶、延迟升序)
-   - 📜 运行日志与统计 (KPI 指标看板、历史审计台账、实时日志流)
-3. 底部主题功能：
-   - 三大高颜值主题一键热切换：🎨 拟态浅色 (neo) | 🌙 沉浸暗夜 (midnight) | 💎 玻璃拟态 (glass)
-   - 实时无损变色，持久化至 ~/.antigravity_cockpit/hub_theme_config.json
+专业级、高颜值、极简直觉交互桌面面板：
+1. 整体布局与尺寸：
+   - 940x620 屏幕绝对居中弹出，现代应用质感，呼吸感留白与精细排版。
+2. 顶部核心功能栏：
+   - 专线自愈守护胶囊开关 [ 🛡️ 专线守护: 🟢 开启 / ⚪ 关闭 ]
+   - 5秒自动打开倒计时 [ ▶ 打开主界面 (5s) ] (任何点击交互即刻暂停倒计时并常驻)
+   - 智能自愈重启 [ ⚡ 智能自愈重启 ] (自动判断凭据变更或网络修复，无阻塞弹窗)
+3. 状态胶囊横幅与 In-App 静默通知：
+   - 活跃账号 / 专线链路 / CDP 免杀状态胶囊
+   - 无干扰 In-App Toast 横幅，彻底告别打断操作的系统 Modal 弹窗
+4. 中部三大核心 Tab 栏：
+   - 👤 算力账号大盘 (完美列宽预算、综合评分、精准回血倒计时、单击详情、双击免杀秒切)
+   - 🌐 专线网络大盘 (最优专线排在最上面，在用置顶、已验证次之、延迟升序)
+   - 📑 运行日志与统计 (KPI 指标看板、自愈审计台账、实时日志流与检索)
+5. 底部功能与同源主题切换器：
+   - 8810 控制台同源三大设计系统：🎨 拟态浅色 (neo) | 🌙 沉浸暗夜 (midnight) | 💎 玻璃拟态 (glass)
+   - Segmented Pill 分段控制按钮，毫秒级全局动态变色，持久化至 ~/.antigravity_cockpit/hub_theme_config.json
 """
 
 import os
@@ -32,7 +37,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 import ctypes
 try:
-    myappid = "antigravity.studio.gui.v3"
+    myappid = "antigravity.studio.gui.v4"
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 except Exception:
     pass
@@ -60,12 +65,15 @@ def attach_desktop():
 attach_desktop()
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 LAUNCHER_DIR = os.path.expandvars(r"%LOCALAPPDATA%\Antigravity\launcher")
 PROXY_DIR = os.path.expandvars(r"%LOCALAPPDATA%\Antigravity\private-proxy")
-if LAUNCHER_DIR not in sys.path:
-    sys.path.insert(0, LAUNCHER_DIR)
+DEV_SRC_DIR = r"D:\AICode\工具开发\projects\antigravity-recovery-launcher\src"
+
+for d in [LAUNCHER_DIR, DEV_SRC_DIR]:
+    if os.path.exists(d) and d not in sys.path:
+        sys.path.insert(0, d)
 
 from antigravity_smart_switch import (
     get_all_accounts_and_quotas,
@@ -88,7 +96,7 @@ ICON_PATH = next((p for p in ICON_CANDIDATES if os.path.exists(p)), None)
 THEME_CONFIG_FILE = Path(os.path.expanduser("~/.antigravity_cockpit/hub_theme_config.json"))
 SETTINGS_FILE = os.path.join(PROXY_DIR, "launcher-settings.json")
 
-# 用户最喜爱的三大主题：拟态浅色、沉浸暗夜、玻璃拟态
+# 8810 控制台同源设计系统色卡
 THEMES = {
     "neo": {
         "id": "neo",
@@ -101,10 +109,12 @@ THEMES = {
         "border": "#d1dbe4",
         "ink": "#242c38",
         "muted": "#61758a",
+        "dim": "#8b9baa",
         "primary": "#2f7ff5",
         "primary_hover": "#1d6fe8",
         "primary_fg": "#ffffff",
         "restart_btn": "#7c3aed",
+        "restart_hover": "#6d28d9",
         "success": "#10b981",
         "success_bg": "#d1fae5",
         "warning": "#ecaa1c",
@@ -125,6 +135,9 @@ THEMES = {
         "tab_inactive_fg": "#4b5563",
         "scroll_bg": "#cbd5e1",
         "scroll_trough": "#e8edf3",
+        "toast_bg": "#dbeafe",
+        "toast_fg": "#1e40af",
+        "toast_border": "#93c5fd",
     },
     "midnight": {
         "id": "midnight",
@@ -137,10 +150,12 @@ THEMES = {
         "border": "#26354a",
         "ink": "#e2e8f0",
         "muted": "#8b9cb3",
+        "dim": "#64748b",
         "primary": "#38bdf8",
         "primary_hover": "#0ea5e9",
         "primary_fg": "#0f172a",
         "restart_btn": "#a855f7",
+        "restart_hover": "#9333ea",
         "success": "#10b981",
         "success_bg": "#064e3b",
         "warning": "#f59e0b",
@@ -161,6 +176,9 @@ THEMES = {
         "tab_inactive_fg": "#8b9cb3",
         "scroll_bg": "#2a3749",
         "scroll_trough": "#0e141d",
+        "toast_bg": "#1e293b",
+        "toast_fg": "#38bdf8",
+        "toast_border": "#0369a1",
     },
     "glass": {
         "id": "glass",
@@ -173,10 +191,12 @@ THEMES = {
         "border": "#d5e2ed",
         "ink": "#1e293b",
         "muted": "#64748b",
+        "dim": "#738499",
         "primary": "#3b82f6",
         "primary_hover": "#2563eb",
         "primary_fg": "#ffffff",
         "restart_btn": "#8b5cf6",
+        "restart_hover": "#7c3aed",
         "success": "#10b981",
         "success_bg": "#d1fae5",
         "warning": "#f59e0b",
@@ -197,6 +217,9 @@ THEMES = {
         "tab_inactive_fg": "#334155",
         "scroll_bg": "#cbd5e1",
         "scroll_trough": "#edf3f8",
+        "toast_bg": "#e0f2fe",
+        "toast_fg": "#0369a1",
+        "toast_border": "#bae6fd",
     }
 }
 
@@ -209,6 +232,7 @@ FONTS = {
     "tab": ("Segoe UI", 9, "bold"),
     "head": ("Segoe UI", 9, "bold"),
     "body": ("Segoe UI", 9),
+    "detail": ("Segoe UI", 8),
     "badge": ("Segoe UI", 8, "bold"),
     "mono": ("Consolas", 8),
 }
@@ -244,7 +268,7 @@ def format_reset_time(dt_utc, quota_val):
         diff = dt_utc - now_utc
         secs = int(diff.total_seconds())
         if secs <= 0:
-            return "已到期/回血中"
+            return "已到期 · 回血中"
 
         hours = secs // 3600
         mins = (secs % 3600) // 60
@@ -346,11 +370,11 @@ def get_network_nodes_data():
                             elif succ and succ.get("last_rtt_ms"):
                                 rtt = succ.get("last_rtt_ms")
                             elif is_jp:
-                                rtt = 320
+                                rtt = 318
                             else:
                                 rtt = 450
 
-                            status = "○ 候选"
+                            status = "⚪ 候选"
                             if is_active:
                                 status = "🟢 正在使用"
                             elif succ:
@@ -377,7 +401,7 @@ def get_network_nodes_data():
         except Exception:
             pass
 
-    # 最优网络排在最上面 (在用置顶 -> 已验证放行 -> 延迟升序)
+    # 智能网络排序：正在使用置顶 -> 已验证放行次之 -> 延迟升序
     node_list.sort(key=lambda x: (
         not x["is_active"],
         not x["is_verified"],
@@ -415,17 +439,17 @@ def get_recent_log_lines(filename, max_lines=150):
 class AntigravityModernStudio:
     def __init__(self, root):
         self.root = root
-        self.root.title("Antigravity 启动助手与算力面板")
-        self.root.geometry("880x590")
-        self.root.minsize(820, 560)
+        self.root.title("Antigravity 启动助手与算力调度中枢")
+        self.root.geometry("940x620")
+        self.root.minsize(900, 580)
 
-        # 屏幕居中
+        # 屏幕绝对居中弹出
         try:
             ws = self.root.winfo_screenwidth()
             hs = self.root.winfo_screenheight()
-            x = max(0, (ws - 880) // 2)
-            y = max(0, (hs - 590) // 2)
-            self.root.geometry(f"880x590+{x}+{y}")
+            x = max(0, (ws - 940) // 2)
+            y = max(0, (hs - 620) // 2)
+            self.root.geometry(f"940x620+{x}+{y}")
         except Exception:
             pass
 
@@ -454,6 +478,7 @@ class AntigravityModernStudio:
         self.countdown_seconds = 5
         self.countdown_paused = False
         self.timer_id = None
+        self.toast_timer_id = None
 
         # 专线守护状态开关
         self.guard_switch_enabled = True
@@ -465,7 +490,7 @@ class AntigravityModernStudio:
         self._build_ui()
         self.apply_theme(self.theme_id)
 
-        # 绑定用户任何全局交互（点击、按键）以触发倒计时自动暂停
+        # 绑定用户任何全局交互（点击、按键、Tab切换）以触发倒计时自动暂停
         self.root.bind_all("<Button-1>", lambda e: self.pause_countdown())
         self.root.bind_all("<Key>", lambda e: self.pause_countdown())
 
@@ -497,6 +522,8 @@ class AntigravityModernStudio:
         except Exception:
             pass
         self._update_guard_switch_ui()
+        st_text = "开启" if self.guard_switch_enabled else "关闭"
+        self.show_toast(f"🛡️ 专线自愈守护已切换为: 【{st_text}】", level="info")
 
     def _update_guard_switch_ui(self):
         if self.guard_switch_enabled:
@@ -521,8 +548,9 @@ class AntigravityModernStudio:
             self.timer_id = self.root.after(1000, self._start_countdown)
         else:
             self.btn_open_main.config(text="▶ 打开主界面")
-            # 5秒倒计时结束：自动打开主界面
-            self.on_open_main_clicked()
+            self.lbl_countdown_hint.config(text="🟢 主界面已自动唤醒 · 面板常驻运行")
+            # 5秒倒计时结束：自动打开主界面，面板保持打开常驻
+            self.on_open_main_clicked(from_timer=True)
 
     def pause_countdown(self):
         if self.countdown_paused:
@@ -535,7 +563,34 @@ class AntigravityModernStudio:
                 pass
             self.timer_id = None
         self.btn_open_main.config(text="▶ 打开主界面")
-        self.lbl_countdown_hint.config(text="倒计时已暂停 · 面板常驻")
+        self.lbl_countdown_hint.config(text="🟢 面板已常驻 · 自动就绪")
+
+    def show_toast(self, message, level="info", duration_ms=3500):
+        """In-App 平滑状态反馈横幅，取代打扰式 Modal 弹窗"""
+        t = self.theme
+        color_map = {
+            "info": (t["toast_bg"], t["toast_fg"], t["toast_border"]),
+            "success": (t["success_bg"], t["success"], t["success"]),
+            "warning": (t["warning_bg"], t["warning"], t["warning"]),
+            "danger": (t["danger_bg"], t["danger"], t["danger"]),
+        }
+        bg, fg, border = color_map.get(level, (t["toast_bg"], t["toast_fg"], t["toast_border"]))
+        self.toast_banner.config(bg=bg, highlightbackground=border, highlightthickness=1)
+        self.lbl_toast.config(text=message, bg=bg, fg=fg)
+        self.toast_banner.pack(fill=tk.X, padx=14, pady=(2, 4), before=self.notebook)
+
+        if self.toast_timer_id:
+            try:
+                self.root.after_cancel(self.toast_timer_id)
+            except Exception:
+                pass
+        self.toast_timer_id = self.root.after(duration_ms, self._hide_toast)
+
+    def _hide_toast(self):
+        try:
+            self.toast_banner.pack_forget()
+        except Exception:
+            pass
 
     def apply_theme(self, theme_id):
         self.theme_id = theme_id
@@ -621,20 +676,21 @@ class AntigravityModernStudio:
         self.btn_restart_repair.configure(
             bg=t["restart_btn"],
             fg="#ffffff",
-            activebackground=t["restart_btn"],
+            activebackground=t["restart_hover"],
             activeforeground="#ffffff"
         )
         self._update_guard_switch_ui()
 
         for badge in [self.badge_account, self.badge_network, self.badge_cdp]:
-            badge.configure(bg=t["card"], fg=t["ink"])
+            badge.configure(bg=t["card"], fg=t["ink"], highlightbackground=t["border"])
 
-        self.net_banner.configure(bg=t["card"])
+        self.net_banner.configure(bg=t["card"], highlightbackground=t["border"])
         self.lbl_net_active.configure(bg=t["card"], fg=t["ink"])
+        self.lbl_acc_detail.configure(bg=t["card"], fg=t["muted"], highlightbackground=t["border"])
 
-        self.kpi_acc.configure(bg=t["card"], fg=t["ink"])
-        self.kpi_net.configure(bg=t["card"], fg=t["ink"])
-        self.kpi_sys.configure(bg=t["card"], fg=t["ink"])
+        self.kpi_acc.configure(bg=t["card"], fg=t["ink"], highlightbackground=t["border"])
+        self.kpi_net.configure(bg=t["card"], fg=t["ink"], highlightbackground=t["border"])
+        self.kpi_sys.configure(bg=t["card"], fg=t["ink"], highlightbackground=t["border"])
 
         self.log_text.configure(bg=t["panel"], fg=t["ink"], insertbackground=t["primary"])
 
@@ -649,21 +705,21 @@ class AntigravityModernStudio:
         self.net_tree.tag_configure("even", background=t["card"])
         self.net_tree.tag_configure("odd", background=t["tree_bg"])
 
-        # 底部三主题按钮高亮
+        # 底部三主题分段胶囊按钮高亮
         for tid, btn in self.theme_btns.items():
             if tid == theme_id:
-                btn.config(bg=t["primary"], fg=t["primary_fg"])
+                btn.config(bg=t["primary"], fg=t["primary_fg"], relief="flat")
             else:
-                btn.config(bg=t["card"], fg=t["ink"])
+                btn.config(bg=t["card"], fg=t["ink"], relief="flat")
 
     def _build_ui(self):
         # ==========================================
-        # 1. 顶部区域：开关 + 5s自动打开 + 右侧重启
+        # 1. 顶部区域：标题 + 开关 + 倒计时 + 双主控按钮
         # ==========================================
         self.header_frame = tk.Frame(self.root, bg=self.theme["bg"], padx=14, pady=10)
         self.header_frame.pack(fill=tk.X)
 
-        # 顶部左侧：标题 + 专线守护开关
+        # 顶部左侧：主标题 + 专线守护胶囊开关
         title_box = tk.Frame(self.header_frame, bg=self.theme["bg"])
         title_box.pack(side=tk.LEFT)
 
@@ -676,9 +732,12 @@ class AntigravityModernStudio:
         )
         self.lbl_title.pack(anchor="w")
 
+        sub_box = tk.Frame(title_box, bg=self.theme["bg"])
+        sub_box.pack(anchor="w", pady=(3, 0))
+
         # 专线自愈开关 (保留顶部开关)
         self.btn_guard_switch = tk.Button(
-            title_box,
+            sub_box,
             text="🛡️ 专线守护: 🟢 开启",
             command=self._toggle_guard_switch,
             font=FONTS["badge"],
@@ -687,18 +746,18 @@ class AntigravityModernStudio:
             pady=2,
             cursor="hand2"
         )
-        self.btn_guard_switch.pack(side=tk.LEFT, pady=(3, 0))
+        self.btn_guard_switch.pack(side=tk.LEFT)
 
         self.lbl_countdown_hint = tk.Label(
-            title_box,
-            text="5秒未点击将自动启动 · 点击任意处常驻",
+            sub_box,
+            text="⏳ 5秒未操作将自动打开主界面 · 点击任何地方常驻",
             font=FONTS["subtitle"],
             fg=self.theme["muted"],
             bg=self.theme["bg"]
         )
-        self.lbl_countdown_hint.pack(side=tk.LEFT, padx=(10, 0), pady=(3, 0))
+        self.lbl_countdown_hint.pack(side=tk.LEFT, padx=(10, 0))
 
-        # 顶部右侧按钮栏：打开主界面 (5s) + 重启 (自动判断)
+        # 顶部右侧控制栏：打开主界面 (5s) + 重启 (自动判断) + 刷新
         self.top_btn_bar = tk.Frame(self.header_frame, bg=self.theme["bg"])
         self.top_btn_bar.pack(side=tk.RIGHT)
 
@@ -720,7 +779,7 @@ class AntigravityModernStudio:
         # 按钮 2: 重启 (自动判断状态)
         self.btn_restart_repair = tk.Button(
             self.top_btn_bar,
-            text="⚡ 重启网络自愈",
+            text="⚡ 智能自愈重启",
             command=self.on_restart_and_reload_account_clicked,
             bg=self.theme["restart_btn"],
             fg="#ffffff",
@@ -735,22 +794,22 @@ class AntigravityModernStudio:
         # 刷新按键
         btn_refresh = tk.Button(
             self.top_btn_bar,
-            text="🔄",
+            text="🔄 刷新",
             command=self.refresh_data,
             bg=self.theme["card"],
             fg=self.theme["muted"],
             font=FONTS["btn"],
             relief="flat",
-            padx=8,
+            padx=10,
             pady=6,
             cursor="hand2"
         )
         btn_refresh.pack(side=tk.LEFT, padx=4)
 
         # ==========================================
-        # 2. 状态胶囊小横幅
+        # 2. 状态胶囊横幅 (卡片化微拟态)
         # ==========================================
-        self.badges_bar = tk.Frame(self.root, bg=self.theme["bg"], padx=14, pady=1)
+        self.badges_bar = tk.Frame(self.root, bg=self.theme["bg"], padx=14, pady=2)
         self.badges_bar.pack(fill=tk.X)
 
         self.badge_account = tk.Label(
@@ -759,9 +818,11 @@ class AntigravityModernStudio:
             font=FONTS["badge"],
             bg=self.theme["card"],
             fg=self.theme["ink"],
-            padx=10,
-            pady=4,
-            relief="flat"
+            padx=12,
+            pady=5,
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=self.theme["border"]
         )
         self.badge_account.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -771,9 +832,11 @@ class AntigravityModernStudio:
             font=FONTS["badge"],
             bg=self.theme["card"],
             fg=self.theme["ink"],
-            padx=10,
-            pady=4,
-            relief="flat"
+            padx=12,
+            pady=5,
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=self.theme["border"]
         )
         self.badge_network.pack(side=tk.LEFT, padx=6)
 
@@ -783,14 +846,40 @@ class AntigravityModernStudio:
             font=FONTS["badge"],
             bg=self.theme["card"],
             fg=self.theme["ink"],
-            padx=10,
-            pady=4,
-            relief="flat"
+            padx=12,
+            pady=5,
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=self.theme["border"]
         )
         self.badge_cdp.pack(side=tk.LEFT, padx=6)
 
         # ==========================================
-        # 3. 中部三大核心 Tab 栏
+        # 3. In-App 静默反馈横幅 (替代弹出式 messagebox)
+        # ==========================================
+        self.toast_banner = tk.Frame(self.root, bg=self.theme["toast_bg"], padx=12, pady=5)
+        self.lbl_toast = tk.Label(
+            self.toast_banner,
+            text="",
+            font=FONTS["btn"],
+            bg=self.theme["toast_bg"],
+            fg=self.theme["toast_fg"]
+        )
+        self.lbl_toast.pack(side=tk.LEFT)
+        btn_close_toast = tk.Button(
+            self.toast_banner,
+            text="✕",
+            command=self._hide_toast,
+            font=FONTS["subtitle"],
+            bg=self.theme["toast_bg"],
+            fg=self.theme["muted"],
+            relief="flat",
+            cursor="hand2"
+        )
+        btn_close_toast.pack(side=tk.RIGHT)
+
+        # ==========================================
+        # 4. 中部三大核心 Tab 栏
         # ==========================================
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=14, pady=(6, 4))
@@ -798,39 +887,39 @@ class AntigravityModernStudio:
 
         # Tab 1: 算力账号
         self.tab_accounts = tk.Frame(self.notebook, bg=self.theme["bg"])
-        self.notebook.add(self.tab_accounts, text="  👤 算力账号  ")
+        self.notebook.add(self.tab_accounts, text="  👤 算力账号大盘  ")
         self._build_accounts_tab()
 
         # Tab 2: 专线网络 (最优网络排在最上面)
         self.tab_network = tk.Frame(self.notebook, bg=self.theme["bg"])
-        self.notebook.add(self.tab_network, text="  🌐 专线网络 (最优排在最前面)  ")
+        self.notebook.add(self.tab_network, text="  🌐 专线网络大盘 (最优排在最前面)  ")
         self._build_network_tab()
 
         # Tab 3: 运行日志与统计
         self.tab_logs = tk.Frame(self.notebook, bg=self.theme["bg"])
-        self.notebook.add(self.tab_logs, text="  📜 运行日志与统计  ")
+        self.notebook.add(self.tab_logs, text="  📑 运行日志与统计  ")
         self._build_logs_tab()
 
         # ==========================================
-        # 4. 底部功能栏：提示 + 三套主题切换功能 (深色、浅色、玻璃拟态)
+        # 5. 底部功能栏：提示 + 三套主题切换功能 (深色、浅色、玻璃拟态)
         # ==========================================
         self.bottom_bar = tk.Frame(self.root, bg=self.theme["bg"], padx=14, pady=6)
         self.bottom_bar.pack(fill=tk.X)
 
         lbl_tips = tk.Label(
             self.bottom_bar,
-            text="💡 双击账号即秒级切换 · 最优专线自动置顶",
+            text="💡 双击账号即秒级无感切换 · 智能排序最优专线与账号置顶",
             font=FONTS["subtitle"],
             fg=self.theme["muted"],
             bg=self.theme["bg"]
         )
         lbl_tips.pack(side=tk.LEFT)
 
-        # 底部右侧：主题切换器 (深色 / 浅色 / 玻璃拟态)
+        # 底部右侧：主题分段控制器 (拟态浅色 / 沉浸暗夜 / 玻璃拟态)
         theme_bar = tk.Frame(self.bottom_bar, bg=self.theme["bg"])
         theme_bar.pack(side=tk.RIGHT)
 
-        tk.Label(theme_bar, text="主题风格:", font=FONTS["btn_sm"], fg=self.theme["muted"], bg=self.theme["bg"]).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(theme_bar, text="主题风格:", font=FONTS["btn_sm"], fg=self.theme["muted"], bg=self.theme["bg"]).pack(side=tk.LEFT, padx=(0, 6))
 
         self.theme_btns = {}
         for tid in ["neo", "midnight", "glass"]:
@@ -843,8 +932,8 @@ class AntigravityModernStudio:
                 fg=self.theme["ink"],
                 font=FONTS["btn_sm"],
                 relief="flat",
-                padx=8,
-                pady=2,
+                padx=10,
+                pady=3,
                 cursor="hand2"
             )
             btn.pack(side=tk.LEFT, padx=2)
@@ -854,7 +943,8 @@ class AntigravityModernStudio:
         container = tk.Frame(self.tab_accounts, bg=self.theme["bg"], padx=2, pady=4)
         container.pack(fill=tk.BOTH, expand=True)
 
-        columns = ("status", "email", "gemini_5h", "reset_5h", "gemini_weekly", "reset_weekly", "claude_weekly", "score", "status_desc")
+        # 精确 7 列分配，总宽度 855px，完美容纳于 940px 窗口内，严禁截断
+        columns = ("status", "email", "gemini_5h", "reset_5h", "gemini_weekly", "reset_weekly", "score")
         self.tree = ttk.Treeview(
             container,
             columns=columns,
@@ -864,15 +954,13 @@ class AntigravityModernStudio:
         )
 
         col_defs = [
-            ("status", "当前", 65, "center"),
-            ("email", "登录账号 / 邮箱", 200, "w"),
-            ("gemini_5h", "5h 配额", 80, "center"),
-            ("reset_5h", "5h 回血时间", 160, "center"),
-            ("gemini_weekly", "周额度", 75, "center"),
-            ("reset_weekly", "周重置时刻", 160, "center"),
-            ("claude_weekly", "Claude 周额", 90, "center"),
-            ("score", "综合分", 80, "center"),
-            ("status_desc", "健康详细说明", 200, "w"),
+            ("status", "当前状态", 75, "center"),
+            ("email", "登录账号 / 邮箱", 240, "w"),
+            ("gemini_5h", "5h 配额", 85, "center"),
+            ("reset_5h", "5h 回血时间", 145, "center"),
+            ("gemini_weekly", "周额度", 85, "center"),
+            ("reset_weekly", "周重置时刻", 145, "center"),
+            ("score", "综合评分", 80, "center"),
         ]
 
         for col_id, col_name, col_w, col_anchor in col_defs:
@@ -886,9 +974,26 @@ class AntigravityModernStudio:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.tree.bind("<Double-1>", self.on_double_click)
+        self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
+
+        # 选中账号实时说明横条
+        self.lbl_acc_detail = tk.Label(
+            self.tab_accounts,
+            text="📌 点击账号可查看健康详细说明 · 双击账号可极速免杀秒切",
+            font=FONTS["detail"],
+            bg=self.theme["card"],
+            fg=self.theme["muted"],
+            padx=10,
+            pady=4,
+            anchor="w",
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=self.theme["border"]
+        )
+        self.lbl_acc_detail.pack(fill=tk.X, pady=(2, 4))
 
         # 账号专用动作栏
-        self.acc_tools = tk.Frame(self.tab_accounts, bg=self.theme["bg"], pady=4)
+        self.acc_tools = tk.Frame(self.tab_accounts, bg=self.theme["bg"], pady=2)
         self.acc_tools.pack(fill=tk.X)
 
         btn_smart = tk.Button(
@@ -899,7 +1004,7 @@ class AntigravityModernStudio:
             fg="#ffffff",
             font=FONTS["btn"],
             relief="flat",
-            padx=10,
+            padx=12,
             pady=4,
             cursor="hand2"
         )
@@ -907,13 +1012,13 @@ class AntigravityModernStudio:
 
         btn_switch = tk.Button(
             self.acc_tools,
-            text="🔁 切换至选定账号",
+            text="🔄 切换至选定账号",
             command=self.on_switch_clicked,
             bg="#2563eb",
             fg="#ffffff",
             font=FONTS["btn"],
             relief="flat",
-            padx=10,
+            padx=12,
             pady=4,
             cursor="hand2"
         )
@@ -927,7 +1032,7 @@ class AntigravityModernStudio:
             fg="#ffffff",
             font=FONTS["btn"],
             relief="flat",
-            padx=10,
+            padx=12,
             pady=4,
             cursor="hand2"
         )
@@ -935,13 +1040,13 @@ class AntigravityModernStudio:
 
         btn_resume = tk.Button(
             self.acc_tools,
-            text="💬 断点续接 (扣 1)",
+            text="💬 断点续接 (打 1)",
             command=self.on_resume_clicked,
             bg="#7c3aed",
             fg="#ffffff",
             font=FONTS["btn"],
             relief="flat",
-            padx=10,
+            padx=12,
             pady=4,
             cursor="hand2"
         )
@@ -951,7 +1056,7 @@ class AntigravityModernStudio:
         container = tk.Frame(self.tab_network, bg=self.theme["bg"], padx=2, pady=4)
         container.pack(fill=tk.BOTH, expand=True)
 
-        self.net_banner = tk.Frame(container, bg=self.theme["card"], padx=10, pady=6)
+        self.net_banner = tk.Frame(container, bg=self.theme["card"], padx=10, pady=6, highlightthickness=1, highlightbackground=self.theme["border"])
         self.net_banner.pack(fill=tk.X, pady=(0, 6))
 
         self.lbl_net_active = tk.Label(
@@ -963,24 +1068,10 @@ class AntigravityModernStudio:
         )
         self.lbl_net_active.pack(side=tk.LEFT)
 
-        btn_net_refresh = tk.Button(
-            self.net_banner,
-            text="🔄 测速刷新",
-            command=self.refresh_network_nodes,
-            bg=self.theme["panel"],
-            fg=self.theme["ink"],
-            font=FONTS["btn_sm"],
-            relief="flat",
-            padx=8,
-            pady=2,
-            cursor="hand2"
-        )
-        btn_net_refresh.pack(side=tk.RIGHT, padx=2)
-
-        columns = ("status", "flag", "name", "rtt", "proto", "source")
+        net_columns = ("status", "country", "name", "rtt", "proto", "source")
         self.net_tree = ttk.Treeview(
             container,
-            columns=columns,
+            columns=net_columns,
             show="headings",
             selectmode="browse",
             style="Treeview"
@@ -988,49 +1079,49 @@ class AntigravityModernStudio:
 
         net_col_defs = [
             ("status", "状态", 100, "center"),
-            ("flag", "出口地区", 90, "center"),
-            ("name", "专线节点名称", 320, "w"),
-            ("rtt", "延迟 (ms)", 90, "center"),
+            ("country", "地区", 100, "center"),
+            ("name", "专线节点名称", 340, "w"),
+            ("rtt", "延迟", 90, "center"),
             ("proto", "协议", 80, "center"),
-            ("source", "订阅来源", 180, "w")
+            ("source", "订阅源", 140, "w"),
         ]
 
         for col_id, col_name, col_w, col_anchor in net_col_defs:
             self.net_tree.heading(col_id, text=col_name, command=lambda c=col_id: self._sort_network_by(c))
             self.net_tree.column(col_id, width=col_w, minwidth=50, anchor=col_anchor)
 
-        net_scroll = ttk.Scrollbar(container, orient="vertical", command=self.net_tree.yview, style="Vertical.TScrollbar")
-        self.net_tree.configure(yscrollcommand=net_scroll.set)
+        net_scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.net_tree.yview, style="Vertical.TScrollbar")
+        self.net_tree.configure(yscrollcommand=net_scrollbar.set)
 
         self.net_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        net_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        net_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.net_tools = tk.Frame(self.tab_network, bg=self.theme["bg"], pady=4)
         self.net_tools.pack(fill=tk.X)
 
-        btn_pick_node = tk.Button(
+        btn_switch_node = tk.Button(
             self.net_tools,
-            text="⚡ 一键切换为此专线节点",
+            text="🌐 切换至选定专线",
             command=self.on_switch_node_clicked,
             bg="#2563eb",
             fg="#ffffff",
             font=FONTS["btn"],
             relief="flat",
-            padx=10,
+            padx=12,
             pady=4,
             cursor="hand2"
         )
-        btn_pick_node.pack(side=tk.LEFT, padx=(0, 6))
+        btn_switch_node.pack(side=tk.LEFT, padx=(0, 6))
 
         btn_heal_net = tk.Button(
             self.net_tools,
-            text="🛡️ 专线网络自愈重连",
+            text="⚡ 专线全链路自愈",
             command=self.on_heal_network_clicked,
-            bg="#0284c7",
+            bg="#16a34a",
             fg="#ffffff",
             font=FONTS["btn"],
             relief="flat",
-            padx=10,
+            padx=12,
             pady=4,
             cursor="hand2"
         )
@@ -1038,13 +1129,13 @@ class AntigravityModernStudio:
 
         btn_open_clash = tk.Button(
             self.net_tools,
-            text="📂 Clash 订阅目录",
+            text="📁 打开 Clash 配置目录",
             command=self.on_open_clash_dir_clicked,
             bg=self.theme["card"],
             fg=self.theme["ink"],
             font=FONTS["btn_sm"],
             relief="flat",
-            padx=8,
+            padx=10,
             pady=4,
             cursor="hand2"
         )
@@ -1065,7 +1156,9 @@ class AntigravityModernStudio:
             fg=self.theme["ink"],
             padx=10,
             pady=6,
-            justify=tk.LEFT
+            justify=tk.LEFT,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"]
         )
         self.kpi_acc.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
@@ -1077,7 +1170,9 @@ class AntigravityModernStudio:
             fg=self.theme["ink"],
             padx=10,
             pady=6,
-            justify=tk.LEFT
+            justify=tk.LEFT,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"]
         )
         self.kpi_net.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
 
@@ -1089,7 +1184,9 @@ class AntigravityModernStudio:
             fg=self.theme["ink"],
             padx=10,
             pady=6,
-            justify=tk.LEFT
+            justify=tk.LEFT,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"]
         )
         self.kpi_sys.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
@@ -1151,7 +1248,7 @@ class AntigravityModernStudio:
 
         btn_open_log_dir = tk.Button(
             log_ctrl,
-            text="📂 目录",
+            text="📁 目录",
             command=self.on_open_log_dir_clicked,
             bg=self.theme["card"],
             fg=self.theme["ink"],
@@ -1198,51 +1295,20 @@ class AntigravityModernStudio:
                 sub = get_subscription_summary()
                 nodes = get_network_nodes_data()
                 incidents = get_recent_incidents(20)
-                self.root.after(0, lambda: self._update_all(curr_id, accounts, cdp, is_run, sub, nodes, incidents))
+
+                self.current_id = curr_id
+                self.accounts = accounts
+                self.cdp_port = cdp
+                self.network_nodes = nodes
+                self.incidents = incidents
+
+                self.root.after(0, lambda: self._render_accounts_table())
+                self.root.after(0, lambda: self._render_network_table())
+                self.root.after(0, lambda: self._render_logs_and_stats(is_run, cdp, sub))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("获取异常", f"无法刷新控制大盘: {e}"))
+                self.root.after(0, lambda: self.show_toast(f"刷新异常: {e}", level="danger"))
 
         threading.Thread(target=_fetch, daemon=True).start()
-
-    def _update_all(self, curr_id, accounts, cdp, is_run, sub, nodes, incidents):
-        self.accounts = accounts
-        self.current_id = curr_id
-        self.cdp_port = cdp
-        self.network_nodes = nodes
-        self.incidents = incidents
-
-        self._render_accounts_table()
-        self._render_network_table()
-        self._render_logs_and_stats(is_run, cdp, sub)
-        self._update_restart_button_state()
-
-    def _update_restart_button_state(self):
-        """自动判断重启功能状态"""
-        cockpit_account_file = os.path.expanduser(r"~/.antigravity_cockpit/current_account.json")
-        watcher_account_file = os.path.join(PROXY_DIR, "watcher-current-account.txt")
-        cockpit_email = ""
-        active_id_or_email = ""
-        try:
-            if os.path.exists(cockpit_account_file):
-                with open(cockpit_account_file, "r", encoding="utf-8") as f:
-                    cdata = json.load(f)
-                    cockpit_email = cdata.get("email", "").strip().lower()
-            if os.path.exists(watcher_account_file):
-                with open(watcher_account_file, "r", encoding="utf-8") as f:
-                    active_id_or_email = f.read().strip().lower()
-        except Exception:
-            pass
-
-        if cockpit_email and cockpit_email not in active_id_or_email:
-            self.btn_restart_repair.config(
-                text="⚡ 重启并载入新账号",
-                bg="#ea580c"
-            )
-        else:
-            self.btn_restart_repair.config(
-                text="⚡ 重启网络自愈",
-                bg=self.theme["restart_btn"]
-            )
 
     def _render_accounts_table(self):
         for item in self.tree.get_children():
@@ -1260,13 +1326,13 @@ class AntigravityModernStudio:
                 curr_weekly = acc.get("gemini_weekly", 0.0)
 
             if is_cur:
-                status_text = "● 在用"
+                status_text = "🟢 在用"
             elif acc.get("disabled"):
                 status_text = "⛔ 隔离"
             elif acc.get("is_parked"):
-                status_text = "⏸ 保护"
+                status_text = "⏳ 保护"
             else:
-                status_text = "○ 候选"
+                status_text = "⚪ 候选"
 
             reset_5h_text = format_reset_time(acc.get("reset_time_5h"), acc.get("gemini_5h"))
             reset_weekly_text = format_reset_time(acc.get("reset_time_weekly"), acc.get("gemini_weekly"))
@@ -1279,13 +1345,6 @@ class AntigravityModernStudio:
             elif acc.get("is_parked"):
                 row_tag = "parked"
 
-            status_desc = acc.get("disabled_reason", "")
-            if not status_desc:
-                if acc.get("is_parked"):
-                    status_desc = "配额见底静置保护中"
-                else:
-                    status_desc = "健康候选"
-
             self.tree.insert(
                 "",
                 tk.END,
@@ -1297,9 +1356,7 @@ class AntigravityModernStudio:
                     reset_5h_text,
                     f"{acc.get('gemini_weekly', 0.0):.1f}%",
                     reset_weekly_text,
-                    f"{acc.get('claude_weekly', 0.0):.1f}%",
-                    f"{acc.get('cockpit_score', 0.0):.0f}",
-                    status_desc
+                    f"{acc.get('cockpit_score', 0.0):.0f}"
                 ),
                 tags=(row_tag,)
             )
@@ -1330,7 +1387,7 @@ class AntigravityModernStudio:
                 tk.END,
                 iid=str(idx),
                 values=(
-                    node.get("status", "○ 候选"),
+                    node.get("status", "⚪ 候选"),
                     node.get("flag", "-"),
                     node.get("name", "-"),
                     rtt_str,
@@ -1347,9 +1404,9 @@ class AntigravityModernStudio:
 
     def _render_logs_and_stats(self, is_run, cdp, sub):
         if is_run and cdp:
-            self.badge_cdp.config(text=f"🔥 CDP 在线 ({cdp})", fg=self.theme["success"])
+            self.badge_cdp.config(text=f"⚡ CDP 在线 ({cdp})", fg=self.theme["success"])
         elif is_run:
-            self.badge_cdp.config(text="🔵 客户端运行中", fg=self.theme["primary"])
+            self.badge_cdp.config(text="🟢 客户端运行中", fg=self.theme["primary"])
         else:
             self.badge_cdp.config(text="⚪ 离线 (冷启调度)", fg=self.theme["muted"])
 
@@ -1370,7 +1427,7 @@ class AntigravityModernStudio:
         )
 
         self.kpi_sys.config(
-            text=f"【自愈守卫概况】\n守护进程: 正常守卫中\nCDP 端口: {cdp if cdp else '离线'}\n调度策略: 综合评分最优盲切"
+            text=f"【自愈守卫概况】\n守护进程: 正常保活中\nCDP 端口: {cdp if cdp else '离线'}\n调度策略: 综合评分最优盲切"
         )
 
         for item in self.inc_tree.get_children():
@@ -1420,8 +1477,6 @@ class AntigravityModernStudio:
                 return x.get("gemini_5h", 0.0)
             if col == "gemini_weekly":
                 return x.get("gemini_weekly", 0.0)
-            if col == "claude_weekly":
-                return x.get("claude_weekly", 0.0)
             if col == "score":
                 return x.get("cockpit_score", -999999.0)
             if col == "email":
@@ -1451,20 +1506,34 @@ class AntigravityModernStudio:
         self.network_nodes.sort(key=_get_net_val, reverse=self.net_sort_desc)
         self._render_network_table()
 
-    def refresh_network_nodes(self):
+    def on_tree_select(self, event):
         self.pause_countdown()
-        def _task():
-            nodes = get_network_nodes_data()
-            self.network_nodes = nodes
-            self.root.after(0, self._render_network_table)
-        threading.Thread(target=_task, daemon=True).start()
+        sel = self.tree.selection()
+        if not sel:
+            return
+        account_id = sel[0]
+        acc = next((a for a in self.accounts if a["id"] == account_id), None)
+        if acc:
+            email = acc.get("email", "")
+            g5 = acc.get("gemini_5h", 0.0)
+            gw = acc.get("gemini_weekly", 0.0)
+            sc = acc.get("cockpit_score", 0.0)
+            desc = acc.get("disabled_reason", "")
+            if not desc:
+                desc = "配额见底静置保护中" if acc.get("is_parked") else "健康候选 · 综合评分良好"
+            self.lbl_acc_detail.config(
+                text=f"📌 选中账号: {email} | 5h: {g5:.1f}% | 周额: {gw:.1f}% | 评分: {sc:.0f} | 状态说明: {desc}"
+            )
 
     # ==========================================
     # 顶部双功能按键动作
     # ==========================================
-    def on_open_main_clicked(self):
-        """打开主界面 (激活窗口或拉起新实例)"""
+    def on_open_main_clicked(self, from_timer=False):
+        """打开主界面 (激活窗口或拉起新实例，面板永不退出)"""
         self.pause_countdown()
+        if not from_timer:
+            self.show_toast("▶ 正在激活/打开 Antigravity 主界面...", level="info", duration_ms=2500)
+
         def _run():
             try:
                 try:
@@ -1488,35 +1557,30 @@ class AntigravityModernStudio:
                 if not is_antigravity_running():
                     launch_antigravity_via_launcher(recovery_reason="gui_manual_launch", background=False)
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("打开异常", f"打开主界面失败: {e}"))
+                self.root.after(0, lambda: self.show_toast(f"打开主界面异常: {e}", level="danger"))
             finally:
                 self.root.after(1000, self.refresh_data)
 
         threading.Thread(target=_run, daemon=True).start()
 
     def on_restart_and_reload_account_clicked(self):
-        """重启 (自动判断：重启网络自愈 或 重启并载入账号)"""
+        """智能自愈重启 (自动判断：网络自愈修复与最新账号凭据重载，无阻塞弹窗)"""
         self.pause_countdown()
-        confirm = messagebox.askyesno(
-            "自愈重启确认",
-            "是否立即重启 Antigravity 客户端？\n\n这将会：\n1. 退出当前编辑器实例\n2. 从 Cockpit 载入当前最新账号与 Token 凭据\n3. 校验并重新挂载 17897 高速专线网络\n4. 唤起自愈启动胶囊重新进入编辑器"
-        )
-        if not confirm:
-            return
+        self.show_toast("⚡ 正在执行客户端自愈重启与凭据同步...", level="info", duration_ms=3500)
 
         def _run():
             try:
                 launch_antigravity_via_launcher(recovery_reason="UserRequestedRepair", background=False)
-                self.root.after(0, lambda: messagebox.showinfo("自愈重启已唤起", "已成功通过独立自愈引擎执行重启并载入凭据！"))
+                self.root.after(0, lambda: self.show_toast("✅ 自愈重启指令已成功唤起，正在载入凭据与专线...", level="success", duration_ms=4000))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("执行异常", f"自愈重启失败: {e}"))
+                self.root.after(0, lambda: self.show_toast(f"自愈重启异常: {e}", level="danger"))
             finally:
                 self.root.after(1500, self.refresh_data)
 
         threading.Thread(target=_run, daemon=True).start()
 
     # ==========================================
-    # 账号与网络操作
+    # 账号与网络操作 (静默 Toast 反馈，彻底告别弹窗)
     # ==========================================
     def on_double_click(self, event):
         self.pause_countdown()
@@ -1524,17 +1588,23 @@ class AntigravityModernStudio:
         if not item:
             return
         self.tree.selection_set(item)
-        self.on_switch_clicked()
+        account_id = item
+        if account_id == self.current_id:
+            target = next((a for a in self.accounts if a["id"] == account_id), None)
+            target_email = target.get("email", "") if target else account_id
+            self.show_toast(f"ℹ️ 账号 【{target_email}】 当前已是在用账号！", level="info")
+            return
+        self._do_switch(account_id)
 
     def on_switch_clicked(self):
         self.pause_countdown()
         if self.is_switching:
-            messagebox.showwarning("提示", "正在切号中，请勿重复点击！")
+            self.show_toast("⚠️ 正在切号中，请勿重复操作...", level="warning")
             return
 
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("提示", "请先在列表中选中一个要切换的账号！")
+            self.show_toast("ℹ️ 请先在列表中选中一个要切换的账号！", level="info")
             return
 
         account_id = sel[0]
@@ -1544,65 +1614,65 @@ class AntigravityModernStudio:
 
         target_email = target.get("email", "")
         if account_id == self.current_id:
-            messagebox.showinfo("提示", f"账号【{target_email}】当前已是在用账号！")
-            return
-
-        confirm = messagebox.askyesno(
-            "确认免杀秒切",
-            f"确定要秒级免杀切换为账号：\n【{target_email}】 吗？\n\n通过 CDP 协议热注入凭据，0 杀进程、0 刷窗口。"
-        )
-        if not confirm:
+            self.show_toast(f"ℹ️ 账号 【{target_email}】 当前已是在用账号！", level="info")
             return
 
         self._do_switch(account_id)
 
     def _do_switch(self, account_id):
         self.is_switching = True
-        self.badge_account.config(text="👤 正在免杀秒切中...", fg=self.theme["warning"])
+        target = next((a for a in self.accounts if a["id"] == account_id), None)
+        target_email = target.get("email", "") if target else account_id
+        self.badge_account.config(text=f"👤 正在免杀秒切至: {target_email}...", fg=self.theme["warning"])
+        self.show_toast(f"⚡ 正在免杀秒切至 【{target_email}】...", level="info", duration_ms=2500)
 
         def _run():
             try:
-                ok, msg = run_smart_switch(specific_account_id=account_id)
-                if ok:
-                    self.root.after(0, lambda: messagebox.showinfo("秒切成功", f"切号成功: {msg}"))
+                res = run_smart_switch(target=account_id)
+                if res in ("switched", "ok"):
+                    self.root.after(0, lambda: self.show_toast(f"✅ 已成功秒切至 【{target_email}】！(0 杀进程 · 免杀注入已生效)", level="success", duration_ms=4000))
+                elif res == "not_needed":
+                    self.root.after(0, lambda: self.show_toast(f"ℹ️ 账号 【{target_email}】 当前配额充沛，无需切换。", level="info"))
+                elif res == "busy":
+                    self.root.after(0, lambda: self.show_toast("⚠️ 已有切号正在执行，本次请求已跳过。", level="warning"))
+                elif res == "quota_pool_exhausted":
+                    self.root.after(0, lambda: self.show_toast("⚠️ 所有纳管账号周额度均已耗尽，请等待回血。", level="warning"))
                 else:
-                    self.root.after(0, lambda: messagebox.showerror("秒切失败", f"切号未成功: {msg}"))
+                    self.root.after(0, lambda: self.show_toast(f"⚡ 切号状态: {res}", level="info"))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("切换异常", f"执行异常: {e}"))
+                self.root.after(0, lambda: self.show_toast(f"❌ 切号异常: {e}", level="danger"))
             finally:
                 self.is_switching = False
-                self.root.after(500, self.refresh_data)
+                self.root.after(600, self.refresh_data)
 
         threading.Thread(target=_run, daemon=True).start()
 
     def on_auto_switch_clicked(self):
         self.pause_countdown()
         if self.is_switching:
-            messagebox.showwarning("提示", "正在切号中，请勿重复点击！")
-            return
-
-        confirm = messagebox.askyesno(
-            "智能盲切最优账号确认",
-            "是否立即自动秒切至当前【算力最充沛、评分最高】的健康账号？"
-        )
-        if not confirm:
+            self.show_toast("⚠️ 正在切号中，请勿重复操作...", level="warning")
             return
 
         self.is_switching = True
         self.badge_account.config(text="👤 正在盲切最优账号中...", fg=self.theme["warning"])
+        self.show_toast("⚡ 正在按综合评分盲切最优候选账号...", level="info", duration_ms=2500)
 
         def _run():
             try:
-                ok, msg = run_smart_switch(specific_account_id=None)
-                if ok:
-                    self.root.after(0, lambda: messagebox.showinfo("盲切完成", f"智能切号成功: {msg}"))
+                res = run_smart_switch(target=None)
+                if res in ("switched", "ok"):
+                    self.root.after(0, lambda: self.show_toast("✅ 智能盲切完成，已接力最优算力账号！", level="success", duration_ms=4000))
+                elif res == "not_needed":
+                    self.root.after(0, lambda: self.show_toast("ℹ️ 当前在用账号额度充沛，无需盲切。", level="info"))
+                elif res == "quota_pool_exhausted":
+                    self.root.after(0, lambda: self.show_toast("⚠️ 账号池周额度均见底，保护机制启动，跳过盲切。", level="warning"))
                 else:
-                    self.root.after(0, lambda: messagebox.showwarning("未执行切号", f"调度结果: {msg}"))
+                    self.root.after(0, lambda: self.show_toast(f"⚡ 盲切调度结果: {res}", level="info"))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("盲切失败", f"执行异常: {e}"))
+                self.root.after(0, lambda: self.show_toast(f"❌ 盲切异常: {e}", level="danger"))
             finally:
                 self.is_switching = False
-                self.root.after(500, self.refresh_data)
+                self.root.after(600, self.refresh_data)
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -1610,7 +1680,7 @@ class AntigravityModernStudio:
         self.pause_countdown()
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("提示", "请先在列表中选中一个要解除隔离的账号！")
+            self.show_toast("ℹ️ 请先在列表中选中一个要解除隔离的账号！", level="info")
             return
 
         target = next((a for a in self.accounts if a["id"] == sel[0]), None)
@@ -1618,22 +1688,17 @@ class AntigravityModernStudio:
             return
 
         target_email = target.get("email", "")
-        confirm = messagebox.askyesno(
-            "解除误隔离确认",
-            f"确定要对账号【{target_email}】解除误隔离吗？\n\n释放隔离锁定，重新激活为正常候选账号。"
-        )
-        if not confirm:
-            return
+        self.show_toast(f"🔓 正在为账号 【{target_email}】 解除误隔离...", level="info")
 
         def _run():
             try:
                 ok = unblock_account(target_email)
                 if ok:
-                    self.root.after(0, lambda: messagebox.showinfo("解封成功", f"账号【{target_email}】已恢复为正常候选！"))
+                    self.root.after(0, lambda: self.show_toast(f"✅ 账号 【{target_email}】 已成功解除隔离！", level="success"))
                 else:
-                    self.root.after(0, lambda: messagebox.showwarning("提示", f"未能解封【{target_email}】。"))
+                    self.root.after(0, lambda: self.show_toast(f"⚠️ 未能解除 【{target_email}】 的隔离状态。", level="warning"))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("解封异常", f"执行出错: {e}"))
+                self.root.after(0, lambda: self.show_toast(f"❌ 解封异常: {e}", level="danger"))
             finally:
                 self.root.after(500, self.refresh_data)
 
@@ -1641,21 +1706,16 @@ class AntigravityModernStudio:
 
     def on_resume_clicked(self):
         self.pause_countdown()
-        confirm = messagebox.askyesno(
-            "智能断点续接确认",
-            "是否立即向当前活跃的反重力窗口注入会话恢复协议（扣 1 自动发送续接任务）？"
-        )
-        if not confirm:
-            return
+        self.show_toast("💬 正在向反重力窗口注入会话续接协议 (发 1)...", level="info")
 
         def _run():
             try:
                 res = execute_auto_resume()
-                self.root.after(0, lambda: messagebox.showinfo("续接完成", f"智能续接结果: {res}"))
+                self.root.after(0, lambda: self.show_toast(f"✅ 智能续接结果: {res}", level="success"))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("续接失败", f"续接出错: {e}"))
+                self.root.after(0, lambda: self.show_toast(f"❌ 续接异常: {e}", level="danger"))
             finally:
-                self.refresh_data()
+                self.root.after(500, self.refresh_data)
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -1663,20 +1723,14 @@ class AntigravityModernStudio:
         self.pause_countdown()
         sel = self.net_tree.selection()
         if not sel:
-            messagebox.showinfo("提示", "请先在列表中选中一个要切换的专线节点！")
+            self.show_toast("ℹ️ 请先在列表中选中一个要切换的专线节点！", level="info")
             return
         idx = int(sel[0])
         if idx >= len(self.network_nodes):
             return
         node = self.network_nodes[idx]
         node_name = node.get("name", "")
-
-        confirm = messagebox.askyesno(
-            "切换专线确认",
-            f"确定要将优先专线切换为节点：\n【{node_name}】 ({node.get('flag')}) 吗？"
-        )
-        if not confirm:
-            return
+        self.show_toast(f"🌐 正在将优先专线设定为 【{node_name}】...", level="info")
 
         def _run():
             try:
@@ -1694,9 +1748,9 @@ class AntigravityModernStudio:
                 
                 cmd = f'powershell -ExecutionPolicy Bypass -Command "& \'{os.path.join(PROXY_DIR, "Antigravity-ProxySupervisor.ps1")}\' -RecoveryReason UserManualNodeSwitch"'
                 subprocess.Popen(cmd, shell=True)
-                self.root.after(0, lambda: messagebox.showinfo("切换成功", f"优先专线已设定为【{node_name}】！"))
+                self.root.after(0, lambda: self.show_toast(f"✅ 优先专线已成功设定为 【{node_name}】！", level="success"))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("切换失败", f"设置优先专线失败: {e}"))
+                self.root.after(0, lambda: self.show_toast(f"❌ 切换专线异常: {e}", level="danger"))
             finally:
                 self.root.after(1500, self.refresh_data)
 
@@ -1704,20 +1758,15 @@ class AntigravityModernStudio:
 
     def on_heal_network_clicked(self):
         self.pause_countdown()
-        confirm = messagebox.askyesno(
-            "专线自愈重连确认",
-            "是否立即唤起专线自愈引擎（全链路健康复测并匹配最优可用专线）？"
-        )
-        if not confirm:
-            return
+        self.show_toast("⚡ 正在唤起专线自愈引擎全链路复测...", level="info")
 
         def _run():
             try:
                 cmd = f'powershell -ExecutionPolicy Bypass -Command "& \'{os.path.join(PROXY_DIR, "Antigravity-ProxySupervisor.ps1")}\' -RecoveryReason UserManualHeal"'
                 subprocess.Popen(cmd, shell=True)
-                self.root.after(0, lambda: messagebox.showinfo("自愈指令已下发", "专线自愈指令已下发，请稍候约 3 秒。"))
+                self.root.after(0, lambda: self.show_toast("✅ 专线自愈指令已下发，正在测速优选中...", level="success"))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("自愈失败", f"无法启动网络自愈: {e}"))
+                self.root.after(0, lambda: self.show_toast(f"❌ 无法启动网络自愈: {e}", level="danger"))
             finally:
                 self.root.after(2000, self.refresh_data)
 
@@ -1729,14 +1778,14 @@ class AntigravityModernStudio:
             clash_dir = os.path.expandvars(r"%APPDATA%\io.github.clash-verge-rev.clash-verge-rev\profiles")
             os.startfile(clash_dir)
         except Exception as e:
-            messagebox.showerror("打开失败", f"无法打开目录: {e}")
+            self.show_toast(f"❌ 无法打开目录: {e}", level="danger")
 
     def on_open_log_dir_clicked(self):
         self.pause_countdown()
         try:
             os.startfile(PROXY_DIR)
         except Exception as e:
-            messagebox.showerror("打开失败", f"无法打开日志目录: {e}")
+            self.show_toast(f"❌ 无法打开日志目录: {e}", level="danger")
 
 
 def main():
