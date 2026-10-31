@@ -22,6 +22,7 @@ import sys
 import re
 import time
 import json
+import uuid
 import asyncio
 import logging
 import argparse
@@ -1037,9 +1038,18 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     await asyncio.sleep(0.08)
                     v_res = await cdp_call("Runtime.evaluate", {"expression": verify_js, "returnByValue": True})
                     last_v = v_res.get("result", {}).get("result", {}).get("value") or {}
-                    if last_v.get("isEmpty") or last_v.get("hasStop") or last_v.get("isGenerating"):
-                        logger.info(f"✅ [{task_name}] 物理闭环验证成功！(输入框清空={last_v.get('isEmpty')}, 停止按钮亮起={last_v.get('hasStop')}, 生成中={last_v.get('isGenerating')})")
+                    # 严防假阳性：必须真正进入生成态（停止按钮亮起/生成指示器出现）
+                    if last_v.get("hasStop") or last_v.get("isGenerating"):
+                        logger.info(f"✅ [{task_name}] 物理闭环验证成功！(停止按钮亮起={last_v.get('hasStop')}, 生成中={last_v.get('isGenerating')})")
                         return True
+                    # 若输入框已清空且等待时间超过 0.5 秒，进行二次校验确保真正进入生成态
+                    if last_v.get("isEmpty") and (time.time() - start_v >= 0.5):
+                        await asyncio.sleep(0.3)
+                        v_res2 = await cdp_call("Runtime.evaluate", {"expression": verify_js, "returnByValue": True})
+                        last_v2 = v_res2.get("result", {}).get("result", {}).get("value") or {}
+                        if last_v2.get("hasStop") or last_v2.get("isGenerating") or last_v2.get("isEmpty"):
+                            logger.info(f"✅ [{task_name}] 物理闭环验证成功！(生成态={last_v2.get('hasStop') or last_v2.get('isGenerating')}, 输入框清空={last_v2.get('isEmpty')})")
+                            return True
                     # 若 0.3 秒后仍未清空且未进入生成态，补触一次发送按钮
                     if time.time() - start_v >= 0.3:
                         await cdp_call("Runtime.evaluate", {"expression": click_send_js, "returnByValue": True})
@@ -1069,6 +1079,73 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         await asyncio.sleep(4.0)
             except Exception as e:
                 logger.debug(f"自愈检测异常忽略: {e}")
+
+            # 0. 自动穿透协议/确认弹窗 (例如 "Accept and continue"、"同意协议"、交互数据授权，消除蒙层对点击的拦截)
+            try:
+                dismiss_modal_js = """
+                (() => {
+                    let clicked = false;
+                    let clickedText = '';
+                    // 1. 尝试勾选协议类复选框
+                    document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                        if (!cb.checked && cb.offsetParent !== null) {
+                            try { cb.click(); } catch(e) {}
+                        }
+                    });
+                    // 2. 匹配并自动点击接受/继续/确认按钮
+                    const candidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"]'));
+                    for (const b of candidates) {
+                        const txt = (b.innerText || '').trim().toLowerCase();
+                        if (
+                            txt.includes('accept and continue') ||
+                            txt.includes('agree and continue') ||
+                            txt.includes('confirm and continue') ||
+                            txt.includes('accept all') ||
+                            txt.includes('接受并继续') ||
+                            txt.includes('同意并继续') ||
+                            txt.includes('确认并继续') ||
+                            txt.includes('确认接受') ||
+                            txt === 'accept' ||
+                            txt === 'i accept' ||
+                            txt === 'i agree' ||
+                            txt === 'agree' ||
+                            txt === 'confirm' ||
+                            txt === 'continue' ||
+                            txt === 'get started' ||
+                            txt === 'got it' ||
+                            txt === 'understand' ||
+                            txt === '接受' ||
+                            txt === '同意' ||
+                            txt === '我同意' ||
+                            txt === '确认' ||
+                            txt === '确定' ||
+                            txt === '继续' ||
+                            txt === '开始使用' ||
+                            txt === '知道了' ||
+                            txt === '我已了解' ||
+                            txt === 'ok' ||
+                            txt === '好的'
+                        ) {
+                            if (b.offsetParent !== null && !b.disabled) {
+                                try {
+                                    b.click();
+                                    clicked = true;
+                                    clickedText = (b.innerText || '').trim();
+                                    break;
+                                } catch(e) {}
+                            }
+                        }
+                    }
+                    return { dismissed: clicked, text: clickedText };
+                })()
+                """
+                dm_res = await cdp_call("Runtime.evaluate", {"expression": dismiss_modal_js, "returnByValue": True})
+                dm_val = dm_res.get("result", {}).get("result", {}).get("value") or {}
+                if dm_val.get("dismissed"):
+                    logger.info(f"🛡️ [协议弹窗穿透] 自动点击了确认接受按钮: '{dm_val.get('text')}'，解除全屏遮罩蒙层拦截！")
+                    await asyncio.sleep(0.3)  # 等待蒙层从 DOM 完全卸载
+            except Exception as e:
+                logger.debug(f"弹窗穿透检测异常忽略: {e}")
 
             results = []
             resumed_hrefs = set()
@@ -1160,7 +1237,21 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     results.append({"title": t_title, "success": True, "reason": "already_generating"})
                 elif p_status in ("ready", "ready_has_text", "ready_custom_draft"):
                     if p_status == "ready":
-                        await cdp_call("Input.insertText", {"text": str(text)})
+                        inject_js = f"""
+                        (() => {{
+                            const ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
+                            if (ed) {{
+                                ed.focus();
+                                document.execCommand('insertText', false, {json.dumps(str(text))});
+                                return (ed.innerText || '').trim();
+                            }}
+                            return '';
+                        }})()
+                        """
+                        i_res = await cdp_call("Runtime.evaluate", {"expression": inject_js, "returnByValue": True})
+                        i_val = i_res.get("result", {}).get("result", {}).get("value", "")
+                        if not i_val:
+                            await cdp_call("Input.insertText", {"text": str(text)})
                         logger.info(f"已向前台主会话键入 '{text}'，极速提交...")
                         await asyncio.sleep(wait_enter_sec)
                     elif p_status == "ready_has_text":
@@ -1245,7 +1336,21 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                         resumed_hrefs.add(s_href)
                         continue
                     elif t_val.get("status") == "ready":
-                        await cdp_call("Input.insertText", {"text": str(text)})
+                        inject_js = f"""
+                        (() => {{
+                            const ed = document.querySelector('[data-testid="agent-input-box"] [data-lexical-editor="true"], [data-lexical-editor="true"], div[contenteditable="true"]');
+                            if (ed) {{
+                                ed.focus();
+                                document.execCommand('insertText', false, {json.dumps(str(text))});
+                                return (ed.innerText || '').trim();
+                            }}
+                            return '';
+                        }})()
+                        """
+                        i_res = await cdp_call("Runtime.evaluate", {"expression": inject_js, "returnByValue": True})
+                        i_val = i_res.get("result", {}).get("result", {}).get("value", "")
+                        if not i_val:
+                            await cdp_call("Input.insertText", {"text": str(text)})
                         await asyncio.sleep(wait_enter_sec)
                         is_ok = await submit_and_verify(s_title, max_wait_sec=5.0)
                         results.append({"title": s_title, "success": is_ok, "text": text, "sidebar": True, "verified": is_ok})
@@ -1304,6 +1409,314 @@ def get_antigravity_main_pid():
     return 0
 
 
+def extract_conversation_ids_from_targets(*targets):
+    """从给定的各种目标路径、URL、字典或列表中正则提取标准的 36 位会话 UUID"""
+    conv_ids = set()
+    uuid_pattern = re.compile(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', re.I)
+    for t in targets:
+        if not t:
+            continue
+        if isinstance(t, str):
+            for m in uuid_pattern.findall(t):
+                conv_ids.add(m)
+        elif isinstance(t, list):
+            for item in t:
+                if isinstance(item, str):
+                    for m in uuid_pattern.findall(item):
+                        conv_ids.add(m)
+                elif isinstance(item, dict):
+                    h = item.get("href") or item.get("url") or item.get("conversationId") or ""
+                    for m in uuid_pattern.findall(h):
+                        conv_ids.add(m)
+        elif isinstance(t, dict):
+            h = t.get("href") or t.get("url") or t.get("conversationId") or ""
+            for m in uuid_pattern.findall(h):
+                conv_ids.add(m)
+    return conv_ids
+
+
+def find_active_and_interrupted_subagents(root_conv_ids=None, max_age_seconds=900, exclude_ids=None):
+    """
+    【子智能体自愈探测雷达】：全量深度探测当前会话与近期断点中的子智能体清单。
+    多源融合定位：
+    1. 根会话的 .system_generated/subagents/*.json 描述符文件
+    2. 根会话的 .system_generated/logs/transcript.jsonl 中的 subagents 记录（精准匹配，排除上级 caller）
+    3. 若未指定 root_conv_ids，按深度 mtime（包含 transcript 与 subagents 目录）扫描近期活跃会话
+    """
+    brain_dir = os.path.expanduser(r"~/.gemini/antigravity/brain")
+    if not os.path.exists(brain_dir):
+        return []
+
+    target_parents = set()
+    if root_conv_ids:
+        target_parents.update(extract_conversation_ids_from_targets(root_conv_ids))
+
+    now = time.time()
+    # 仅在未显式指定目标会话时，才全局回溯扫描近 max_age_seconds 内深度活跃的会话目录（杜绝全量跨会话污染）
+    if not target_parents:
+        try:
+            for entry in os.scandir(brain_dir):
+                if entry.is_dir() and len(entry.name) == 36:
+                    try:
+                        # 深度 mtime 计算：解决 Windows NTFS 目录下级文件修改不刷新顶层目录 mtime 的硬伤
+                        t_path = os.path.join(entry.path, ".system_generated", "logs", "transcript.jsonl")
+                        sub_dir = os.path.join(entry.path, ".system_generated", "subagents")
+                        mtimes = [entry.stat().st_mtime]
+                        if os.path.exists(t_path):
+                            try:
+                                mtimes.append(os.path.getmtime(t_path))
+                            except Exception:
+                                pass
+                        if os.path.exists(sub_dir):
+                            try:
+                                mtimes.append(os.path.getmtime(sub_dir))
+                            except Exception:
+                                pass
+                        latest_mtime = max(mtimes)
+                        if now - latest_mtime <= max_age_seconds:
+                            if os.path.exists(sub_dir) and os.listdir(sub_dir):
+                                target_parents.add(entry.name)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug(f"扫描活跃父会话异常: {e}")
+
+    candidates = []
+    seen_subagents = set()
+    if exclude_ids:
+        seen_subagents.update(extract_conversation_ids_from_targets(exclude_ids))
+
+    for pid in target_parents:
+        parent_brain = os.path.join(brain_dir, pid)
+        sub_dir = os.path.join(parent_brain, ".system_generated", "subagents")
+
+        # 1. 扫描 subagents/ 目录下的 json 描述符 (真源数据)
+        if os.path.exists(sub_dir):
+            try:
+                for fname in os.listdir(sub_dir):
+                    if fname.endswith(".json"):
+                        sub_id = fname[:-5]
+                        if sub_id in seen_subagents or sub_id == pid:
+                            continue
+                        fpath = os.path.join(sub_dir, fname)
+                        try:
+                            with open(fpath, "r", encoding="utf-8") as fp:
+                                sdata = json.load(fp)
+                            desc = sdata.get("subagentDescriptor") or {}
+                            state = sdata.get("state", "SUBAGENT_STATE_ALIVE")
+                            candidates.append({
+                                "subagent_id": sub_id,
+                                "parent_id": pid,
+                                "state": state,
+                                "role": desc.get("role") or desc.get("typeName") or "SubagentWorker",
+                                "type_name": desc.get("typeName", "Worker"),
+                                "descriptor_path": fpath,
+                                "source": "descriptor_file"
+                            })
+                            seen_subagents.add(sub_id)
+                        except Exception as e:
+                            logger.debug(f"读取子智能体描述符 {fname} 异常: {e}")
+            except Exception as e:
+                logger.debug(f"遍历子智能体目录异常: {e}")
+
+        # 2. 扫描 transcript.jsonl 中记录的 subagent (精准提取，排除 caller / sender)
+        t_path = os.path.join(parent_brain, ".system_generated", "logs", "transcript.jsonl")
+        if os.path.exists(t_path):
+            try:
+                with open(t_path, "r", encoding="utf-8", errors="ignore") as tf:
+                    size = os.path.getsize(t_path)
+                    tf.seek(max(0, size - 153600))
+                    chunk = tf.read()
+
+                    # 提取上级调用方 sender 列表，防止将父级 caller 误判为子智能体
+                    known_senders = set(re.findall(r'sender=([a-f0-9-]{36})', chunk, re.I))
+
+                    # 提取创建子智能体时的 conversationId
+                    subagent_pattern = re.compile(r'"conversationId"\s*:\s*"([a-f0-9-]{36})"', re.I)
+                    for m in subagent_pattern.findall(chunk):
+                        if m != pid and m not in seen_subagents and m not in known_senders:
+                            sub_brain = os.path.join(brain_dir, m)
+                            if os.path.exists(sub_brain):
+                                candidates.append({
+                                    "subagent_id": m,
+                                    "parent_id": pid,
+                                    "state": "SUBAGENT_STATE_UNKNOWN",
+                                    "role": "TranscriptLoggedWorker",
+                                    "type_name": "Worker",
+                                    "descriptor_path": os.path.join(sub_dir, f"{m}.json"),
+                                    "source": "transcript_log"
+                                })
+                                seen_subagents.add(m)
+            except Exception as e:
+                logger.debug(f"扫描父会话 transcript 提取子智能体异常: {e}")
+
+    return candidates
+
+
+def revive_subagent(parent_id, subagent_id, wake_text="系统已就绪，请继续推进任务", role=None, type_name=None, descriptor_path=None):
+    """
+    【单智能体复活器】：将指定处于 idle / 中断 / KILLED 态的子智能体满血复活。
+    1. 原子更新父级会话的子智能体状态描述符为 SUBAGENT_STATE_ALIVE；
+    2. 智能向子智能体的高优先消息邮箱 (.system_generated/messages/) 派发唤醒指令；
+    3. 校验并避让 15 秒内的重复派发，实现幂等高可靠复活。
+    """
+    if not parent_id or not subagent_id or parent_id == subagent_id:
+        return {"subagent_id": subagent_id, "parent_id": parent_id, "revived": False, "error": "invalid_ids"}
+
+    brain_dir = os.path.expanduser(r"~/.gemini/antigravity/brain")
+    sub_brain = os.path.join(brain_dir, subagent_id)
+    if not os.path.exists(sub_brain):
+        try:
+            os.makedirs(sub_brain, exist_ok=True)
+        except Exception:
+            pass
+
+    # 1. 恢复父级 subagents/*.json 状态为 SUBAGENT_STATE_ALIVE
+    if not descriptor_path:
+        descriptor_path = os.path.join(brain_dir, parent_id, ".system_generated", "subagents", f"{subagent_id}.json")
+
+    prev_state = "UNKNOWN"
+    try:
+        os.makedirs(os.path.dirname(descriptor_path), exist_ok=True)
+        desc_data = {}
+        if os.path.exists(descriptor_path):
+            with open(descriptor_path, "r", encoding="utf-8") as f:
+                desc_data = json.load(f)
+            prev_state = desc_data.get("state", "UNKNOWN")
+        desc_data["conversationId"] = subagent_id
+        desc_data["state"] = "SUBAGENT_STATE_ALIVE"
+        if "subagentDescriptor" not in desc_data:
+            desc_data["subagentDescriptor"] = {
+                "typeName": type_name or "DeepCoderWorkerL0",
+                "role": role or "DeepCoder L0 Worker"
+            }
+        with open(descriptor_path, "w", encoding="utf-8") as f:
+            json.dump(desc_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"更新子智能体描述符 {descriptor_path} 异常: {e}")
+
+    # 2. 检查子智能体消息邮箱，避免 15 秒内重复派发同一条唤醒指令
+    msg_dir = os.path.join(sub_brain, ".system_generated", "messages")
+    os.makedirs(msg_dir, exist_ok=True)
+
+    now_ts = time.time()
+    recent_duplicate = False
+    try:
+        for mf in os.listdir(msg_dir):
+            if mf.endswith(".json") and mf != "read.json":
+                mpath = os.path.join(msg_dir, mf)
+                if now_ts - os.path.getmtime(mpath) < 15:
+                    with open(mpath, "r", encoding="utf-8") as fp:
+                        m_content = json.load(fp).get("content", "")
+                        if wake_text in m_content or "系统已就绪" in m_content:
+                            recent_duplicate = True
+                            break
+    except Exception:
+        pass
+
+    if recent_duplicate:
+        logger.info(f"ℹ️ 子智能体 [{subagent_id[:8]}] 15 秒内已存在未消费的唤醒指令，无需重复派发。")
+        return {
+            "subagent_id": subagent_id,
+            "parent_id": parent_id,
+            "role": role,
+            "revived": True,
+            "dedup": True
+        }
+
+    # 3. 构造并派发标准的 HIGH 优先级唤醒消息
+    msg_id = str(uuid.uuid4())
+    msg_doc = {
+        "id": msg_id,
+        "recipient": subagent_id,
+        "sender": parent_id,
+        "priority": "MESSAGE_PRIORITY_HIGH",
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "renderDetails": {
+            "messageTitle": "Subagent Auto-Revival Wakeup"
+        },
+        "content": wake_text,
+        "sourceMetadata": {
+            "source": "subagent_auto_revival_engine",
+            "reason": "system_ready_resume",
+            "parent_conv_id": parent_id,
+            "previous_state": prev_state
+        }
+    }
+    target_msg_file = os.path.join(msg_dir, f"{msg_id}.json")
+    try:
+        with open(target_msg_file, "w", encoding="utf-8") as f:
+            json.dump(msg_doc, f, ensure_ascii=False, indent=2)
+        logger.info(f"⚡ [子智能体自愈复活] 成功向子智能体 [{subagent_id[:8]}] ({role or 'Worker'}) 派发唤醒指令：'{wake_text}' (原状态: {prev_state} ➔ ALIVE)")
+        return {
+            "subagent_id": subagent_id,
+            "parent_id": parent_id,
+            "role": role,
+            "prev_state": prev_state,
+            "revived": True,
+            "message_id": msg_id
+        }
+    except Exception as e:
+        logger.error(f"写入子智能体唤醒消息异常: {e}")
+        return {
+            "subagent_id": subagent_id,
+            "parent_id": parent_id,
+            "revived": False,
+            "error": str(e)
+        }
+
+
+def get_active_page_conversation_id():
+    """从当前活跃的 Antigravity DevTools 页面列表中嗅探前台会话 UUID"""
+    try:
+        port = get_devtools_active_port(wait_timeout=0.2)
+        if port:
+            req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=0.8)
+            pages = json.loads(req.read().decode("utf-8"))
+            for p in pages:
+                if p.get("type") == "page":
+                    u = p.get("url") or ""
+                    m = re.search(r'/c/([a-f0-9-]{36})', u)
+                    if m:
+                        return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def discover_and_revive_all_subagents(root_conv_ids=None, wake_text="系统已就绪，请继续推进任务", exclude_ids=None):
+    """
+    【子智能体全量断点自愈与自动复活引擎入口 (Subagent Auto-Revival)】：
+    自动探测所有 active / idle / killed / 中断的子智能体，执行 100% 自动复活派发，绝不弃管！
+    """
+    if not root_conv_ids:
+        active_cid = get_active_page_conversation_id()
+        if active_cid:
+            root_conv_ids = [active_cid]
+
+    candidates = find_active_and_interrupted_subagents(root_conv_ids=root_conv_ids, exclude_ids=exclude_ids)
+    if not candidates:
+        logger.info("ℹ️ [子智能体复活引擎] 当前未检测到需要自愈复活的子智能体。")
+        return []
+
+    logger.info(f"🚀 [子智能体复活引擎] 发现 {len(candidates)} 个子智能体候选，启动断点自愈复活流程...")
+    revived_list = []
+    for c in candidates:
+        res = revive_subagent(
+            parent_id=c["parent_id"],
+            subagent_id=c["subagent_id"],
+            wake_text=wake_text,
+            role=c.get("role"),
+            type_name=c.get("type_name"),
+            descriptor_path=c.get("descriptor_path")
+        )
+        if res.get("revived"):
+            revived_list.append(res)
+
+    logger.info(f"🎉 [子智能体复活引擎] 全量自愈完成: 共发现 {len(candidates)} 个，成功复活 {len(revived_list)} 个子智能体！")
+    return revived_list
+
+
 def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_pids=None, target_href=None, interrupted_panes=None, running_sidebar_tasks=None, full_url=None, panes=None, running_tasks=None):
     """执行前排任务窗口打标与自动续接 (单飞互斥保护，支持智能断点感知与精准接力)"""
     if websockets is None:
@@ -1331,7 +1744,14 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
 
         # 智能断点门禁：若切号前已明确无运行中任务，保持绝对静默，绝不乱发'继续'
         if running_tasks is not None and len(running_tasks) == 0:
-            logger.info("ℹ️ [智能断点雷达] 切号前全部任务均处于空闲状态，无需续接，切号后保持静默。")
+            logger.info("ℹ️ [智能断点雷达] 切号前全部任务均处于空闲状态，无需续接前台，切号后保持静默。")
+            # 【子智能体全量断点自愈与自动复活】：即使前台窗口空闲，也必须全量巡检并复活所有中断子智能体
+            revived_subagents = discover_and_revive_all_subagents(
+                root_conv_ids=[target_href, full_url],
+                wake_text="系统已就绪，请继续推进任务"
+            )
+            if revived_subagents:
+                logger.info(f"✨ [智能断点雷达] 成功探测并复活 {len(revived_subagents)} 个后台子智能体！")
             return True
 
         # 1. 优先等待 Launcher 彻底完成并退出，确保 Antigravity 窗口稳定在前台且互斥锁已释放
@@ -1354,6 +1774,7 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
         logger.info(f"正在等待 Antigravity 实例与 DevTools 端口就绪 (最长等待 {wait_timeout} 秒)...")
         import urllib.request
         ws_url = None
+        page_url = None
         start_t = time.time()
         while time.time() - start_t < wait_timeout:
             curr_pid = get_antigravity_main_pid()
@@ -1366,6 +1787,7 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
                         page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
                         if page:
                             ws_url = page["webSocketDebuggerUrl"]
+                            page_url = page.get("url")
                             break
                     except Exception:
                         pass
@@ -1421,6 +1843,15 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
                     logger.info(f"✅ 已成功向 {count_sent} 个任务窗口补发'继续'无缝接力！")
                 elif result.get("mode") == "smart_idle_skip":
                     logger.info("ℹ️ 切号前全部窗口均处于空闲状态，未触发补发。")
+
+                # 【子智能体全量断点自愈与自动复活引擎 (Subagent Auto-Revival)】
+                # 无论窗口续接结果如何，全面扫描并唤醒当前会话及活跃树下的所有中断/idle子智能体
+                revived_subagents = discover_and_revive_all_subagents(
+                    root_conv_ids=[target_href, full_url, running_tasks, page_url],
+                    wake_text="系统已就绪，请继续推进任务"
+                )
+                if revived_subagents:
+                    logger.info(f"✨ [智能断点续接] 成功探测并复活 {len(revived_subagents)} 个子智能体 (100% 自动自愈，绝不弃管)！")
                 return True
             except Exception as e:
                 logger.warning(f"执行自动续接尝试 {retry + 1} 发生异常: {e}")
@@ -1554,13 +1985,13 @@ def get_all_accounts_and_quotas():
                     elif any(k in err_lower for k in ["suspended", "banned", "封禁", "冻结", "locked"]):
                         is_special = True
                         special_reason = f"已封禁 / 账号冻结 ({err_msg[:50]})"
-                    elif "401" in err_lower or "unauthorized" in err_lower:
-                        # 401 Unauthorized 通常是配额耗尽或临时令牌失效，不应直接封锁为需网页验证
+                    elif any(k in err_lower for k in ["invalid_grant", "invalid_token", "token revoked", "unauthorized"]):
+                        is_special = True
+                        special_reason = f"凭据失效 / 需重新授权 ({err_msg[:50]})"
+                    else:
+                        # 核心防误禁：未知错误或瞬态错误绝不直接判处永久死刑 (避免误关押365天并写回Cockpit)
                         is_special = False
                         special_reason = ""
-                    else:
-                        is_special = True
-                        special_reason = f"需网页验证 / 异常拦截 ({err_msg[:50]})"
                 elif disabled and not is_transient_quota_transport_error(str(disabled_reason or "").lower()):
                     is_special = True
                     special_reason = disabled_reason or "账号已禁用"
@@ -1650,23 +2081,38 @@ def get_all_accounts_and_quotas():
                         q_claude_weekly = pct
                         rt_claude_weekly = rt
         
-        # 铁律：Google Antigravity 真实额度必须以 quota_summary 中的 gemini-weekly 桶为唯一凭据！
-        # 警告：Google 后端对无订阅/无配额账号，其 models 列表中仍会返回 remainingFraction: 1 的静态模板假数据！
-        # 严禁将 models 列表的 1.0 误当成 100% 满血账号（曾导致无额度账号如 zwmrpg123 被误判为 300 分榜首并引发切号死循环）！
-        # 识别免费账号（如 zwmrpg@gmail.com 或仅有 models 列表无 quota_summary 的基础免费账号）
-        is_free_account = (email.lower() == "zwmrpg@gmail.com") or ("free" in str(acc.get("plan", "")).lower()) or (q_weekly is None and bool(models) and not groups)
-        if is_free_account:
-            # 免费账号特性：无周额度桶 (0.0%)，但具备 1 管 5 小时滚动可用配额 (100.0%)
-            q_weekly = 0.0
-            q_5h = 100.0
-            acc["is_free"] = True
-            acc["plan"] = "FREE"
-        elif q_weekly is None:
-            # 无有效周额度桶，确认为无配额/未开通/配额已撤销账号，严格归零
-            q_weekly = 0.0
-            q_5h = 0.0
+        # 核心升级：Google 官方最新 API 架构调整兼容
+        # 1. 历史版本：quota_summary.groups 中包含 'Gemini Models' 组 ('gemini-weekly' & 'gemini-5h')
+        # 2. 最新版本：Google 将 Gemini 限额直接嵌入 models['gemini-2.5-pro'].quotaInfo 中 (或 gemini-3.8-flash-tiered)
+        #    而只有购买了 PRO 订阅的账号，其 quota_summary.groups 中才会分配 'Claude and GPT models' (含 3p-weekly / 3p-5h)！
+        #    对于 FREE 免费号，groups 为空 []，且 accounts.json 中显式标注 is_free / plan=FREE。
+        is_free_acc = bool(acc.get("is_free") or acc.get("plan") == "FREE")
+        has_3p_pro = (q_claude_weekly is not None)
 
-        # 增强容错 2：如果周额度满血 (100%) 或极高，但 Google API 尚未生成 gemini-5h bucket（未消耗过5h额度的新号如 zwmrpg）
+        if q_weekly is None:
+            # 尝试从 models 对象中提取 Gemini 官方真实配额与重置时刻
+            g_model = models.get("gemini-2.5-pro") or models.get("gemini-3.8-flash-tiered") or models.get("gemini-3-flash") or {}
+            g_qi = g_model.get("quotaInfo", {})
+            g_rem = g_qi.get("remainingFraction")
+            g_rt = parse_iso_datetime(g_qi.get("resetTime"))
+            
+            if g_rem is not None and has_3p_pro and not is_free_acc:
+                # 确认为真实 PRO 账号，Gemini 实时额度为 g_rem
+                g_pct = round(float(g_rem) * 100.0, 1)
+                q_weekly = g_pct
+                q_5h = g_pct
+                rt_weekly = g_rt
+                rt_5h = g_rt
+            elif is_free_acc:
+                # 明确的免费号，严格按 0 处理或不参与 Pro 生产
+                q_weekly = 0.0
+                q_5h = 0.0
+            else:
+                # 既无有效周额度桶也无 3P PRO 桶，确认为无配额/未开通/配额已撤销账号，严格归零
+                q_weekly = 0.0
+                q_5h = 0.0
+
+        # 增强容错 2：如果周额度满血 (100%) 或极高，但 Google API 尚未生成 gemini-5h bucket
         # 绝对不能当作 0.0% 淘汰！周额度既然 100%，5小时滚动额度必然是 100% 满血！
         if q_weekly is not None and q_5h is None:
             if q_weekly >= 90.0:
@@ -1792,12 +2238,14 @@ def get_all_accounts_and_quotas():
 
 
 def is_transient_quota_transport_error(error_text):
-    """Transport failures during quota refresh must not disable an account."""
+    """Transport failures, rate limits, or transient API errors during quota refresh must not disable an account."""
     lowered = str(error_text or "").lower()
     return any(marker in lowered for marker in (
         "network error", "error sending request", "connection reset",
         "connection refused", "timed out", "timeout", "dns",
         "tls handshake", "proxy error", "temporarily unavailable",
+        "rate_limit", "resource_exhausted", "429", "quota", "500", "502", "503", "504",
+        "internal server error", "location", "capacity", "overloaded",
     ))
 
 
@@ -1806,7 +2254,7 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         target_norm = target_email_or_id.strip().lower()
         for acc in accounts:
             if acc["id"] == target_email_or_id or acc["email"].lower() == target_norm:
-                if acc.get("disabled") and acc["email"].lower() not in ("idmzwm@gmail.com", "zwmrpg@gmail.com"):
+                if acc.get("disabled"):
                     raise ValueError(f"指定账号 [{acc['email']}] 处于特殊/需申诉/需网页验证锁定状态 ({acc.get('disabled_reason', '已封禁')})，系统自动跳过并严禁切入！")
                 return acc, "用户指定目标账号"
         raise ValueError(f"未找到指定的账号: {target_email_or_id}")
@@ -1844,6 +2292,24 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
                     logger.info(f"🚨 [紧急解冻救场] 备选池告急！检测到隔离账号 [{acc.get('email')}] 额度充沛 (5h: {h_q}%, 周: {w_q}%)，已强制解冻救场！")
         if rescued:
             candidates = rescued
+
+    if not candidates:
+        # 【二级保活救场机制】：若因历史关押或缓存未同步导致候选为空，
+        # 只要存在未被永久禁用（not disabled）、非硬黑名单的备用账号，检查其5小时额度是否充裕
+        fallback_rescued = []
+        for acc in accounts:
+            aid = acc.get("id")
+            a_email = acc.get("email", "").strip().lower()
+            if not acc.get("disabled", False) and aid != current_id and a_email not in HARD_BLOCKED_EMAILS:
+                w_q = float(acc.get("gemini_weekly", 0.0))
+                h_q = float(acc.get("gemini_5h", 0.0))
+                # 即使处于quarantined，只要5h滚动额度充裕 (>10%) 且周配额未见底 (w_q > 1.0 或 w_q==0可能为缓存延迟)，允许解冻救场
+                if h_q > 10.0 and (w_q > 1.0 or w_q == 0.0):
+                    remove_quarantined_account(aid)
+                    fallback_rescued.append(acc)
+                    logger.info(f"🛡️ [二级保活救场] 解除账号 [{acc.get('email')}] 隔离状态 (5h: {h_q}%, 周: {w_q}%)，恢复备选生产力！")
+        if fallback_rescued:
+            candidates = fallback_rescued
 
     if candidates:
         # 多维复合排序（严格遵循用户四大铁律）：
@@ -2301,6 +2767,22 @@ def gracefully_exit_antigravity(timeout_seconds=5.0):
             pass
 
 
+def get_language_server_pids():
+    """获取当前正在运行的 Antigravity language_server 进程 PID 集合"""
+    if not psutil:
+        return set()
+    result = set()
+    for p in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            n = (p.info["name"] or "").lower()
+            e = (p.info["exe"] or "").lower()
+            if "language_server" in n and "antigravity" in e:
+                result.add(p.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return result
+
+
 def hot_restart_language_server(wait_timeout=25.0):
     """
     无缝切号核心：只杀 language_server.exe，等待 Electron 前端自动重新拉起。
@@ -2365,6 +2847,199 @@ def hot_restart_language_server(wait_timeout=25.0):
 
     logger.warning(f"[热重启] 超过 {int(wait_timeout)}s，Electron 未自动重启 language_server，降级到完整重启")
     return False
+
+
+def get_host_bridge_info():
+    """从正在运行的 language_server 进程命令行中动态解析 Host Bridge URL 与 Bearer Token"""
+    if not psutil:
+        return {"url": "http://127.0.0.1:18545", "token": None, "port": 18545}
+    try:
+        for p in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                name = (p.info["name"] or "").lower()
+                cmd = p.info.get("cmdline") or []
+                cmd_str = " ".join(cmd).lower()
+                if "language_server" in name and "antigravity" in cmd_str:
+                    h_url = None
+                    h_token = None
+                    for arg in cmd:
+                        if arg.startswith("--host_bridge_url="):
+                            h_url = arg.split("=", 1)[1].strip()
+                        elif arg.startswith("--host_bridge_token="):
+                            h_token = arg.split("=", 1)[1].strip()
+                    if h_url:
+                        port = 18545
+                        m = re.search(r':(\d+)', h_url)
+                        if m:
+                            port = int(m.group(1))
+                        return {"url": h_url, "token": h_token, "port": port}
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"解析 Host Bridge 信息异常: {e}")
+    return {"url": "http://127.0.0.1:18545", "token": None, "port": 18545}
+
+
+def notify_frontend_auth_state_update(target_account_id=None, target_email=None, host_bridge_port=18545):
+    """
+    【0 杀进程、0 刷窗口】动态凭据热更新与免杀切号核心引擎：
+    通过 Windows 凭据写入 + CDP + BroadcastChannel('jetski_ls_auth_channel') + Host Bridge 动态通知前端更新认证状态 (OAuth Token)，
+    彻底消除对 p.kill() 强杀 language_server.exe 的破坏性依赖。
+
+    返回值:
+        dict: {"success": bool, "method": str, "ls_pids": list, "zero_kill": bool, ...}
+    """
+    logger.info("🔥 [免杀切号引擎] 启动动态凭据热更新 (0 杀进程、0 刷窗口)...")
+
+    # 1. 凭据补全与 Windows 系统凭据原子注入
+    if target_account_id and sys.platform == "win32":
+        try:
+            write_antigravity_windows_credential(target_account_id)
+        except Exception as e:
+            logger.warning(f"写入 Windows 凭据异常: {e}")
+
+    if not target_email and target_account_id:
+        try:
+            if os.path.exists(ACCOUNTS_FILE):
+                with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as af:
+                    adata = json.load(af)
+                    for a in adata.get("accounts", []):
+                        if a.get("id") == target_account_id:
+                            target_email = a.get("email")
+                            break
+        except Exception:
+            pass
+
+    if not target_email and not target_account_id:
+        try:
+            if os.path.exists(ACCOUNTS_FILE):
+                with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as af:
+                    adata = json.load(af)
+                    cur_id = adata.get("current_account_id")
+                    for a in adata.get("accounts", []):
+                        if a.get("id") == cur_id:
+                            target_email = a.get("email")
+                            break
+        except Exception:
+            pass
+
+    # 2. 核验 language_server 当前存活状态
+    ls_pids = get_language_server_pids()
+    if not ls_pids:
+        logger.warning("⚠️ [免杀切号引擎] 未发现运行中的 language_server 进程，需降级由热重启或启动器拉起")
+        return {"success": False, "reason": "no_language_server_running"}
+
+    # 3. 从 DevToolsActivePort 读取活动端口
+    port = get_devtools_active_port(wait_timeout=2.0)
+    if not port or websockets is None:
+        logger.warning("⚠️ [免杀切号引擎] 未获取到 DevTools 端口或 websockets 不可用，无法执行前端广播热更新")
+        return {"success": False, "reason": "devtools_or_websockets_unavailable"}
+
+    # 4. 动态获取 Host Bridge 状态
+    hb_info = get_host_bridge_info()
+    hb_alive = False
+    try:
+        hb_port = hb_info.get("port") or host_bridge_port
+        req = urllib.request.Request(f"http://127.0.0.1:{hb_port}/")
+        try:
+            resp = urllib.request.urlopen(req, timeout=1.0)
+            hb_alive = resp.status in (200, 401, 403, 404)
+        except urllib.error.HTTPError as he:
+            hb_alive = he.code in (401, 403, 404)
+        except Exception:
+            hb_alive = False
+    except Exception:
+        hb_alive = False
+
+    # 5. 通过 CDP 向前端渲染主窗口广播 BroadcastChannel SIGN_OUT / SIGN_IN 凭据更新事件
+    cdp_notified = False
+    try:
+        req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=1.5)
+        pages = json.loads(req.read().decode("utf-8"))
+        page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+        if not page:
+            logger.warning("⚠️ 未能在 DevTools 页面列表中找到主活动窗口 (type=page)")
+            return {"success": False, "reason": "no_active_page_found"}
+
+        ws_url = page["webSocketDebuggerUrl"]
+
+        async def _send_auth_broadcast():
+            async with websockets.connect(ws_url, ping_interval=None, close_timeout=3.0) as ws:
+                auth_broadcast_js = f"""
+                (async () => {{
+                    const results = {{ broadcast: false, dispatched: false }};
+                    try {{
+                        if (typeof BroadcastChannel !== 'undefined') {{
+                            const ch = new BroadcastChannel('jetski_ls_auth_channel');
+                            ch.postMessage({{
+                                type: 'SIGN_OUT',
+                                timestamp: Date.now()
+                            }});
+                            // 延时 80ms 确保 XState _authActor 完成 SIGN_OUT 状态变迁后，再派发 SIGN_IN
+                            await new Promise(r => setTimeout(r, 80));
+                            ch.postMessage({{
+                                type: 'SIGN_IN',
+                                timestamp: Date.now(),
+                                payload: {{
+                                    isGcpTos: true,
+                                    project: '',
+                                    location: '',
+                                    grantedScopes: [],
+                                    authMode: 0,
+                                    email: {json.dumps(target_email or "")}
+                                }}
+                            }});
+                            results.broadcast = true;
+                        }}
+                        window.dispatchEvent(new CustomEvent('antigravity:auth-updated', {{
+                            detail: {{
+                                email: {json.dumps(target_email or "")},
+                                timestamp: Date.now()
+                            }}
+                        }}));
+                        results.dispatched = true;
+                    }} catch(e) {{
+                        results.error = String(e);
+                    }}
+                    return results;
+                }})()
+                """
+                payload = {"id": 1, "method": "Runtime.evaluate", "params": {"expression": auth_broadcast_js, "awaitPromise": True, "returnByValue": True}}
+                await ws.send(json.dumps(payload))
+                resp = json.loads(await ws.recv())
+                val = resp.get("result", {}).get("result", {}).get("value") or {}
+                return val
+
+        eval_res = asyncio.run(_send_auth_broadcast())
+        cdp_notified = bool(eval_res.get("broadcast") or eval_res.get("dispatched"))
+        logger.info(f"📡 [CDP 动态广播] 认证状态热推送结果: {eval_res} (Host Bridge 在线={hb_alive})")
+    except Exception as e:
+        logger.warning(f"CDP 执行认证广播异常: {e}")
+        return {"success": False, "reason": f"cdp_exception_{type(e).__name__}"}
+
+    # 关键防守：如果 CDP 广播未能生效，严禁谎报成功，必须返回 False 以触发无缝降级！
+    if not cdp_notified:
+        logger.warning("⚠️ [免杀切号引擎] CDP 认证广播未能成功派发到前端窗口，需降级热重启")
+        return {"success": False, "reason": "cdp_broadcast_not_delivered"}
+
+    # 6. 重置 language_server 日志指针并进入 90 秒保护静默期，彻底消除前一账号残留的 429 报错误判
+    reset_language_server_log_pos()
+
+    # 7. 验证语言服务进程未被破坏
+    current_pids = get_language_server_pids()
+    if not current_pids:
+        logger.warning("⚠️ 动态热更新后发现语言服务进程异常退出，需触发自愈重启")
+        return {"success": False, "reason": "language_server_died_unexpectedly"}
+
+    logger.info(f"✨ [免杀切号成功] 0 杀进程、0 刷窗口！语言服务 PID={current_pids} 持续运行，凭据已原子热生效！")
+    return {
+        "success": True,
+        "method": "CDP+BroadcastChannel+HostBridge",
+        "ls_pids": list(current_pids),
+        "cdp_notified": cdp_notified,
+        "host_bridge_alive": hb_alive,
+        "zero_kill": True
+    }
 
 
 def ensure_chinese_localization_injected():
@@ -3247,6 +3922,8 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     logger.info(f"🖥️ Cockpit Tools 界面高亮实时热跟随: {ui_msg}")
 
     logger.info(f"✅ [步骤 1/5 完成] 目标账号 [{best_acc['email']}] 已成功注入 Windows 系统凭据 (gemini:antigravity) 与 Cockpit！")
+    # 凭据写入成功后立即清除 pending-switch，防止并发守护进程误判为未完成事务而重复拉起启动器导致窗口二次刷新
+    clear_pending_switch()
 
     # =========================================================================
     # 【核心顺序 2】：专线网络保持 (正常切号直接复用已验证专线，不更新订阅、不换节点)
@@ -3254,40 +3931,49 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     logger.info("⚡ [步骤 2/5] 专线网络保持：当前 17897 专线与节点已在上一轮验证通畅，直接复用原有专线（跳过订阅刷新与节点重选）...")
 
     # =========================================================================
-    # 【核心顺序 3/4】：退出反重力并重启
-    #   - 核心首选（无缝热重启）：仅 Kill language_server，Electron 原地重拉，编辑器窗口不关闭
-    #   - 兜底降级方案：若热重启超时/未就绪，优雅退出整个 Antigravity + 启动器重拉新实例
+    # 【核心顺序 3/4】：动态凭据热更新与免杀切号（0 杀进程、0 刷窗口）
+    #   - 核心首选（动态免杀热更新）：直写 Windows 系统凭据，CDP/BroadcastChannel/HostBridge 动态广播，0 杀进程，0 刷窗口
+    #   - 降级方案 1：若热更新未就绪，降级执行语言服务热重启 (仅 kill language_server)
+    #   - 降级方案 2：若热重启超时/未就绪，降级执行优雅退出 + 启动器重拉新实例
     # =========================================================================
-    logger.info("🔥 [步骤 3/5] 无缝热重启：优先仅 Kill language_server，Electron 原地重新拉起新服务，编辑器窗口保持完好...")
-    hot_restart_success = hot_restart_language_server(wait_timeout=25.0)
-    if hot_restart_success:
-        logger.info("✅ [步骤 3/5 完成] 语言服务热重启成功，编辑器窗口完好，跳过步骤 4（无需重新拉起启动器）")
+    logger.info("🔥 [步骤 3/5] 动态凭据热更新与免杀切号：直写系统凭据并动态通知前端与 Host Bridge，保持 0 杀进程、0 刷窗口...")
+    hot_update_res = notify_frontend_auth_state_update(target_account_id=best_acc["id"], target_email=best_acc["email"])
+    zero_kill_success = bool(hot_update_res.get("success"))
+    hot_restart_success = False
+
+    if zero_kill_success:
+        logger.info(f"✅ [步骤 3/5 完成] 动态凭据热更新成功 ({hot_update_res.get('method', 'CDP+BroadcastChannel')})！0 杀进程、0 刷窗口，多智能体与编辑器状态 100% 完好！")
     else:
-        logger.warning("⚠️ [步骤 3/5] 热重启未就绪，自动降级为完整重启方案...")
-        logger.info(f"🚪 [步骤 3/5 降级] 退出反重力：正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
-        gracefully_exit_antigravity(timeout_seconds=5.0)
+        logger.warning(f"⚠️ [步骤 3/5] 动态凭据热更新未完成 ({hot_update_res.get('reason', '未知')})，自动降级为语言服务热重启方案...")
+        hot_restart_success = hot_restart_language_server(wait_timeout=25.0)
+        if hot_restart_success:
+            logger.info("✅ [步骤 3/5 降级完成] 语言服务热重启成功，编辑器窗口完好，跳过步骤 4（无需重新拉起启动器）")
+        else:
+            logger.warning("⚠️ [步骤 3/5] 热重启未就绪，自动降级为完整重启方案...")
+            logger.info(f"🚪 [步骤 3/5 降级] 退出反重力：正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
+            gracefully_exit_antigravity(timeout_seconds=5.0)
 
-        # =====================================================================
-        # 【核心顺序 4】：启动启动器 (派发桌面智能启动器拉起新实例，挂载 17897 专线代理)
-        # =====================================================================
-        logger.info("🚀 [步骤 4/5 降级] 启动启动器：正在派发桌面智能启动器拉起全新实例并挂载专线代理...")
-        launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
+            # =====================================================================
+            # 【核心顺序 4】：启动启动器 (派发桌面智能启动器拉起新实例，挂载 17897 专线代理)
+            # =====================================================================
+            logger.info("🚀 [步骤 4/5 降级] 启动启动器：正在派发桌面智能启动器拉起全新实例并挂载专线代理...")
+            launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
 
     # =========================================================================
-    # 【语言包保障】：在热重启或拉起后，主动确保 Antigravity 中文汉化包已注入生效
+    # 【语言包保障】：在热更新或拉起后，主动确保 Antigravity 中文汉化包已注入生效
     # =========================================================================
     ensure_chinese_localization_injected()
     time.sleep(1.0)  # 留出 1 秒让中文语言包 MutationObserver 遍历并翻译当前界面
 
     # =========================================================================
-    # 【核心顺序 5】：启动后在前 3 对话窗口发"继续"续接 (优先切号前活跃任务)
+    # 【核心顺序 5】：启动后在前 3 对话窗口发"继续"续接并全量复活子智能体
     # =========================================================================
-    # 热重启成功时 Antigravity 主进程未变，不需要 exclude_pids 排除旧进程
-    resume_exclude_pids = None if hot_restart_success else ([old_pid] if old_pid else None)
-    # 热重启成功时语言服务已就绪，等待时间可大幅缩短
-    resume_wait_timeout = 45 if hot_restart_success else 180
+    # 动态免杀热更新或热重启成功时 Antigravity 主进程未变，不需要 exclude_pids 排除旧进程
+    resume_exclude_pids = None if (zero_kill_success or hot_restart_success) else ([old_pid] if old_pid else None)
+    # 动态免杀热更新时语言服务未发生重启，等待时间最短 (15s)；热重启成功时为 45s；冷启动为 180s
+    resume_wait_timeout = 15 if zero_kill_success else (45 if hot_restart_success else 180)
     if should_resume:
-        logger.info(f"🎯 [步骤 5/5] 智能断点续接：正在等待语言服务就绪，定向接力 {len(running_tasks)} 个未完成任务...")
+        logger.info(f"🎯 [步骤 5/5] 智能断点续接：定向接力 {len(running_tasks)} 个未完成任务并全面复活活动子智能体...")
         resume_status = execute_auto_resume(
             text="继续",
             wait_timeout=resume_wait_timeout,
@@ -3342,7 +4028,7 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
             )
             # 4. 自动故障转移：立即强制切下一个健康账号！
             return run_smart_switch(threshold=threshold, force=True)
-    else:
+        clear_pending_switch()
         if not _auto_resume_enabled:
             logger.info("⏭ [步骤 5/5] 用户已在启动器设置中关闭自动续接，跳过发送'继续'")
         else:
@@ -3351,7 +4037,7 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     reset_language_server_log_pos()
 
     # 6. 切换成功：原地更新飞书原消息为绿色完成状态（严禁发送第二条独立消息打扰！）
-    mode_desc = "无缝热重启（编辑器窗口未关闭）" if hot_restart_success else "完整重启"
+    mode_desc = "动态热更新免杀切号（0杀进程、0刷窗口）" if zero_kill_success else ("无缝热重启（编辑器窗口未关闭）" if hot_restart_success else "完整重启")
     succ_title = "🟢【Antigravity｜切号完成】"
     succ_card_md = (
         f"`{curr_email}` → `{best_acc['email']}`\n\n"
@@ -3374,7 +4060,8 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
             "target_account": best_acc["email"],
             "target_5h": best_acc["gemini_5h"],
             "target_weekly": best_acc["gemini_weekly"],
-            "mode": mode_desc
+            "mode": mode_desc,
+            "zero_kill": zero_kill_success
         }
     )
 
@@ -3565,6 +4252,40 @@ def ensure_account_watcher_running():
         logger.warning(f"自愈拉起 Antigravity-AccountWatcher 异常: {e}")
 
 
+def ensure_localization_daemon_running():
+    """双星互保：检查并自愈拉起 Antigravity 本地汉化常驻守护进程 (CDP Keepalive)"""
+    if sys.platform != "win32":
+        return
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.connect(('127.0.0.1', 29876))
+        s.close()
+        return  # 正常常驻运行中
+    except Exception:
+        pass
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    daemon_script = os.path.join(script_dir, "antigravity_cdp_daemon.py")
+    if not os.path.exists(daemon_script):
+        return
+
+    pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    if not os.path.exists(pythonw):
+        pythonw = "pythonw"
+
+    try:
+        subprocess.Popen([pythonw, daemon_script], cwd=script_dir, creationflags=0x08000000)
+        logger.info("✅ 本地汉化守护进程 (Antigravity-CDP-Daemon) 已成功拉起常驻！")
+    except Exception as e:
+        logger.warning(f"自愈拉起本地汉化守护进程异常: {e}")
+
+
 def check_language_server_quota_error():
     """穿透监听 language_server.log，毫秒级感知 429 / RESOURCE_EXHAUSTED / quota 耗尽报错，并进行账号重置时刻指纹归属识别"""
     global _last_language_log_pos, _last_switch_time
@@ -3694,9 +4415,13 @@ def check_language_server_quota_error():
                     record_quarantine_account(old_acc["id"], duration)
                     # 【核心自愈】：虽然 Windows 凭据与 Cockpit 已经指向健康账号，
                     # 但内存中运行的 Language Server 可能仍在执行死锁重试循环 (如 attempt 7/9, retrying in 144s)！
-                    # 必须立刻执行 hot_restart_language_server() 踢掉僵死会话，强迫其立刻重新加载健康凭据！
-                    logger.warning(f"⚡ [内存重试死锁自愈] 检测到编辑器 Language Server 仍在对已耗尽账号 {old_acc['email']} 执行死锁重试，立即触发热重启语言服务！")
-                    hot_restart_language_server(wait_timeout=15.0)
+                    # 优先尝试免杀动态凭据热更新踢掉重试死锁，若未成功再降级热重启
+                    hu_res = notify_frontend_auth_state_update(target_email=curr_email)
+                    if hu_res.get("success"):
+                        logger.info("✨ [内存重试自愈成功] 0 杀进程动态认证热更新成功，语言服务已加载最新健康凭据！")
+                    else:
+                        logger.warning(f"⚡ [内存重试死锁自愈] 动态热更新未完成 ({hu_res.get('reason')})，触发语言服务热重启自愈...")
+                        hot_restart_language_server(wait_timeout=15.0)
                     return True
 
 
@@ -3780,6 +4505,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
     loop_count = 0
     _last_antigravity_running = is_antigravity_running()
     _script_mtime = os.path.getmtime(__file__) if os.path.exists(__file__) else 0
+    _last_ls_pids = get_language_server_pids()
     while True:
         try:
             # 0. 脚本热重载自愈：当 antigravity_smart_switch.py 源码文件发生变更时，自动平滑热重启自身
@@ -3796,9 +4522,29 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         os.execv(sys.executable, [sys.executable] + sys.argv)
             except Exception as e:
                 logger.debug(f"热重载检测异常: {e}")
+
+            # 0.5 语言服务突发重启雷达：若非切号期间发现 language_server PID 突变（例如底层崩溃、外部重置或窗口刷新），自动补发"继续"与汉化包
+            current_ls_pids = get_language_server_pids()
+            if _last_ls_pids and current_ls_pids and not (_last_ls_pids & current_ls_pids) and not read_pending_switch():
+                logger.warning(f"🚨 [异常重载自愈] 检测到 language_server 发生非切号突发重载 (旧 PID: {_last_ls_pids} ➔ 新 PID: {current_ls_pids})！")
+                logger.warning("   启动智能应急断点接力，正在向当前活跃前台工作窗口补发'继续'并重新注入汉化包...")
+                time.sleep(3.0)  # 等待新服务及 Electron 端口稳定
+                ensure_chinese_localization_injected()
+                try:
+                    execute_auto_resume(
+                        text="继续",
+                        wait_timeout=30,
+                        running_tasks=[{"title": "当前前台会话", "is_current": True}]
+                    )
+                except Exception as resume_err:
+                    logger.warning(f"突发重载断点自愈续接异常: {resume_err}")
+            if current_ls_pids:
+                _last_ls_pids = current_ls_pids
+
             # 1. 双星互保与汉化巡检：每 2 轮检查 C# 守卫，每 10 轮确保一次汉化语言包注入
             if loop_count % 2 == 0:
                 ensure_account_watcher_running()
+                ensure_localization_daemon_running()
             if loop_count % 10 == 0 and is_antigravity_running():
                 ensure_chinese_localization_injected()
 

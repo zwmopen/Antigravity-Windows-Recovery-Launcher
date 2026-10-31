@@ -8,7 +8,7 @@ param(
 )
 
 # Antigravity private proxy supervisor
-# Version: 2.8.6
+# Version: 2.8.7
 # Purpose: run one private Mihomo listener for Antigravity only.
 # The executable core is ASCII-only for Windows PowerShell 5.1 compatibility.
 
@@ -58,9 +58,9 @@ $CandidateCooldownMinutes = 20
 $MaxSuccessHistory = 128
 # Bound the live preflight after retired/cooldown state has been applied.
 $MaxCandidateCount = 96
-$StopProcessTimeoutSeconds = 20
+$StopProcessTimeoutSeconds = 15
 $ProbeTimeoutMs = 8000
-$ModelProbeTimeoutSeconds = 45
+$ModelProbeTimeoutSeconds = 30
 $ModelProbePrompt = 'Reply with exactly OK. Do not call tools or modify files.'
 $ModelProbeConfirmationCount = 1
 $ConnectivityAttemptCount = if ($RecoveryReason -eq 'Startup') { 2 } else { 2 }
@@ -920,9 +920,9 @@ function Get-OrderedCandidates {
             $successCount = 1
             try { $lastPassedTicks = ([datetime]::Parse([string]$State.last_switch_at)).Ticks } catch { }
         }
-        $priority = 1000
+        $priority = 3000
         try { $priority = [int]$candidate.Priority } catch { }
-        $regionRank = 100
+        $regionRank = 300
         try { $regionRank = [int]$candidate.RegionRank } catch { }
 
         # Smart Pool: calculate SmartScore (0-1000)
@@ -1157,7 +1157,7 @@ function Get-CandidateNodeDefinitions {
             $profilePriority = 30
             # 锁定 1.17T 大流量订阅为最高优先级必选源 (RVc3ckc4DDH4 / 三毛机场共享月付)
             if ([string]$profile.Id -eq 'RVc3ckc4DDH4' -or [string]$profile.DisplayName -match '1\.17|共享|1200') {
-                $profilePriority = 5
+                $profilePriority = 15
             } elseif ([string]$profile.Id -eq 'RRjkhbY0ep0h' -or [string]$profile.DisplayName -match '年') {
                 $profilePriority = 90
             }
