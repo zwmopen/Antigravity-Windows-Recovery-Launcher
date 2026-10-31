@@ -203,6 +203,45 @@ internal static class AntigravityAccountWatcher
         catch { }
     }
 
+    private static bool RunSmartSwitch(string targetAccount)
+    {
+        string script = Path.Combine(Path.GetDirectoryName(LauncherPath), "antigravity_smart_switch.py");
+        if (!File.Exists(script))
+        {
+            script = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity", "launcher", "antigravity_smart_switch.py");
+        }
+        if (!File.Exists(script)) return false;
+
+        string pyw = ResolvePythonw();
+        try
+        {
+            Log("smart_switch_started target=" + targetAccount);
+            string args = "\"" + script + "\" --target \"" + targetAccount + "\"";
+            var psi = new ProcessStartInfo
+            {
+                FileName = pyw,
+                Arguments = args,
+                WorkingDirectory = Path.GetDirectoryName(script),
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using (var process = Process.Start(psi))
+            {
+                if (process != null)
+                {
+                    process.WaitForExit(30000);
+                    Log("smart_switch_finished exit=" + process.ExitCode);
+                    return process.ExitCode == 0;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("smart_switch_failed error=" + ex.Message);
+        }
+        return false;
+    }
+
     private static bool RunLauncher(string reason)
     {
         if (!File.Exists(LauncherPath))
@@ -639,7 +678,11 @@ internal static class AntigravityAccountWatcher
 
                     Log("account_change_detected");
                     repairInProgress = true;
-                    bool repaired = RunLauncher("cockpit_account_changed");
+                    bool repaired = RunSmartSwitch(stableAccountId);
+                    if (!repaired)
+                    {
+                        repaired = RunLauncher("cockpit_account_changed");
+                    }
                     repairInProgress = false;
                     if (repaired)
                     {

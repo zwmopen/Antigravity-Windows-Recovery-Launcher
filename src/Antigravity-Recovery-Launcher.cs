@@ -123,34 +123,16 @@ namespace AntigravityLauncher
 
             if (!forceLaunch)
             {
-                TraceLog("Displaying AntigravityHotLaunchChoiceForm...");
-                var choiceForm = new AntigravityHotLaunchChoiceForm(antigravityRunning);
-                Application.Run(choiceForm);
-
-                if (choiceForm.Action == HotLaunchAction.Activate)
+                if (HasArgument(args, "--activate"))
                 {
-                    if (antigravityRunning)
-                    {
-                        TraceLog("Hot launch: activating existing main window...");
-                        bool activated = ActivateExistingAntigravity();
-                        TraceLog("Activate result: " + activated);
-                        return 0;
-                    }
-                    else
-                    {
-                        TraceLog("Cold launch: proceeding to capsule startup...");
-                    }
-                }
-                else if (choiceForm.Action == HotLaunchAction.Repair)
-                {
-                    TraceLog("Hot launch: user selected Repair. Launching recovery capsule...");
-                    forceLaunch = true;
-                }
-                else
-                {
-                    TraceLog("Hot launch: user dismissed choice form.");
+                    TraceLog("Direct activate requested...");
+                    ActivateExistingAntigravity();
                     return 0;
                 }
+
+                TraceLog("Direct launch: opening full Management Studio GUI...");
+                LaunchSwitcherGui();
+                return 0;
             }
 
             // 4. 冷启动 / 重启修复：展示具备清晰通路与链路核验反馈的极简状态卡片
