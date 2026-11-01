@@ -219,6 +219,14 @@ THEMES = {
 
 FONT_FAMILY = "Microsoft YaHei UI"
 
+def make_mini_bar(pct, width=7):
+    """生成迷你文字进度条：████░░░ 87%"""
+    pct = max(0.0, min(100.0, float(pct or 0)))
+    filled = round(pct / 100 * width)
+    bar = "█" * filled + "░" * (width - filled)
+    return f"{bar} {pct:.0f}%"
+
+
 def get_saved_theme_id():
     if THEME_CONFIG_FILE.is_file():
         try:
@@ -572,14 +580,23 @@ class AntigravityModernStudio(ctk.CTk):
         action_name = "进入主界面" if is_running else "启动并自愈"
 
         if self.countdown_seconds > 0:
-            self.btn_open_main.configure(text=f"▶ {action_name} ({self.countdown_seconds}s)")
-            status_desc = "应用运行中 · 5秒后激活 · 点击常驻" if is_running else "应用未启动 · 5秒后自愈拉起 · 点击常驻"
+            self.btn_open_main.configure(text=f"▶ {action_name}")
+            status_desc = "运行中 · 点击常驻" if is_running else "未启动 · 点击常驻"
             self.lbl_countdown_hint.configure(text=f"⏳ {status_desc}")
+            # 独立大数字 badge 显示倒计时 (橙色醒目)
+            try:
+                self.lbl_countdown_badge.configure(text=str(self.countdown_seconds), text_color="#f97316")
+            except Exception:
+                pass
             self.countdown_seconds -= 1
             self.timer_id = self.after(1000, self._start_countdown)
         else:
             self.btn_open_main.configure(text=f"▶ {action_name}")
-            self.lbl_countdown_hint.configure(text="🟢 已自动触发 · 面板常驻就绪")
+            self.lbl_countdown_hint.configure(text="🟢 面板常驻 · 操作就绪")
+            try:
+                self.lbl_countdown_badge.configure(text="✓", text_color="#22c55e")
+            except Exception:
+                pass
             self.on_open_main_clicked(from_timer=True)
 
     def pause_countdown(self):
@@ -596,6 +613,10 @@ class AntigravityModernStudio(ctk.CTk):
         action_name = "进入主界面" if is_running else "启动并自愈"
         self.btn_open_main.configure(text=f"▶ {action_name}")
         self.lbl_countdown_hint.configure(text="🟢 面板常驻 · 操作就绪")
+        try:
+            self.lbl_countdown_badge.configure(text="", text_color="#22c55e")
+        except Exception:
+            pass
 
     def show_toast(self, message, level="info", duration_ms=3200):
         t = self.theme
@@ -640,6 +661,12 @@ class AntigravityModernStudio(ctk.CTk):
         self.lbl_header_status.configure(text_color=t["muted"])
 
         self.btn_open_main.configure(fg_color=t["primary"], hover_color=t["primary_hover"], text_color=t["primary_fg"])
+        try:
+            # badge 颜色随主题：深色主题用更亮橙，浅色用标准橙
+            badge_color = "#fb923c" if t.get("appearance") == "Dark" else "#f97316"
+            self.lbl_countdown_badge.configure(text_color=badge_color)
+        except Exception:
+            pass
         self.btn_restart_repair.configure(fg_color=t["restart_btn"], hover_color=t["restart_hover"], text_color=t["restart_fg"])
         self.btn_refresh.configure(fg_color=t["btn_sec_bg"], border_color=t["btn_sec_border"], text_color=t["btn_sec_fg"], hover_color=t["btn_sec_hover"])
 
@@ -751,6 +778,16 @@ class AntigravityModernStudio(ctk.CTk):
 
         top_btn_bar = ctk.CTkFrame(top_row, fg_color="transparent")
         top_btn_bar.pack(side="right")
+
+        # 倒计时独立数字 badge —— 橙色醒目大字，让用户一眼看见倒计时
+        self.lbl_countdown_badge = ctk.CTkLabel(
+            top_btn_bar,
+            text="5",
+            font=(FONT_FAMILY, 20, "bold"),
+            text_color="#f97316",
+            width=28
+        )
+        self.lbl_countdown_badge.pack(side="left", padx=(0, 2))
 
         self.btn_open_main = ctk.CTkButton(
             top_btn_bar,
@@ -904,13 +941,13 @@ class AntigravityModernStudio(ctk.CTk):
         )
 
         col_defs = [
-            ("status", "状态", 52, "center"),
-            ("email", "账号", 220, "w"),
-            ("gemini_5h", "5h", 58, "center"),
-            ("reset_5h", "回血", 100, "center"),
-            ("gemini_weekly", "周额", 58, "center"),
-            ("reset_weekly", "周重置", 100, "center"),
-            ("score", "分", 46, "center"),
+            ("status", "状态", 46, "center"),
+            ("email", "账号", 180, "w"),
+            ("gemini_5h", "5h额度", 96, "center"),
+            ("reset_5h", "回血", 94, "center"),
+            ("gemini_weekly", "周额度", 96, "center"),
+            ("reset_weekly", "周重置", 94, "center"),
+            ("score", "分", 38, "center"),
         ]
 
         for col_id, col_name, col_w, col_anchor in col_defs:
@@ -1285,9 +1322,9 @@ class AntigravityModernStudio(ctk.CTk):
                 values=(
                     status_text,
                     acc.get("email", ""),
-                    f"{acc.get('gemini_5h', 0.0):.1f}%",
+                    make_mini_bar(acc.get('gemini_5h', 0.0), 6),
                     reset_5h_text,
-                    f"{acc.get('gemini_weekly', 0.0):.1f}%",
+                    make_mini_bar(acc.get('gemini_weekly', 0.0), 6),
                     reset_weekly_text,
                     f"{acc.get('cockpit_score', 0.0):.0f}"
                 ),
@@ -1422,7 +1459,7 @@ class AntigravityModernStudio(ctk.CTk):
             if not desc:
                 desc = "静置保护" if acc.get("is_parked") else "健康候选"
             self.lbl_acc_detail.configure(
-                text=f"📌 选中: {email} | 5h: {g5:.1f}% | 周额: {gw:.1f}% | 评分: {sc:.0f} | 状态: {desc}"
+                text=f"● {email}  5h {make_mini_bar(g5,5)}  周 {make_mini_bar(gw,5)}  评分 {sc:.0f}"
             )
 
     # ==========================================
