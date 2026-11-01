@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 $ErrorActionPreference = 'Stop'
@@ -12,6 +12,9 @@ $loaderSource = Join-Path $source 'Antigravity-CdpLocalizationLoader.cs'
 $loaderOutput = Join-Path $release 'Antigravity-CdpLocalizationLoader.exe'
 
 New-Item -ItemType Directory -Path $release -Force | Out-Null
+# Remove only the obsolete optional panel from this exact build output.
+$obsoletePanel = Join-Path $release 'antigravity_switcher_gui.py'
+if (Test-Path -LiteralPath $obsoletePanel) { Remove-Item -LiteralPath $obsoletePanel -Force }
 $launcherOutput = Join-Path $release 'Antigravity-Recovery-Launcher.exe'
 $watcherOutput = Join-Path $release 'Antigravity-AccountWatcher.exe'
 $launcherSource = Join-Path $source 'Antigravity-Recovery-Launcher.cs'
@@ -39,7 +42,7 @@ if (Test-Path -LiteralPath $iconSource) {
 }
 $iconArg = if (Test-Path -LiteralPath $compilerIcon) { "/win32icon:$compilerIcon" } else { "" }
 
-& $csc /nologo /target:winexe /optimize+ /codepage:65001 $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll ("/out:" + $launcherOutput) $launcherSource
+& $csc /nologo /target:winexe /optimize+ /codepage:65001 $iconArg /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.dll /reference:System.Web.Extensions.dll ("/out:" + $launcherOutput) $launcherSource
 if ($LASTEXITCODE -ne 0) { throw 'launcher_build_failed' }
 & $csc /nologo /target:winexe /optimize+ /codepage:65001 /reference:System.Management.dll ("/out:" + $watcherOutput) $watcherSource
 if ($LASTEXITCODE -ne 0) { throw 'watcher_build_failed' }
@@ -70,7 +73,7 @@ function Copy-WithUtf8BomAndValidate {
 }
 
 Copy-WithUtf8BomAndValidate (Join-Path $source 'Antigravity-ProxySupervisor.ps1') (Join-Path $release 'Antigravity-ProxySupervisor.ps1')
-foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd', 'antigravity_smart_switch.py', 'antigravity_switcher_gui.py', 'Invoke-AntigravitySmartSwitch.ps1', 'Antigravity-QuickSwitch.cmd', 'restore_workspace_panes.py', 'watchdog-restore-fix.ps1')) {
+foreach ($helper in @('Set-AntigravityLocalization.ps1', 'Enable-Antigravity-Chinese.cmd', 'Restore-Antigravity-English.cmd', 'antigravity_smart_switch.py', 'Invoke-AntigravitySmartSwitch.ps1', 'Antigravity-QuickSwitch.cmd', 'restore_workspace_panes.py', 'watchdog-restore-fix.ps1')) {
     $helperPath = Join-Path $source $helper
     if (Test-Path -LiteralPath $helperPath) {
         $destPath = Join-Path $release $helper
@@ -85,7 +88,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $extensionSource 'manifest.json'))) 
 New-Item -ItemType Directory -Path $extensionRelease -Force | Out-Null
 Copy-Item -Path (Join-Path $extensionSource '*') -Destination $extensionRelease -Recurse -Force
 
-Get-ChildItem -LiteralPath $release -File | ForEach-Object {
+Get-ChildItem -LiteralPath $release -File | Where-Object { $_.Name -ne 'manifest.json' -and $_.Name -ne 'antigravity_switcher_gui.py' } | ForEach-Object {
     [pscustomobject]@{ file = $_.Name; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash; size = $_.Length }
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $release 'manifest.json') -Encoding UTF8
 

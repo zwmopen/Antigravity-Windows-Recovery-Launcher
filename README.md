@@ -1,3 +1,5 @@
+﻿> v2.9.7：默认恢复小卡片入口；显示最近验证账号、Cockpit 当前选择、节点和验证记录时间。编辑器实时登录态尚无可靠回读，界面明确标注，不能把 Cockpit 选择或守护器锚点冒充已载入账号。账号和额度来自 Cockpit 本地数据（额度为缓存）；线路来自 Clash/Mihomo 订阅。
+
 # Antigravity 智能启动器与无感自愈引擎
 
 <p align="center">
@@ -10,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-v2.9.6-blue.svg" alt="版本 v2.9.6" />
+  <img src="https://img.shields.io/badge/版本-v2.9.7-blue.svg" alt="版本 v2.9.7" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线沙盒-127.0.0.1:17897-teal.svg" alt="专线沙盒" />
   <img src="https://img.shields.io/badge/算力调度-四级智能优先级-orange.svg" alt="算力调度" />

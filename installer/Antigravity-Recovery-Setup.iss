@@ -1,5 +1,5 @@
-#define MyAppName "Antigravity 智能启动器"
-#define MyAppVersion "2.9.1"
+﻿#define MyAppName "Antigravity 智能启动器"
+#define MyAppVersion "2.9.7"
 #define MyAppPublisher "zwmopen"
 #define MyAppURL "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher"
 #define MyAppExeName "Antigravity-Recovery-Launcher.exe"
@@ -32,17 +32,17 @@ CloseApplications=no
 RestartApplications=no
 LicenseFile=..\LICENSE
 InfoBeforeFile=..\docs\INSTALLER-README.txt
-VersionInfoVersion=2.9.1.0
+VersionInfoVersion=2.9.7.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Setup
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=2.9.1.0
+VersionInfoProductVersion=2.9.7.0
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
-Source: "..\releases\current\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\releases\current\*"; DestDir: "{app}"; Excludes: "__pycache__\*,*.pyc"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion

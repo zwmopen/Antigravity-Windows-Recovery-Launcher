@@ -1,3 +1,26 @@
+﻿## v2.9.7 小卡片状态与正式发布
+
+源码已恢复稳定小卡片并补节点、最近验证账号、Cockpit选择及记录时间。watcher-current-account是切号锚点（可能提前写入ID），不作为编辑器已加载身份的证据；没有可靠编辑器回读时显示未核实。管理面板源文件原有未提交修改保持原样，不纳入本次提交/发行。账号和缓存额度来自Cockpit；线路来自订阅；节点和AI验证来自监督器本地状态。ZIP与Setup已构建；本机安装版本2.9.7.0，安装EXE与ZIP字节相同；热启动日志23:29:51 Activate result=True；compiled card JSON/安全降级/四行绘制测试与门禁回归通过。正式Release发布以GitHub v2.9.7回读为准。
+
+## 2026-11-01 23:05 验证门禁热修复（当前权威部署状态）
+
+- 当前本机：GitHub v2.9.1 小卡片EXE + 2.9.7-core监督器；源码VERSION=2.9.7，源码管理面板仍为历史开发分支，不自动重新构建安装。
+- 修复formal_model_gate_fallback把AI失败标为通过；最终ready必须有LastModelProbeState=passed。快速启动Google204后也补真实模型与账号门禁。
+- JP优先、US兜底；每地区最多2次正式模型请求、合计4次，候选循环预算300秒。账户门禁修正RuntimeDirectory未定义，等待30秒并验证退出码和新回执；引用账号缓存时明确标记quota_source=account_cache。
+- 源码和部署监督器因保留稳定分支小差异不要求整文件哈希相同；安装监督器与private-proxy黄金副本哈希一致。智能切号采用源码已有location/瞬态错误不误封的版本。
+- 回归admission-failure-policy、formal-model-gate、supervisor-state-contract通过；smart-switch-priority脚本6项通过。实际23:03:51账号action=reused通过、23:04:19模型返回OK，formal_model_gate_passed；23:04:20 antigravity_live_seamless_attached，未重启编辑器。
+- 本条覆盖下方“地区限制未解决、守护暂停”的早期诊断快照；自动守护在本次收束时按安装入口重新拉起，后续以实际PID及日志为准。
+- 未发布Release、未推送Git、未全量提交工作区。
+
+## 2026-11-01 用户要求恢复小卡片稳定版（当前部署状态）
+
+- 源码开发版本保留2.9.6；本机实际部署已恢复GitHub正式Release v2.9.1，勿按下方历史面板交付记录自动重新部署大面板。
+- 稳定包外部SHA256SUMS全部校验通过；安装脚本已运行，快捷方式指向稳定安装路径；热启动小卡片自动激活日志多次成功。
+- 旧新版代理进程识别不同，已核实并停止旧驻留的本项目代理，由稳定版重建。监督器流程会重启编辑器，实际已完成重启；客户端响应正常。
+- 模型请求未修复：正式门禁多次model_location，旧版max_formal_attempts_reached后fallback仍标ready；独立最终探测exit3、Google400 location not supported。不能把客户端打开/ready当模型恢复。
+- C#AccountWatcher与Python --watch暂时停止以隔离并发恢复；Run开机项保留，未永久禁用。恢复守护前先确认地区限制及账号隔离状态，避免重复误隔离。未删除账号凭据或会话数据。
+- 安装前快照：`C:\Users\z\AppData\Local\Antigravity\private-proxy\backups\restore-github-v291-before-20261101-223450`。
+
 ## 2026-10-03 Codex 切号协调维护
 
 2.9.4 新增共用切号锁与日志轮转占用容错；算力中心优先使用安装目录组件，并正确返回 busy。COCK 原生 auto_switch_enabled=false，antigravity_launch_on_switch=false。直接从 COCK 手动切号仍不经过 Python 锁，不能宣称全部入口无条件互斥。额度缓存仍需由 COCK 成功刷新，修复账号池不等同实时额度恢复。算力中心改动保存在 ai-app-config 仓库；本机维护前备份位于 private-proxy/backups，不向 Git 推送凭据与日志。

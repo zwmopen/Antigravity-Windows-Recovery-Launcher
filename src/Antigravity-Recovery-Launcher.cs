@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("1.6.23.0")]
-[assembly: AssemblyFileVersion("1.6.23.0")]
-[assembly: AssemblyInformationalVersion("1.6.23")]
+[assembly: AssemblyVersion("2.9.7.0")]
+[assembly: AssemblyFileVersion("2.9.7.0")]
+[assembly: AssemblyInformationalVersion("2.9.7")]
 
 namespace AntigravityLauncher
 {
@@ -34,19 +34,9 @@ namespace AntigravityLauncher
 
         private const string SingleInstanceMutexName = @"Local\AntigravityLauncherSingleInstance";
         private const string BackgroundMutexName = @"Local\AntigravitySelfHealingLauncherBackground";
-        private const string ManagerPanelWindowTitle = "Antigravity 管理面板";
         internal const string SupervisorMutexName = @"Local\AntigravitySupervisorRun";
 
         private static Mutex singleInstanceMutex;
-
-        [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowW", SetLastError = true)]
-        private static extern IntPtr FindWindowW(string lpClassName, string lpWindowName);
-
-        private static bool IsManagerPanelOpen()
-        {
-            try { return FindWindowW(null, ManagerPanelWindowTitle) != IntPtr.Zero; }
-            catch { return false; }
-        }
 
         internal static void TraceLog(string msg)
         {
@@ -76,7 +66,6 @@ namespace AntigravityLauncher
             TraceLog("Main invoked: " + (args != null ? string.Join(" ", args) : "null"));
             bool backgroundMode = HasArgument(args, "--background");
             bool forceLaunch = HasArgument(args, "--force-launch");
-            bool managerOwnsRecovery = forceLaunch && IsManagerPanelOpen();
             bool betaMode = HasArgument(args, "--beta");
 
             // Beta 模式：写入 beta.flag 文件，供 Python 守护进程读取以启用测试版行为
@@ -93,23 +82,16 @@ namespace AntigravityLauncher
             }
 
             // 1. 后台静默自愈模式 (由 AccountWatcher 调度，无任何 UI)
-            if (backgroundMode || managerOwnsRecovery)
+            if (backgroundMode)
             {
-                TraceLog(managerOwnsRecovery
-                    ? "Manager panel is open; keeping recovery UI in the manager and running the capsule headless."
-                    : "Running in backgroundMode");
+                TraceLog("Running in backgroundMode");
                 bool backgroundCreated;
                 using (var backgroundMutex = new Mutex(true, BackgroundMutexName, out backgroundCreated))
                 {
                     if (!backgroundCreated) return 0;
                     if (!File.Exists(ScriptPath)) return 2;
-                    string recoveryReason = managerOwnsRecovery ? "UserRequestedRepair" : GetRecoveryReason(args);
-                    int backgroundResult = RunBackgroundRepair(recoveryReason, managerOwnsRecovery);
-                    if (backgroundResult == 0)
-                    {
-                        EnsureWatcherRunning();
-                        if (managerOwnsRecovery) ActivateExistingAntigravity();
-                    }
+                    int backgroundResult = RunBackgroundRepair(GetRecoveryReason(args));
+                    if (backgroundResult == 0) EnsureWatcherRunning();
                     return backgroundResult;
                 }
             }
@@ -135,22 +117,33 @@ namespace AntigravityLauncher
             Application.SetCompatibleTextRenderingDefault(false);
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 
-            // 3. 智能双选卡片：带 3 秒自动进入、点击即暂停常驻、管理面板一键打开
+            // 3. 检查 Antigravity 是否已经在运行中 (热启动场景：带 3 秒自动进入的双选卡片)
             bool antigravityRunning = IsAntigravityRunning();
             TraceLog("antigravityRunning=" + antigravityRunning + ", forceLaunch=" + forceLaunch);
 
-            if (!forceLaunch)
+            if (antigravityRunning && !forceLaunch)
             {
-                if (HasArgument(args, "--activate"))
+                TraceLog("Displaying AntigravityHotLaunchChoiceForm...");
+                var choiceForm = new AntigravityHotLaunchChoiceForm();
+                Application.Run(choiceForm);
+
+                if (choiceForm.Action == HotLaunchAction.Activate)
                 {
-                    TraceLog("Direct activate requested...");
-                    ActivateExistingAntigravity();
+                    TraceLog("Hot launch: activating existing main window...");
+                    bool activated = ActivateExistingAntigravity();
+                    TraceLog("Activate result: " + activated);
                     return 0;
                 }
-
-                TraceLog("Direct launch: opening full Management Studio GUI...");
-                LaunchSwitcherGui();
-                return 0;
+                else if (choiceForm.Action == HotLaunchAction.Repair)
+                {
+                    TraceLog("Hot launch: user selected Repair. Launching recovery capsule...");
+                    forceLaunch = true;
+                }
+                else
+                {
+                    TraceLog("Hot launch: user dismissed choice form.");
+                    return 0;
+                }
             }
 
             // 4. 冷启动 / 重启修复：展示具备清晰通路与链路核验反馈的极简状态卡片
@@ -228,40 +221,6 @@ namespace AntigravityLauncher
             catch { }
 
             EnsureQuotaWatcherRunning();
-        }
-
-        internal static void LaunchSwitcherGui()
-        {
-            try
-            {
-                string[] candidates = new string[]
-                {
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity", "launcher", "antigravity_switcher_gui.py"),
-                    Path.Combine(AppDirectory, "antigravity_switcher_gui.py"),
-                    @"D:\AICode\tools\antigravity-launcher\antigravity_switcher_gui.py",
-                    @"D:\AICode\工具开发\projects\antigravity-recovery-launcher\src\antigravity_switcher_gui.py"
-                };
-                string script = null;
-                foreach (var c in candidates)
-                {
-                    if (File.Exists(c)) { script = c; break; }
-                }
-                if (script == null) return;
-
-                string pyw = ResolvePythonw();
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = pyw,
-                    Arguments = "\"" + script + "\"",
-                    WorkingDirectory = Path.GetDirectoryName(script),
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                });
-            }
-            catch (Exception ex)
-            {
-                TraceLog("LaunchSwitcherGui error: " + ex.Message);
-            }
         }
 
         internal static string ResolvePythonw()
@@ -569,7 +528,7 @@ namespace AntigravityLauncher
             }
         }
 
-        private static int RunBackgroundRepair(string recoveryReason, bool prelaunchClient = false)
+        private static int RunBackgroundRepair(string recoveryReason)
         {
             var output = new StringBuilder();
             var error = new StringBuilder();
@@ -578,7 +537,7 @@ namespace AntigravityLauncher
                 var psi = new ProcessStartInfo
                 {
                     FileName = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-                    Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + ScriptPath + "\" -RecoveryReason " + recoveryReason + (prelaunchClient ? " -PrelaunchClient" : ""),
+                    Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + ScriptPath + "\" -RecoveryReason " + recoveryReason,
                     WorkingDirectory = AppDirectory,
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -988,104 +947,67 @@ namespace AntigravityLauncher
     // ==========================================
     // 热启动拟态选项卡片：带 3 秒自动进入倒计时 (AntigravityHotLaunchChoiceForm)
     // ==========================================
-    // 智能双选卡片：带 3 秒自动进入倒计时、点击即暂停常驻、管理面板一键呼出 (AntigravityHotLaunchChoiceForm)
-    // ==========================================
     internal class AntigravityHotLaunchChoiceForm : Form
     {
         internal HotLaunchAction Action { get; private set; }
-        private int remainingSeconds = ReadCountdownSeconds();
+        private int remainingSeconds = 3;
         private System.Windows.Forms.Timer countdownTimer;
         private HotLaunchButton btnActivate;
         private HotLaunchButton btnRepair;
-        private HotLaunchButton btnOpenPanel;
         private CapsuleCloseButton closeButton;
         private Image appIcon = null;
-        private string egressBadgeText = "高速专线就绪";
+        private string egressBadgeText = "网络待核实";
         private string statusBadgeText = "● 运行中";
-        private string subtitleText = "专线稳定畅通 · 3秒后自动打开主界面，或点击管理面板";
-        private bool isRunningClient = true;
+        private string subtitleText = "账号状态待核实";
+        private string networkText = "当前网络：未知";
+        private string accountText = "最近验证账号：未知（编辑器登录态未核实）";
+        private string selectedText = "Cockpit 当前选择：未知";
 
-        // 自动进入倒计时秒数，默认 3 秒，可在 launcher-settings.json 中用
-        // "activate_countdown_seconds" 调整(1~60)，无需重新编译。
-        private static int ReadCountdownSeconds()
+        private static string JsonValue(string json, string key)
         {
             try
             {
-                string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity");
-                string configPath = Path.Combine(root, "private-proxy", "launcher-settings.json");
-                if (!File.Exists(configPath)) return 3;
-                string json = File.ReadAllText(configPath);
-                var match = System.Text.RegularExpressions.Regex.Match(json, "\"activate_countdown_seconds\"\\s*:\\s*(\\d+)");
-                if (match.Success)
-                {
-                    int parsed;
-                    if (int.TryParse(match.Groups[1].Value, out parsed) && parsed >= 1 && parsed <= 60) return parsed;
-                }
+                var data = new System.Web.Script.Serialization.JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>;
+                return data != null && data.ContainsKey(key) && data[key] != null ? Convert.ToString(data[key]) : "";
             }
-            catch { }
-            return 3;
+            catch { return ""; }
         }
 
-        internal AntigravityHotLaunchChoiceForm(bool isRunning = true)
+        internal AntigravityHotLaunchChoiceForm()
         {
-            isRunningClient = isRunning;
             Action = HotLaunchAction.Cancel;
-            Text = "Antigravity 启动与管理助手";
+            Text = "Antigravity 启动助手";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(540, 206);
+            ClientSize = new Size(560, 224);
             BackColor = Color.FromArgb(248, 250, 252);
             ShowInTaskbar = true;
             TopMost = false;
             KeyPreview = true;
 
-            if (isRunningClient)
-            {
-                statusBadgeText = "● 运行中";
-                subtitleText = "专线稳定畅通 · 3秒后自动打开主界面，或点击管理面板";
-            }
-            else
-            {
-                statusBadgeText = "● 待启动";
-                subtitleText = "自愈专线已就绪 · 3秒后自动启动客户端，或点击管理面板";
-            }
-
-            // 暂停机制：当卡片被用户点击交互时，倒计时立即永久暂停！
-            // 窗口绝对不自动关闭，做成真正的应用界面质感，选择权完全交给用户。
-            bool countdownPaused = false;
-            System.Action pauseCountdown = delegate
-            {
-                if (countdownPaused) return;
-                countdownPaused = true;
-                StopTimer();
-                if (btnActivate != null)
-                {
-                    btnActivate.ButtonText = isRunningClient ? "▶ 打开主界面" : "▶ 启动 Antigravity";
-                }
-                subtitleText = "倒计时已暂停 · 窗口常驻保持，您可自由查看与操作";
-                Invalidate();
-            };
-
-            MouseDown += delegate { pauseCountdown(); };
-            MouseClick += delegate { pauseCountdown(); };
-            KeyDown += delegate { pauseCountdown(); };
-            PreviewKeyDown += delegate { pauseCountdown(); };
-
             appIcon = Program.LoadIconOrPng(Program.IconPath);
 
             try
             {
+                string json = File.Exists(Program.SupervisorStatePath) ? File.ReadAllText(Program.SupervisorStatePath) : "{}";
+                string country = JsonValue(json, "egress_country");
+                string node = JsonValue(json, "target_node");
+                bool passed = JsonValue(json, "real_model_probe") == "passed" && JsonValue(json, "status") == "ready";
+                egressBadgeText = (country == "JP" ? "日本" : country == "US" ? "美国" : country) + (passed ? " · 上次验证通过" : " · 待验证");
+                networkText = "当前网络：" + (string.IsNullOrEmpty(node) ? "未知" : node) + "  ·  独立代理 17897";
                 if (File.Exists(Program.SupervisorStatePath))
+                    subtitleText = "网络状态记录 " + File.GetLastWriteTime(Program.SupervisorStatePath).ToString("MM-dd HH:mm") + " · 点击卡片暂停倒计时";
+                string receipt = Path.Combine(Program.RuntimeDirectory, "launch-account-status.json");
+                if (File.Exists(receipt))
                 {
-                    string json = File.ReadAllText(Program.SupervisorStatePath);
-                    var mEgress = System.Text.RegularExpressions.Regex.Match(json, "\"egress_country\"\\s*:\\s*\"([^\"]+)\"");
-                    string egress = mEgress.Success ? mEgress.Groups[1].Value.Trim().ToUpperInvariant() : "";
-                    if (egress == "US")
-                        egressBadgeText = "美国专线就绪";
-                    else if (egress == "JP")
-                        egressBadgeText = "日本专线就绪";
-                    else if (!string.IsNullOrEmpty(egress))
-                        egressBadgeText = egress + " 专线就绪";
+                    string email = JsonValue(File.ReadAllText(receipt), "email");
+                    if (!string.IsNullOrEmpty(email)) accountText = "最近验证账号：" + email + "（非编辑器实时登录态）";
+                }
+                string selected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".antigravity_cockpit", "current_account.json");
+                if (File.Exists(selected))
+                {
+                    string email = JsonValue(File.ReadAllText(selected), "email");
+                    if (!string.IsNullOrEmpty(email)) selectedText = "Cockpit 当前选择：" + email;
                 }
             }
             catch { }
@@ -1119,21 +1041,18 @@ namespace AntigravityLauncher
             };
             settingsButton.Click += delegate
             {
-                pauseCountdown();
+                StopTimer();
+                btnActivate.ButtonText = "打开继续使用";
                 using (var sf = new LauncherSettingsForm())
                 {
                     sf.ShowDialog(this);
                 }
             };
 
-            string activateText = isRunningClient
-                ? ("▶ 打开主界面 (" + remainingSeconds + "s)")
-                : ("▶ 启动 Antigravity (" + remainingSeconds + "s)");
-
-            btnActivate = new HotLaunchButton(activateText)
+            btnActivate = new HotLaunchButton("打开继续使用 (3s)")
             {
-                Location = new Point(20, 78),
-                Size = new Size(242, 48)
+                Location = new Point(20, 158),
+                Size = new Size(252, 46)
             };
             btnActivate.Click += delegate
             {
@@ -1142,36 +1061,11 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            string repairText = isRunningClient ? "⚡ 重启 / 网络自愈" : "⚡ 自愈并启动";
-            btnRepair = new HotLaunchButton(repairText)
+            btnRepair = new HotLaunchButton("⚡ 网络自愈重连")
             {
-                Location = new Point(278, 78),
-                Size = new Size(242, 48)
+                Location = new Point(288, 158),
+                Size = new Size(252, 46)
             };
-            try
-            {
-                string cockpitAccountFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".antigravity_cockpit", "current_account.json");
-                string watcherAccountFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity", "private-proxy", "watcher-current-account.txt");
-                string cockpitEmail = "";
-                string activeIdOrEmail = "";
-                if (File.Exists(cockpitAccountFile))
-                {
-                    string cjson = File.ReadAllText(cockpitAccountFile);
-                    var mEmail = System.Text.RegularExpressions.Regex.Match(cjson, "\"email\"\\s*:\\s*\"([^\"]+)\"");
-                    if (mEmail.Success) cockpitEmail = mEmail.Groups[1].Value.Trim().ToLowerInvariant();
-                }
-                if (File.Exists(watcherAccountFile))
-                {
-                    activeIdOrEmail = File.ReadAllText(watcherAccountFile).Trim().ToLowerInvariant();
-                }
-                if (!string.IsNullOrEmpty(cockpitEmail) && !activeIdOrEmail.Contains(cockpitEmail))
-                {
-                    statusBadgeText = "● 待载入新账号";
-                    subtitleText = "检测到账号或网络已变更 · 点击立即重启载入新凭据";
-                    btnRepair.ButtonText = "⚡ 重启并载入账号";
-                }
-            }
-            catch { }
             btnRepair.Click += delegate
             {
                 StopTimer();
@@ -1179,28 +1073,16 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnOpenPanel = new HotLaunchButton("📊 打开算力与专线管理面板 (账号大盘 · 最优网络 · 日志统计)")
-            {
-                Location = new Point(20, 138),
-                Size = new Size(500, 48)
-            };
-            btnOpenPanel.Click += delegate
-            {
-                pauseCountdown();
-                btnOpenPanel.ButtonText = "📊 管理面板已唤起 (点击可再次呼出)";
-                Program.LaunchSwitcherGui();
-            };
-
             Controls.Add(closeButton);
             Controls.Add(minimizeButton);
             Controls.Add(settingsButton);
             Controls.Add(btnActivate);
             Controls.Add(btnRepair);
-            Controls.Add(btnOpenPanel);
 
             MouseDown += delegate(object s, MouseEventArgs me)
             {
-                pauseCountdown();
+                StopTimer();
+                btnActivate.ButtonText = "打开继续使用";
                 if (me.Button == MouseButtons.Left)
                 {
                     Program.ReleaseCapture();
@@ -1244,7 +1126,7 @@ namespace AntigravityLauncher
                 }
                 else
                 {
-                    btnActivate.ButtonText = (isRunningClient ? "▶ 打开主界面 (" : "▶ 启动 Antigravity (") + remainingSeconds + "s)";
+                    btnActivate.ButtonText = "打开继续使用 (" + remainingSeconds + "s)";
                 }
             };
             countdownTimer.Start();
@@ -1387,12 +1269,17 @@ namespace AntigravityLauncher
 
             using (var fontSubtitle = new Font("Microsoft YaHei UI", 9F))
             using (var subBrush = new SolidBrush(Color.FromArgb(71, 85, 105)))
+            using (var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             {
-                e.Graphics.DrawString(subtitleText, fontSubtitle, subBrush, new PointF(66, 44));
+                string[] lines = { subtitleText, accountText, selectedText, networkText };
+                for (int i = 0; i < lines.Length; i++)
+                    e.Graphics.DrawString(lines[i], fontSubtitle, subBrush, new RectangleF(20, 48 + i * 25, Width - 40, 23), format);
             }
         }
     }
 
+    // ==========================================
+    // 拟态状态卡片：包含清晰通路与链路核验反馈 (无缝渲染)
     // ==========================================
     internal class AntigravityLaunchCapsuleForm : Form
     {

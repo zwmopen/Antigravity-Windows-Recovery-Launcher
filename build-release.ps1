@@ -1,5 +1,5 @@
-[CmdletBinding()]
-param()
+﻿[CmdletBinding()]
+param([switch]$SkipBuild)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -14,18 +14,19 @@ if ($installerBytes.Length -lt 3 -or $installerBytes[0] -ne 0xEF -or $installerB
     throw 'install_ps1_requires_utf8_bom_for_windows_powershell'
 }
 
-& (Join-Path $root 'build.ps1') | Out-Null
+if (-not $SkipBuild) { & (Join-Path $root 'build.ps1') | Out-Null }
 if (-not (Test-Path -LiteralPath (Join-Path $releaseRoot 'Antigravity-Recovery-Launcher.exe'))) {
     throw 'release_build_missing'
 }
 
+if ([System.IO.Path]::GetFullPath($stage) -ne (Join-Path $root ('.work\public-release-' + $version))) { throw 'invalid_stage_path' }
 if (Test-Path -LiteralPath $stage) {
     Remove-Item -LiteralPath $stage -Recurse -Force
 }
 New-Item -ItemType Directory -Path (Join-Path $stage 'releases\current') -Force | Out-Null
 New-Item -ItemType Directory -Path $outRoot -Force | Out-Null
 
-Copy-Item -Path (Join-Path $releaseRoot '*') -Destination (Join-Path $stage 'releases\current') -Recurse -Force
+Get-ChildItem -LiteralPath $releaseRoot | Where-Object { $_.Name -ne '__pycache__' } | Copy-Item -Destination (Join-Path $stage 'releases\current') -Recurse -Force
 foreach ($file in @('Install.cmd', 'install.ps1', 'uninstall.ps1', 'README.md', 'LICENSE', 'SECURITY.md')) {
     Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $stage $file) -Force
 }
@@ -42,7 +43,10 @@ $forbiddenPatterns = @(
     '(?i)api/rest\?token='
 )
 foreach ($pattern in $forbiddenPatterns) {
-    $match = Get-ChildItem -LiteralPath $stage -Recurse -File | Select-String -Pattern $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+    $match = Get-ChildItem -LiteralPath $stage -Recurse -File | Select-String -Pattern $pattern -ErrorAction SilentlyContinue | Where-Object {
+        # This reads a local setting; it contains no embedded secret value.
+        $_.Line.Trim() -ne 'app_secret = cfg.get("app_secret")'
+    } | Select-Object -First 1
     if ($null -ne $match) { throw ('release_secret_scan_failed:' + $match.Path) }
 }
 

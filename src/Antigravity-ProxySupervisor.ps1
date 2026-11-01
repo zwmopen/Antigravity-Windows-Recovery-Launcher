@@ -91,6 +91,8 @@ $script:LastApiStatus = 0
 $script:LastOAuthStatus = 0
 $script:LastEgressCountry = ''
 $script:LastModelProbeState = 'not_run'
+$script:AccountAdmissionPassed = $false
+$script:AdmissionStartedAt = Get-Date
 $script:LocalizationMode = ''
 $script:LaunchedAntigravityPid = 0
 $script:LaunchedLanguageServerPid = 0
@@ -257,7 +259,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.8.6'
+            version = '2.9.7-core'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -525,6 +527,40 @@ function Stop-WithMessage {
     # launcher's progress window spinning. The GUI launcher owns user-facing
     # failure reporting; this process must terminate immediately.
     throw $Event
+}
+
+function Invoke-AccountAdmissionGate {
+    if ($script:AccountAdmissionPassed) { return }
+    $helper = Join-Path $ScriptRoot 'antigravity_smart_switch.py'
+    if (-not (Test-Path -LiteralPath $helper)) { Stop-WithMessage -Event 'account_gate_helper_missing' }
+    $statusFile = Join-Path $ProxyRoot 'launch-account-status.json'
+    $started = Get-Date
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Resolve-PythonPath
+    $psi.Arguments = '"' + $helper + '" --preflight-ensure'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    Write-SafeLog -Event 'preflight_account_check_started'
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $p.StandardOutput.ReadToEndAsync()
+    $stderr = $p.StandardError.ReadToEndAsync()
+    if (-not $p.WaitForExit(30000)) {
+        try { $p.Kill() } catch { }
+        Stop-WithMessage -Event 'account_gate_timeout'
+    }
+    if ($p.ExitCode -ne 0) { Stop-WithMessage -Event 'account_gate_rejected' }
+    if (-not (Test-Path -LiteralPath $statusFile)) { Stop-WithMessage -Event 'account_gate_status_missing' }
+    $status = Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $nowEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $age = $nowEpoch - [long]$status.timestamp
+    if ($age -lt 0 -or $age -gt 60 -or $status.action -notin @('reused','switched') -or
+        [double]$status.gemini_5h -le 5 -or [double]$status.gemini_weekly -le 5) {
+        Stop-WithMessage -Event 'account_gate_status_invalid'
+    }
+    $script:AccountAdmissionPassed = $true
+    Write-SafeLog -Event 'preflight_account_check_completed' -Values @{ action=$status.action; exit_code=0; quota_source='account_cache' }
 }
 
 function Test-LocalPort {
@@ -2681,6 +2717,8 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
             if ([string]$lastSavedState.status -eq 'ready' -and -not [string]::IsNullOrWhiteSpace([string]$lastSavedState.active_node_id)) {
                 $status204 = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204' -TimeoutMs 3000
                 if ($status204 -eq 204) {
+                    Invoke-AccountAdmissionGate
+                    $null = Test-RealModelGeneration
                     $fastStartupPassed = $true
                     $failoverState = Get-FailoverState
                     $script:CurrentFailoverState = $failoverState
@@ -2814,13 +2852,16 @@ if (-not $fastStartupPassed) {
             $unprobedCandidates += $probeCandidate
         }
     }
-    $orderedCandidates = @($latencyCandidates | Sort-Object RttMs | ForEach-Object { $_.Candidate }) + @($unprobedCandidates)
+    $orderedCandidates = @($latencyCandidates | Sort-Object @{Expression={if ($_.Candidate.Region -eq 'JP') {0} elseif ($_.Candidate.Region -eq 'US') {1} else {2}}}, RttMs | ForEach-Object { $_.Candidate }) + @($unprobedCandidates)
+    $orderIndex=0
+    $orderedCandidates = @($orderedCandidates | ForEach-Object { [pscustomobject]@{Candidate=$_; Index=($orderIndex++); Rank=$(if ($_.Region -eq 'JP') {0} elseif ($_.Region -eq 'US') {1} else {2})} } | Sort-Object Rank,Index | ForEach-Object {$_.Candidate})
     $candidateTotal = $orderedCandidates.Count
     $script:CandidateTotal = $candidateTotal
 }
 
 if ($null -eq $selectedCandidate) {
-    $maxFormalModelAttempts = 3
+    $maxFormalModelAttempts = 4
+    $formalAttemptsByRegion = @{}
     $formalModelAttempts = 0
     $bestIsolatedCandidate = $null
     $bestIsolatedConfig = $null
@@ -2828,6 +2869,11 @@ if ($null -eq $selectedCandidate) {
     $bestIsolatedCountry = $null
 
     foreach ($candidate in $orderedCandidates) {
+        if (((Get-Date) - $script:AdmissionStartedAt).TotalSeconds -ge 300) { break }
+        $region = [string]$candidate.Region
+        if (-not $formalAttemptsByRegion.ContainsKey($region)) { $formalAttemptsByRegion[$region] = 0 }
+        if ($formalAttemptsByRegion[$region] -ge 2) { continue }
+        if ($formalModelAttempts -ge $maxFormalModelAttempts) { break }
         $candidateIndex++
         $script:CandidateIndex = $candidateIndex
         $sourceId = [string]$candidate.SourceId
@@ -2852,10 +2898,12 @@ if ($null -eq $selectedCandidate) {
                 Test-PrivateConfig
                 Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
                 $null = Test-GoogleConnectivity
+                Invoke-AccountAdmissionGate
                 $null = Start-AntigravityBeforeModelGate
                 Write-SafeLog -Event 'formal_model_gate_started' -Values @{node_id=$candidate.Id; port=$Port}
                 $formalGateStarted = $true
                 $formalModelAttempts++
+                $formalAttemptsByRegion[$region]++
                 $null = Test-RealModelGeneration
                 Write-SafeLog -Event 'formal_model_gate_passed' -Values @{node_id=$candidate.Id; port=$Port}
             } catch {
@@ -2865,21 +2913,6 @@ if ($null -eq $selectedCandidate) {
                 if ($null -ne $previousConfig) {
                     [IO.File]::WriteAllBytes($ConfigPath, $previousConfig)
                     Start-OrReuseMihomo -ExpectedConfigHash (Get-FileSha256 -LiteralPath $ConfigPath)
-                }
-                if ($formalModelAttempts -ge $maxFormalModelAttempts -and $null -ne $bestIsolatedCandidate) {
-                    Write-SafeLog -Event 'formal_model_gate_fallback' -Values @{node_id=$bestIsolatedCandidate.Id; attempts=$formalModelAttempts; reason='max_formal_attempts_reached'}
-                    $candidateConfig = Write-PrivateConfig -ProfileId 'active-clash-runtime' -Candidate $bestIsolatedCandidate
-                    Test-PrivateConfig
-                    Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
-                    $script:CurrentConfigHash = [string]$candidateConfig.ConfigHash
-                    $selectedCandidate = $bestIsolatedCandidate
-                    $configState = $candidateConfig
-                    $connectivity = $bestIsolatedConnectivity
-                    $egressCountry = $bestIsolatedCountry
-                    $script:AttemptedCandidateFailureKinds[[string]$bestIsolatedCandidate.Id] = 'passed'
-                    Mark-NodeSuccess -State $failoverState -Candidate $bestIsolatedCandidate
-                    Write-SafeLog -Event 'candidate_preflight_passed' -Values @{ node_id = [string]$bestIsolatedCandidate.Id; source_id = [string]$bestIsolatedCandidate.SourceId; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason; fallback = $true }
-                    break
                 }
                 throw
             }
@@ -2914,6 +2947,8 @@ if ($null -eq $selectedCandidate) {
     Save-SubscriptionReport -Candidates $candidates -State $failoverState -EligibleCandidates $orderedCandidates
     Stop-WithMessage -Event 'no_healthy_candidate_available'
 }
+if ($script:LastModelProbeState -ne 'passed') { Stop-WithMessage -Event 'formal_model_gate_not_passed' }
+Invoke-AccountAdmissionGate
 Save-FailoverState -State $failoverState -ActiveNodeId ([string]$selectedCandidate.Id)
 $script:LastRunStatus = 'ready'
 $script:RunFinishedAt = Get-Date
@@ -2946,45 +2981,6 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
         Show-ProxyNotification -Event 'recovery_success' -Values @{ region = $egressCountry; node = $nodeName; rtt = $script:LastProbeRttMs }
     }
 } else {
-    # 开机冷启动/拉起前置账号门禁：确保入场账号健康有效且已注入最优凭据
-    if ($RecoveryReason -ne 'cockpit_account_changed') {
-        $SmartSwitchPy = Join-Path $ScriptRoot 'antigravity_smart_switch.py'
-        if (-not (Test-Path -LiteralPath $SmartSwitchPy)) {
-            $canonicalScript = Join-Path $env:LOCALAPPDATA 'Antigravity\launcher\antigravity_smart_switch.py'
-            if (Test-Path -LiteralPath $canonicalScript) { $SmartSwitchPy = $canonicalScript }
-        }
-        if (Test-Path -LiteralPath $SmartSwitchPy) {
-            $pyExe = Resolve-PythonPath
-            Write-SafeLog -Event 'preflight_account_check_started'
-            try {
-                $statusFile = Join-Path $RuntimeDirectory "launch-account-status.json"
-                $psi = New-Object System.Diagnostics.ProcessStartInfo
-                $psi.FileName = $pyExe
-                $psi.Arguments = "`"$SmartSwitchPy`" --preflight-ensure"
-                $psi.UseShellExecute = $false
-                $psi.CreateNoWindow = $true
-                $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-                $p = [System.Diagnostics.Process]::Start($psi)
-                $p.WaitForExit(8000)
-                $accValues = @{ exit_code = $p.ExitCode }
-                if (Test-Path -LiteralPath $statusFile) {
-                    try {
-                        $accJson = Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json
-                        if ($accJson -and $accJson.email) {
-                            $accValues['account_email'] = [string]$accJson.email
-                            $accValues['account_5h'] = [string]$accJson.gemini_5h
-                            $accValues['account_weekly'] = [string]$accJson.gemini_weekly
-                            $accValues['account_action'] = [string]$accJson.action
-                        }
-                    } catch { }
-                }
-                Write-SafeLog -Event 'preflight_account_check_completed' -Values $accValues
-            } catch {
-                Write-SafeLog -Event 'preflight_account_check_warning' -Values @{ error = $_.Exception.Message }
-            }
-        }
-    }
-
     Stop-ExistingAntigravity
 
     $previousEnvironment = @{}
@@ -3077,7 +3073,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.8.6'
+    version = '2.9.7-core'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId
@@ -3099,7 +3095,7 @@ $state = [ordered]@{
     generativelanguage_status = $connectivity.ApiStatus
     oauth_status = $connectivity.OAuthStatus
     egress_country = $egressCountry
-    real_model_probe = 'passed'
+    real_model_probe = $script:LastModelProbeState
     localization_enabled = $localizationEnabled
     localization_mode = $localizationMode
     antigravity_pid = $antigravityPid
