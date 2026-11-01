@@ -1191,7 +1191,15 @@ class AntigravityModernStudio(ctk.CTk):
 
     def refresh_data(self):
         def _fetch():
-            acc_list, cur_id = get_all_accounts_and_quotas()
+            ret = get_all_accounts_and_quotas()
+            if isinstance(ret, tuple) and len(ret) == 2:
+                if isinstance(ret[0], list):
+                    acc_list, cur_id = ret[0], ret[1]
+                else:
+                    cur_id, acc_list = ret[0], ret[1]
+            else:
+                acc_list, cur_id = [], None
+
             cdp = get_devtools_active_port()
             nodes = get_network_nodes_data()
             inc = get_recent_incidents(15)
