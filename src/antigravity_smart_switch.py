@@ -73,6 +73,7 @@ QUOTA_CACHE_DIR = os.path.join(COCKPIT_DIR, "cache", "quota_api_v1_desktop", "au
 DAEMON_LOG_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "smart-quota-watcher.log")
 PENDING_SWITCH_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "pending-switch.json")
 PENDING_AUTO_RESUME_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "pending-auto-resume.json")
+RECENTLY_RESUMED_SESSIONS_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "recently-resumed-sessions.json")
 SUBSCRIPTION_REPORT_FILE = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "subscription-report.json")
 DEVTOOLS_PORT_FILE = os.path.join(ROAMING_APPDATA, "Antigravity", "DevToolsActivePort")
 LANGUAGE_SERVER_LOG = os.path.join(ROAMING_APPDATA, "Antigravity", "logs", "language_server.log")
@@ -494,6 +495,31 @@ def write_pending_auto_resume(max_windows=3, text="继续", target_href=None, ta
             }, f, indent=2)
         hint = f" (优先锚定会话: '{target_title or target_href}')" if (target_title or target_href) else ""
         logger.info(f"已写入大任务断点自动续接凭据{hint} [待续接任务数: {len(running_tasks)}] (发送 '{text}')")
+        # 【防重复续接】将刚续接的会话 ID 写入"最近已续接"黑名单，TTL=300s
+        # 防止下次切号时侧边栏 spinner 仍在转（AI 正在处理"继续"）被误判为新的 running task
+        try:
+            _resumed_cids = {}
+            if os.path.exists(RECENTLY_RESUMED_SESSIONS_FILE):
+                try:
+                    with open(RECENTLY_RESUMED_SESSIONS_FILE, "r", encoding="utf-8") as _rf:
+                        _resumed_cids = json.load(_rf)
+                except Exception:
+                    _resumed_cids = {}
+            _now_ts = time.time()
+            # 清理超过5分钟的过期条目
+            _resumed_cids = {k: v for k, v in _resumed_cids.items() if _now_ts - v < 300}
+            # 注册本次续接的所有会话 ID
+            for _rt in running_tasks:
+                _href = _rt.get("href", "")
+                _m = re.search(r'/c/([a-f0-9\-]{36})', _href)
+                if _m:
+                    _resumed_cids[_m.group(1)] = _now_ts
+            os.makedirs(os.path.dirname(RECENTLY_RESUMED_SESSIONS_FILE), exist_ok=True)
+            with open(RECENTLY_RESUMED_SESSIONS_FILE, "w", encoding="utf-8") as _wf:
+                json.dump(_resumed_cids, _wf)
+            logger.info(f"🔒 [防重续接] 已记录 {len(_resumed_cids)} 个最近续接会话到黑名单 (TTL=300s，防侧边栏 spinner 假阳性)")
+        except Exception as _e2:
+            logger.debug(f"写入最近续接会话黑名单异常: {_e2}")
     except Exception as e:
         logger.warning(f"写入自动续接事务文件异常: {e}")
 
@@ -744,6 +770,25 @@ def snapshot_active_and_running_tasks():
                 "title": rb.get("title", f"断点任务-{cid[:8]}"),
                 "is_current": False
             })
+        # 【防重续接过滤】排除 5 分钟内已续接过的会话，避免侧边栏 spinner 假阳性触发重复续接
+        _recently_resumed = {}
+        try:
+            if os.path.exists(RECENTLY_RESUMED_SESSIONS_FILE):
+                with open(RECENTLY_RESUMED_SESSIONS_FILE, "r", encoding="utf-8") as _rrf:
+                    _recently_resumed = json.load(_rrf)
+                _now2 = time.time()
+                _recently_resumed = {k: v for k, v in _recently_resumed.items() if _now2 - v < 300}
+        except Exception:
+            _recently_resumed = {}
+        if _recently_resumed:
+            _before = len(r_tasks)
+            r_tasks = [t for t in r_tasks if not any(
+                re.search(r'/c/([a-f0-9\-]{36})', t.get("href", "")) and
+                re.search(r'/c/([a-f0-9\-]{36})', t.get("href", "")).group(1) in _recently_resumed
+                for _ in [1]
+            )]
+            if len(r_tasks) < _before:
+                logger.info(f"🛡️ [防重续接] 已从 running_tasks 中过滤 {_before - len(r_tasks)} 个最近已续接的侧边栏会话（spinner 假阳性）")
         res["running_tasks"] = r_tasks
         res["has_running_tasks"] = bool(r_tasks)
         if r_tasks:
