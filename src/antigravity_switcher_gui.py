@@ -476,10 +476,10 @@ class AntigravityModernStudio(ctk.CTk):
         self.title(SINGLE_INSTANCE_WINDOW_TITLE)
         
         # 紧凑精致视口：800x500，拒绝过大分散
-        window_w = 800
-        window_h = 500
+        window_w = 860
+        window_h = 460
         self.geometry(f"{window_w}x{window_h}")
-        self.minsize(760, 470)
+        self.minsize(800, 430)
 
         # 屏幕绝对居中
         try:
@@ -697,8 +697,8 @@ class AntigravityModernStudio(ctk.CTk):
             background=t["tree_bg"],
             foreground=t["tree_fg"],
             fieldbackground=t["tree_bg"],
-            rowheight=28,
-            font=(FONT_FAMILY, 9),
+            rowheight=20,
+            font=(FONT_FAMILY, 8),
             borderwidth=0,
             relief="flat"
         )
@@ -711,10 +711,10 @@ class AntigravityModernStudio(ctk.CTk):
             "Treeview.Heading",
             background=t["tree_heading_bg"],
             foreground=t["tree_heading_fg"],
-            font=(FONT_FAMILY, 9, "bold"),
+            font=(FONT_FAMILY, 8, "bold"),
             borderwidth=0,
             relief="flat",
-            padding=(6, 4)
+            padding=(4, 2)
         )
         self.style.map(
             "Treeview.Heading",
@@ -736,16 +736,16 @@ class AntigravityModernStudio(ctk.CTk):
     def _build_ui(self):
         # 1. 顶部区域：一体化紧凑卡片 (解决“过大分散”的核心关键)
         self.header_frame = ctk.CTkFrame(self, corner_radius=14, border_width=1)
-        self.header_frame.pack(fill="x", padx=16, pady=(10, 4))
+        self.header_frame.pack(fill="x", padx=12, pady=(6, 2))
 
         # 头部第 1 行：标题 + 核心操作按钮
         top_row = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        top_row.pack(fill="x", padx=14, pady=(8, 4))
+        top_row.pack(fill="x", padx=10, pady=(5, 2))
 
         self.lbl_title = ctk.CTkLabel(
             top_row,
             text="⚡ Antigravity 管理面板",
-            font=(FONT_FAMILY, 13, "bold")
+            font=(FONT_FAMILY, 11, "bold")
         )
         self.lbl_title.pack(side="left")
 
@@ -756,21 +756,21 @@ class AntigravityModernStudio(ctk.CTk):
             top_btn_bar,
             text="▶ 进入主界面 (5s)",
             command=self.on_open_main_clicked,
-            corner_radius=15,
-            font=(FONT_FAMILY, 9, "bold"),
-            height=30,
-            width=125
+            corner_radius=12,
+            font=(FONT_FAMILY, 8, "bold"),
+            height=24,
+            width=112
         )
         self.btn_open_main.pack(side="left", padx=3)
 
         self.btn_restart_repair = ctk.CTkButton(
             top_btn_bar,
-            text="⚡ 智能自愈重启",
+            text="⚡ 自愈重启",
             command=self.on_restart_and_reload_account_clicked,
-            corner_radius=15,
-            font=(FONT_FAMILY, 9, "bold"),
-            height=30,
-            width=96
+            corner_radius=12,
+            font=(FONT_FAMILY, 8, "bold"),
+            height=24,
+            width=76
         )
         self.btn_restart_repair.pack(side="left", padx=3)
 
@@ -778,17 +778,17 @@ class AntigravityModernStudio(ctk.CTk):
             top_btn_bar,
             text="🔄",
             command=self.refresh_data,
-            corner_radius=15,
-            font=(FONT_FAMILY, 9, "bold"),
-            height=30,
-            width=32,
+            corner_radius=12,
+            font=(FONT_FAMILY, 8, "bold"),
+            height=24,
+            width=26,
             border_width=1
         )
         self.btn_refresh.pack(side="left", padx=3)
 
         # 头部第 2 行：专线守护开关 + 倒计时提示 + 状态胶囊横条 (内嵌于卡片内，告别分散悬浮)
         sub_row = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        sub_row.pack(fill="x", padx=14, pady=(0, 8))
+        sub_row.pack(fill="x", padx=10, pady=(0, 5))
 
         sub_left = ctk.CTkFrame(sub_row, fg_color="transparent")
         sub_left.pack(side="left")
@@ -796,10 +796,10 @@ class AntigravityModernStudio(ctk.CTk):
         self.switch_guard = ctk.CTkSwitch(
             sub_left,
             text="专线守护",
-            font=(FONT_FAMILY, 9, "bold"),
+            font=(FONT_FAMILY, 8),
             command=self._toggle_guard_switch,
-            width=32,
-            height=16
+            width=28,
+            height=14
         )
         if self.guard_switch_enabled:
             self.switch_guard.select()
@@ -810,7 +810,7 @@ class AntigravityModernStudio(ctk.CTk):
         self.lbl_countdown_hint = ctk.CTkLabel(
             sub_left,
             text="⏳ 5秒未操作自动启动 · 点击常驻",
-            font=(FONT_FAMILY, 9)
+            font=(FONT_FAMILY, 8)
         )
         self.lbl_countdown_hint.pack(side="left", padx=(10, 0))
 
@@ -818,12 +818,12 @@ class AntigravityModernStudio(ctk.CTk):
         self.lbl_header_status = ctk.CTkLabel(
             sub_row,
             text="账号: 加载中... | 专线: 检测中...",
-            font=(FONT_FAMILY, 9)
+            font=(FONT_FAMILY, 8)
         )
         self.lbl_header_status.pack(side="right")
 
         # 2. In-App 静默反馈横幅
-        self.toast_banner = ctk.CTkFrame(self, corner_radius=10, height=28)
+        self.toast_banner = ctk.CTkFrame(self, corner_radius=8, height=22)
         self.lbl_toast = ctk.CTkLabel(self.toast_banner, text="", font=(FONT_FAMILY, 9, "bold"))
         self.lbl_toast.pack(side="left", padx=10, pady=3)
         btn_close_toast = ctk.CTkButton(
@@ -845,7 +845,7 @@ class AntigravityModernStudio(ctk.CTk):
             corner_radius=14,
             border_width=1
         )
-        self.tabview.pack(fill="both", expand=True, padx=16, pady=(2, 4))
+        self.tabview.pack(fill="both", expand=True, padx=12, pady=(1, 2))
 
         self.tab_accounts = self.tabview.add("账号")
         self.tab_network = self.tabview.add("网络")
@@ -857,19 +857,19 @@ class AntigravityModernStudio(ctk.CTk):
 
         # 4. 底部功能栏 (极简高度，不占地方)
         self.bottom_bar = ctk.CTkFrame(self, fg_color="transparent")
-        self.bottom_bar.pack(fill="x", padx=16, pady=(1, 6))
+        self.bottom_bar.pack(fill="x", padx=12, pady=(0, 4))
 
         self.lbl_tips = ctk.CTkLabel(
             self.bottom_bar,
             text="💡 双击账号即秒级无感切换 · 智能排序最优专线与账号置顶",
-            font=(FONT_FAMILY, 9)
+            font=(FONT_FAMILY, 8)
         )
         self.lbl_tips.pack(side="left")
 
         theme_box = ctk.CTkFrame(self.bottom_bar, fg_color="transparent")
         theme_box.pack(side="right")
 
-        ctk.CTkLabel(theme_box, text="风格:", font=(FONT_FAMILY, 9)).pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(theme_box, text="风格:", font=(FONT_FAMILY, 8)).pack(side="left", padx=(0, 4))
 
         theme_map = {"neo": "🎨 拟态浅色", "glass": "💧 液态玻璃", "midnight": "🌙 拟态深色"}
         rev_theme_map = {v: k for k, v in theme_map.items()}
@@ -883,8 +883,8 @@ class AntigravityModernStudio(ctk.CTk):
             values=["🎨 拟态浅色", "💧 液态玻璃", "🌙 拟态深色"],
             command=_on_theme_select,
             corner_radius=12,
-            font=(FONT_FAMILY, 9),
-            height=24
+            font=(FONT_FAMILY, 8),
+            height=20
         )
         self.seg_theme.set(theme_map.get(self.theme_id, "🎨 拟态浅色"))
         self.seg_theme.pack(side="left")
@@ -892,7 +892,7 @@ class AntigravityModernStudio(ctk.CTk):
     def _build_accounts_tab(self):
         # 账号表格容器 (紧凑且精致的圆角卡片)
         self.tree_acc_frame = ctk.CTkFrame(self.tab_accounts, corner_radius=12, border_width=1)
-        self.tree_acc_frame.pack(fill="both", expand=True, padx=4, pady=(4, 4))
+        self.tree_acc_frame.pack(fill="both", expand=True, padx=4, pady=(3, 2))
 
         columns = ("status", "email", "gemini_5h", "reset_5h", "gemini_weekly", "reset_weekly", "score")
         self.tree = ttk.Treeview(
@@ -904,13 +904,13 @@ class AntigravityModernStudio(ctk.CTk):
         )
 
         col_defs = [
-            ("status", "状态", 65, "center"),
-            ("email", "账号", 210, "w"),
-            ("gemini_5h", "5h配额", 75, "center"),
-            ("reset_5h", "5h回血", 125, "center"),
-            ("gemini_weekly", "周额度", 75, "center"),
-            ("reset_weekly", "周重置", 125, "center"),
-            ("score", "评分", 65, "center"),
+            ("status", "状态", 52, "center"),
+            ("email", "账号", 220, "w"),
+            ("gemini_5h", "5h", 58, "center"),
+            ("reset_5h", "回血", 100, "center"),
+            ("gemini_weekly", "周额", 58, "center"),
+            ("reset_weekly", "周重置", 100, "center"),
+            ("score", "分", 46, "center"),
         ]
 
         for col_id, col_name, col_w, col_anchor in col_defs:
@@ -920,20 +920,20 @@ class AntigravityModernStudio(ctk.CTk):
         scrollbar = ttk.Scrollbar(self.tree_acc_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
 
-        self.tree.pack(side="left", fill="both", expand=True, padx=6, pady=6)
-        scrollbar.pack(side="right", fill="y", pady=6, padx=(0, 4))
+        self.tree.pack(side="left", fill="both", expand=True, padx=3, pady=3)
+        scrollbar.pack(side="right", fill="y", pady=3, padx=(0, 3))
 
         self.tree.bind("<Double-1>", self.on_double_click)
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
         # 账号底部条：横向融合【左侧选中信息】与【右侧动作按键】(杜绝层层垂直堆叠)
         acc_bottom = ctk.CTkFrame(self.tab_accounts, fg_color="transparent")
-        acc_bottom.pack(fill="x", padx=4, pady=(2, 4))
+        acc_bottom.pack(fill="x", padx=4, pady=(1, 2))
 
         self.lbl_acc_detail = ctk.CTkLabel(
             acc_bottom,
             text="📌 点击账号查看说明 · 双击账号极速秒切",
-            font=(FONT_FAMILY, 9),
+            font=(FONT_FAMILY, 8),
             anchor="w"
         )
         self.lbl_acc_detail.pack(side="left", fill="x", expand=True, padx=(2, 8))
@@ -945,10 +945,10 @@ class AntigravityModernStudio(ctk.CTk):
             acc_tools,
             text="⚡ 智能盲切",
             command=self.on_auto_switch_clicked,
-            corner_radius=14,
-            font=(FONT_FAMILY, 9, "bold"),
-            height=28,
-            width=86
+            corner_radius=10,
+            font=(FONT_FAMILY, 8, "bold"),
+            height=22,
+            width=76
         )
         self.btn_smart.pack(side="left", padx=2)
 
@@ -956,11 +956,11 @@ class AntigravityModernStudio(ctk.CTk):
             acc_tools,
             text="🔄 切换账号",
             command=self.on_switch_clicked,
-            corner_radius=14,
-            font=(FONT_FAMILY, 9, "bold"),
+            corner_radius=10,
+            font=(FONT_FAMILY, 8, "bold"),
             border_width=1,
-            height=28,
-            width=86
+            height=22,
+            width=76
         )
         self.btn_switch.pack(side="left", padx=2)
 
@@ -968,11 +968,11 @@ class AntigravityModernStudio(ctk.CTk):
             acc_tools,
             text="🔓 解除隔离",
             command=self.on_unblock_clicked,
-            corner_radius=14,
-            font=(FONT_FAMILY, 9, "bold"),
+            corner_radius=10,
+            font=(FONT_FAMILY, 8, "bold"),
             border_width=1,
-            height=28,
-            width=86
+            height=22,
+            width=76
         )
         self.btn_unblock.pack(side="left", padx=2)
 
@@ -980,11 +980,11 @@ class AntigravityModernStudio(ctk.CTk):
             acc_tools,
             text="💬 恢复会话",
             command=self.on_resume_clicked,
-            corner_radius=14,
-            font=(FONT_FAMILY, 9, "bold"),
+            corner_radius=10,
+            font=(FONT_FAMILY, 8, "bold"),
             border_width=1,
-            height=28,
-            width=86
+            height=22,
+            width=76
         )
         self.btn_resume.pack(side="left", padx=2)
 
@@ -1018,7 +1018,7 @@ class AntigravityModernStudio(ctk.CTk):
         self.net_tree.configure(yscrollcommand=net_scrollbar.set)
 
         self.net_tree.pack(side="left", fill="both", expand=True, padx=6, pady=6)
-        net_scrollbar.pack(side="right", fill="y", pady=6, padx=(0, 4))
+        net_scrollbar.pack(side="right", fill="y", pady=3, padx=(0, 3))
 
         # 网络底部条：横向融合【左侧在用状态】与【右侧节点操作】
         net_bottom = ctk.CTkFrame(self.tab_network, fg_color="transparent")
@@ -1027,7 +1027,7 @@ class AntigravityModernStudio(ctk.CTk):
         self.lbl_net_active = ctk.CTkLabel(
             net_bottom,
             text="🟢 当前专线: 检测中...",
-            font=(FONT_FAMILY, 9),
+            font=(FONT_FAMILY, 8),
             anchor="w"
         )
         self.lbl_net_active.pack(side="left", fill="x", expand=True, padx=(2, 8))
@@ -1039,10 +1039,10 @@ class AntigravityModernStudio(ctk.CTk):
             net_tools,
             text="🌐 切换节点",
             command=self.on_switch_node_clicked,
-            corner_radius=14,
-            font=(FONT_FAMILY, 9, "bold"),
-            height=28,
-            width=86
+            corner_radius=10,
+            font=(FONT_FAMILY, 8, "bold"),
+            height=22,
+            width=76
         )
         self.btn_switch_node.pack(side="left", padx=2)
 
@@ -1050,11 +1050,11 @@ class AntigravityModernStudio(ctk.CTk):
             net_tools,
             text="⚡ 自愈测速",
             command=self.on_heal_network_clicked,
-            corner_radius=14,
-            font=(FONT_FAMILY, 9, "bold"),
+            corner_radius=10,
+            font=(FONT_FAMILY, 8, "bold"),
             border_width=1,
-            height=28,
-            width=86
+            height=22,
+            width=76
         )
         self.btn_heal_net.pack(side="left", padx=2)
 
@@ -1062,11 +1062,11 @@ class AntigravityModernStudio(ctk.CTk):
             net_tools,
             text="📁 配置文件",
             command=self.on_open_clash_dir_clicked,
-            corner_radius=14,
-            font=(FONT_FAMILY, 9, "bold"),
+            corner_radius=10,
+            font=(FONT_FAMILY, 8, "bold"),
             border_width=1,
-            height=28,
-            width=86
+            height=22,
+            width=76
         )
         self.btn_open_clash.pack(side="left", padx=2)
 
@@ -1076,17 +1076,17 @@ class AntigravityModernStudio(ctk.CTk):
 
         self.kpi_acc = ctk.CTkFrame(kpi_frame, corner_radius=10, border_width=1)
         self.kpi_acc.pack(side="left", fill="x", expand=True, padx=(0, 3))
-        self.lbl_kpi_acc = ctk.CTkLabel(self.kpi_acc, text="【账号】加载中...", font=(FONT_FAMILY, 9), justify="left")
+        self.lbl_kpi_acc = ctk.CTkLabel(self.kpi_acc, text="【账号】加载中...", font=(FONT_FAMILY, 8), justify="left")
         self.lbl_kpi_acc.pack(padx=8, pady=4)
 
         self.kpi_net = ctk.CTkFrame(kpi_frame, corner_radius=10, border_width=1)
         self.kpi_net.pack(side="left", fill="x", expand=True, padx=3)
-        self.lbl_kpi_net = ctk.CTkLabel(self.kpi_net, text="【专线】加载中...", font=(FONT_FAMILY, 9), justify="left")
+        self.lbl_kpi_net = ctk.CTkLabel(self.kpi_net, text="【专线】加载中...", font=(FONT_FAMILY, 8), justify="left")
         self.lbl_kpi_net.pack(padx=8, pady=4)
 
         self.kpi_sys = ctk.CTkFrame(kpi_frame, corner_radius=10, border_width=1)
         self.kpi_sys.pack(side="left", fill="x", expand=True, padx=(3, 0))
-        self.lbl_kpi_sys = ctk.CTkLabel(self.kpi_sys, text="【自愈】加载中...", font=(FONT_FAMILY, 9), justify="left")
+        self.lbl_kpi_sys = ctk.CTkLabel(self.kpi_sys, text="【自愈】加载中...", font=(FONT_FAMILY, 8), justify="left")
         self.lbl_kpi_sys.pack(padx=8, pady=4)
 
         self.tree_inc_frame = ctk.CTkFrame(self.tab_logs, corner_radius=10, border_width=1, height=85)
@@ -1127,7 +1127,7 @@ class AntigravityModernStudio(ctk.CTk):
             state="readonly",
             width=170,
             corner_radius=10,
-            font=(FONT_FAMILY, 9),
+            font=(FONT_FAMILY, 8),
             height=26,
             command=lambda e: self.load_selected_log()
         )
@@ -1157,12 +1157,12 @@ class AntigravityModernStudio(ctk.CTk):
         self.btn_open_log_dir.pack(side="left", padx=2)
 
         self.log_filter_var = tk.StringVar()
-        ctk.CTkLabel(log_ctrl, text="🔍 过滤:", font=(FONT_FAMILY, 9)).pack(side="left", padx=(8, 4))
+        ctk.CTkLabel(log_ctrl, text="🔍 过滤:", font=(FONT_FAMILY, 8)).pack(side="left", padx=(8, 4))
         self.ent_filter = ctk.CTkEntry(
             log_ctrl,
             textvariable=self.log_filter_var,
             placeholder_text="搜索日志...",
-            font=(FONT_FAMILY, 9),
+            font=(FONT_FAMILY, 8),
             corner_radius=10,
             height=26
         )
