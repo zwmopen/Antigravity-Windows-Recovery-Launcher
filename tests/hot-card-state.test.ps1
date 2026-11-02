@@ -8,10 +8,12 @@ $flags = [Reflection.BindingFlags]'NonPublic,Public,Instance,Static'
 $reader = $type.GetMethod('JsonValue', $flags)
 if ($reader.Invoke($null, @('{"email":"a@example.com","node":"JP 日本"}', 'email')) -ne 'a@example.com') { throw 'json_read_failed' }
 if ($reader.Invoke($null, @('{bad', 'email')) -ne '') { throw 'malformed_state_not_safe' }
+$programType = $assembly.GetType('AntigravityLauncher.Program')
+$priorDpi = $programType.GetMethod('EnterSharpCardDpiContext',$flags).Invoke($null,@())
 $form = [Activator]::CreateInstance($type, $true)
 try {
     $type.GetMethod('StopTimer', $flags).Invoke($form, @()) | Out-Null
-    if ($form.ClientSize.Width -ne 560 -or $form.ClientSize.Height -ne 224) { throw 'card_layout_failed' }
+    if ([Math]::Abs(($form.ClientSize.Width / $form.ClientSize.Height) - (560.0/256)) -gt 0.02) { throw 'card_layout_failed' }
     foreach ($name in @('accountText','selectedText','networkText')) {
         if ([string]::IsNullOrWhiteSpace($type.GetField($name,$flags).GetValue($form))) { throw ('missing_state:' + $name) }
     }
@@ -40,4 +42,4 @@ try {
     if (-not $activate.GetType().GetProperty('IsPrimary',$flags).GetValue($activate,$null) -or $repair.GetType().GetProperty('IsPrimary',$flags).GetValue($repair,$null)) { throw 'primary_secondary_hierarchy_failed' }
     if ($type.GetField('networkText',$flags).GetValue($form).Contains('CURRENT-VERIFIED')) { throw 'internal_node_placeholder_visible' }
     Write-Output 'PASS: compiled card parses JSON safely, renders four status lines, and does not claim live editor identity'
-} finally { $form.Dispose() }
+} finally { $form.Dispose(); if ($priorDpi -ne [IntPtr]::Zero) { $null=$programType.GetMethod('SetThreadDpiAwarenessContext',$flags).Invoke($null,@($priorDpi)) } }

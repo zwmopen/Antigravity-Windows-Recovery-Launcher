@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.9.0")]
-[assembly: AssemblyFileVersion("2.9.9.0")]
-[assembly: AssemblyInformationalVersion("2.9.9")]
+[assembly: AssemblyVersion("2.9.10.0")]
+[assembly: AssemblyFileVersion("2.9.10.0")]
+[assembly: AssemblyInformationalVersion("2.9.10")]
 
 namespace AntigravityLauncher
 {
@@ -37,6 +37,12 @@ namespace AntigravityLauncher
         internal const string SupervisorMutexName = @"Local\AntigravitySupervisorRun";
 
         private static Mutex singleInstanceMutex;
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+        private static IntPtr EnterSharpCardDpiContext() {
+            try { return SetThreadDpiAwarenessContext(new IntPtr(-2)); } catch { return IntPtr.Zero; }
+        }
+
 
         internal static void TraceLog(string msg)
         {
@@ -124,8 +130,11 @@ namespace AntigravityLauncher
             if (antigravityRunning && !forceLaunch)
             {
                 TraceLog("Displaying AntigravityHotLaunchChoiceForm...");
+                IntPtr previousDpiContext = EnterSharpCardDpiContext();
                 var choiceForm = new AntigravityHotLaunchChoiceForm();
-                Application.Run(choiceForm);
+                if (HasArgument(args, "--inspect-card")) choiceForm.PauseCountdown();
+                try { Application.Run(choiceForm); }
+                finally { if (previousDpiContext != IntPtr.Zero) { try { SetThreadDpiAwarenessContext(previousDpiContext); } catch { } } }
 
                 if (choiceForm.Action == HotLaunchAction.Activate)
                 {
@@ -919,11 +928,11 @@ namespace AntigravityLauncher
                     e.Graphics.DrawPath(pen, path);
                 }
 
-                using (var font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold))
+                using (var font = new Font("微软雅黑", 10F, FontStyle.Bold, GraphicsUnit.Point, 134))
                 using (var brush = new SolidBrush(textColor))
                 using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                 {
-                    e.Graphics.DrawString(buttonText, font, brush, r, sf);
+                    TextRenderer.DrawText(e.Graphics, buttonText, font, r, textColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
                 }
             }
         }
@@ -963,6 +972,11 @@ namespace AntigravityLauncher
     {
         internal HotLaunchAction Action { get; private set; }
         private int remainingSeconds = 3;
+        private float uiScale = 1F;
+        private Rectangle Px(int x, int y, int width, int height) {
+            return new Rectangle((int)Math.Round(x * uiScale), (int)Math.Round(y * uiScale), (int)Math.Round(width * uiScale), (int)Math.Round(height * uiScale));
+        }
+
         private System.Windows.Forms.Timer countdownTimer;
         private HotLaunchButton btnActivate;
         private HotLaunchButton btnRepair;
@@ -997,7 +1011,9 @@ namespace AntigravityLauncher
             Text = "Antigravity 启动助手";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(560, 224);
+            AutoScaleMode = AutoScaleMode.None;
+            using (Graphics dpiGraphics = CreateGraphics()) { uiScale = Math.Max(1F, dpiGraphics.DpiX / 96F); }
+            ClientSize = new Size(560, 256);
             BackColor = Color.FromArgb(248, 250, 252);
             ShowInTaskbar = true;
             TopMost = false;
@@ -1080,7 +1096,7 @@ namespace AntigravityLauncher
             btnActivate = new HotLaunchButton("进入反重力 (3s)")
             {
                 IsPrimary = true,
-                Location = new Point(20, 158),
+                Location = new Point(20, 194),
                 Size = new Size(252, 46)
             };
             btnActivate.Click += delegate
@@ -1092,7 +1108,7 @@ namespace AntigravityLauncher
 
             btnRepair = new HotLaunchButton("检查并切换线路")
             {
-                Location = new Point(288, 158),
+                Location = new Point(288, 194),
                 Size = new Size(252, 46)
             };
             btnRepair.Click += delegate
@@ -1158,7 +1174,13 @@ namespace AntigravityLauncher
                     btnActivate.ButtonText = "进入反重力 (" + remainingSeconds + "s)";
                 }
             };
+            if (uiScale != 1F) Scale(new SizeF(uiScale, uiScale));
             countdownTimer.Start();
+        }
+
+        internal void PauseCountdown() {
+            StopTimer();
+            btnActivate.ButtonText = "进入反重力";
         }
 
         private void StopTimer()
@@ -1236,22 +1258,22 @@ namespace AntigravityLauncher
             return path;
         }
 
-        private static void DrawPillBadge(Graphics g, string text, int x, int y, Color bg, Color border, Color fg)
-        {
-            using (var font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold))
-            {
-                var size = g.MeasureString(text, font);
-                var rect = new Rectangle(x, y, (int)size.Width + 14, 20);
-                using (var path = RoundedRectangle(rect, 10))
-                using (var brush = new SolidBrush(bg))
-                using (var pen = new Pen(border, 1F))
-                using (var fgBrush = new SolidBrush(fg))
-                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                {
-                    g.FillPath(brush, path);
-                    g.DrawPath(pen, path);
-                    g.DrawString(text, font, fgBrush, rect, sf);
-                }
+        private static void DrawCardText(Graphics g, string text, Font font, Rectangle bounds, Color color, bool centered) {
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            using (var brush = new SolidBrush(color))
+            using (var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap, LineAlignment = StringAlignment.Center, Alignment = centered ? StringAlignment.Center : StringAlignment.Near })
+                g.DrawString(text, font, brush, bounds, format);
+        }
+
+        private int DrawStatusBadge(Graphics g, string text, int x, Color background, Color border, Color foreground) {
+            using (var font = new Font("微软雅黑", 9F, FontStyle.Regular, GraphicsUnit.Point, 134)) {
+                Size textSize = TextRenderer.MeasureText(g, text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+                var rect = new Rectangle(x, Px(0, 20, 0, 0).Y, textSize.Width + Px(0, 0, 20, 0).Width, Px(0, 0, 0, 24).Height);
+                using (var path = RoundedRectangle(rect, Math.Max(4, (int)(10 * uiScale))))
+                using (var fill = new SolidBrush(background))
+                using (var pen = new Pen(border)) { g.FillPath(fill, path); g.DrawPath(pen, path); }
+                DrawCardText(g, text, font, rect, foreground, true);
+                return rect.Right + (int)(8 * uiScale);
             }
         }
 
@@ -1259,54 +1281,27 @@ namespace AntigravityLauncher
         {
             base.OnPaint(e);
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
-
-            using (var path = RoundedRectangle(bounds, 16))
-            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(252, 254, 255), Color.FromArgb(238, 246, 254), 90F))
-            using (var border = new Pen(Color.FromArgb(200, 220, 240), 1.2F))
-            {
-                e.Graphics.FillPath(fill, path);
-                e.Graphics.DrawPath(border, path);
+            using (var path = RoundedRectangle(bounds, (int)(16 * uiScale)))
+            using (var fill = new SolidBrush(Color.FromArgb(250, 252, 255)))
+            using (var border = new Pen(Color.FromArgb(211, 221, 234))) {
+                e.Graphics.FillPath(fill, path); e.Graphics.DrawPath(border, path);
             }
-
-            using (var highlight = new Pen(Color.FromArgb(180, 255, 255, 255), 1.5F))
-            {
-                e.Graphics.DrawLine(highlight, 20, 2, Width - 20, 2);
-            }
-
-            if (appIcon != null)
-            {
+            if (appIcon != null) {
                 e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                e.Graphics.DrawImage(appIcon, new Rectangle(20, 16, 36, 36));
+                e.Graphics.DrawImage(appIcon, Px(20, 18, 34, 34));
             }
-
-            using (var fontTitle = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold))
-            using (var titleBrush = new SolidBrush(Color.FromArgb(15, 35, 60)))
-            {
-                e.Graphics.DrawString("Antigravity", fontTitle, titleBrush, new PointF(64, 15));
-            }
-
-            int currentBadgeX = 174;
-            using (var fontBadge = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold))
-            {
-                var size1 = e.Graphics.MeasureString(egressBadgeText, fontBadge);
-                DrawPillBadge(e.Graphics, egressBadgeText, currentBadgeX, 16, networkVerified ? Color.FromArgb(232, 247, 238) : Color.FromArgb(255, 247, 225), networkVerified ? Color.FromArgb(179, 221, 193) : Color.FromArgb(241, 211, 151), networkVerified ? Color.FromArgb(34, 115, 67) : Color.FromArgb(157, 99, 20));
-                currentBadgeX += (int)size1.Width + 14 + 8;
-                DrawPillBadge(e.Graphics, statusBadgeText, currentBadgeX, 16, Color.FromArgb(241, 245, 249), Color.FromArgb(219, 225, 233), Color.FromArgb(71, 85, 105));
-            }
-
-            using (var body = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold))
-            using (var small = new Font("Microsoft YaHei UI", 8.5F))
-            using (var normalBrush = new SolidBrush(Color.FromArgb(30, 41, 59)))
-            using (var muted = new SolidBrush(Color.FromArgb(100, 116, 139)))
-            using (var warning = new SolidBrush(Color.FromArgb(166, 101, 21)))
-            using (var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            {
-                e.Graphics.DrawString(accountText, body, normalBrush, new RectangleF(20, 62, Width - 40, 25), format);
-                e.Graphics.DrawString(selectedText, small, accountMismatch ? warning : muted, new RectangleF(20, 89, Width - 40, 22), format);
-                e.Graphics.DrawString(networkText, body, normalBrush, new RectangleF(20, 115, Width - 40, 25), format);
-                e.Graphics.DrawString(subtitleText, small, muted, new RectangleF(20, 43, Width - 40, 19), format);
+            using (var title = new Font("微软雅黑", 12F, FontStyle.Bold, GraphicsUnit.Point, 134))
+                DrawCardText(e.Graphics, "Antigravity", title, Px(64, 18, 110, 32), Color.FromArgb(20, 34, 54), false);
+            int badgeX = Px(178, 0, 0, 0).X;
+            badgeX = DrawStatusBadge(e.Graphics, egressBadgeText, badgeX, networkVerified ? Color.FromArgb(232, 247, 238) : Color.FromArgb(255, 247, 225), networkVerified ? Color.FromArgb(179, 221, 193) : Color.FromArgb(241, 211, 151), networkVerified ? Color.FromArgb(34, 115, 67) : Color.FromArgb(157, 99, 20));
+            DrawStatusBadge(e.Graphics, statusBadgeText, badgeX, Color.FromArgb(241, 245, 249), Color.FromArgb(219, 225, 233), Color.FromArgb(71, 85, 105));
+            using (var body = new Font("微软雅黑", 10F, FontStyle.Regular, GraphicsUnit.Point, 134))
+            using (var small = new Font("微软雅黑", 9F, FontStyle.Regular, GraphicsUnit.Point, 134)) {
+                DrawCardText(e.Graphics, subtitleText, small, Px(20, 64, 520, 22), Color.FromArgb(85, 101, 123), false);
+                DrawCardText(e.Graphics, accountText, body, Px(20, 94, 520, 24), Color.FromArgb(23, 38, 59), false);
+                DrawCardText(e.Graphics, selectedText, small, Px(20, 124, 520, 22), accountMismatch ? Color.FromArgb(157, 99, 20) : Color.FromArgb(85, 101, 123), false);
+                DrawCardText(e.Graphics, networkText, body, Px(20, 154, 520, 24), Color.FromArgb(23, 38, 59), false);
             }
         }
     }
