@@ -398,7 +398,7 @@ internal static class AntigravityCdpLocalizationLoader
             }
             if (injectedCount > 0)
             {
-                Log("injection_succeeded", "targets=" + injectedCount + " version=0.4.1");
+                Log("injection_succeeded", "targets=" + injectedCount + " version=0.4.2");
                 return 0;
             }
             Log("injection_failed", "no_targets_succeeded");

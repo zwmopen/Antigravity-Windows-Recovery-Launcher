@@ -13,7 +13,7 @@ const contentSource = fs.readFileSync(path.join(extensionRoot, 'content.js'), 'u
 const loaderSource = fs.readFileSync(path.join(projectRoot, 'src', 'Antigravity-CdpLocalizationLoader.cs'), 'utf8');
 
 assert.strictEqual(manifest.manifest_version, 3);
-assert.strictEqual(manifest.version, '0.4.1');
+assert.strictEqual(manifest.version, '0.4.2');
 assert.deepStrictEqual(manifest.content_scripts[0].js, ['translation-core.js', 'content.js']);
 assert.ok(manifest.content_scripts[0].matches.includes('https://127.0.0.1/*'));
 assert.ok(contentSource.includes('DEBOUNCE_MS = 80'));
@@ -40,6 +40,10 @@ const core = context.AntigravityZhCore;
 assert.ok(core);
 
 const requiredTranslations = {
+  'Tool Permissions': '工具权限',
+  'No MCP servers configured': '未配置任何 MCP 服务',
+  'Ask anything, @ to mention files, / for actions': '问我任何问题，用 @ 提及文件，用 / 执行动作',
+  'Configure allowed and denied paths for file reads and writes': '配置文件读取和写入的允许与拒绝路径',
   'New Conversation': '新建对话',
   'Automations': '自动化任务',
   'Customizations': '自定义扩展',
@@ -213,3 +217,5 @@ for (const alias of ['btw','goal','compact','schedule','grill-me','teamwork']) a
 assert.strictEqual(core.translateUiText('Automations'), '自动化任务');
 
 console.log('localization-extension.test.js: PASS');
+
+assert.strictEqual(core.translateText('agy-customizations'), 'agy-customizations');

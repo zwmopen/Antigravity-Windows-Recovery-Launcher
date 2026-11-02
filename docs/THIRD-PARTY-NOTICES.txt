@@ -1,4 +1,4 @@
-第三方与参考说明
+﻿第三方与参考说明
 ================
 
 本项目的汉化术语和界面覆盖范围参考了公开项目：
@@ -13,3 +13,60 @@ https://github.com/yuexps/Antigravity-Hans
 Google 官方 Antigravity CLI 当前仓库未声明可再分发许可证，因此本项目源码和 Release 不包含 `agy.exe`。安装脚本只从 Google 官方更新清单下载对应平台二进制，并要求官方 SHA-512 校验通过。
 
 Google、Antigravity、Gemini 及相关名称和商标归各自权利人所有。本工具是非官方社区工具，与 Google 无隶属或认可关系。
+
+
+MIT 开源汉化参考（2026-11-02）
+============================
+新增精确 UI 词条改编自 good9527/Antigravity-Chinese-Patch：
+https://github.com/good9527/Antigravity-Chinese-Patch
+固定提交：1facd3cb53c6e98c00a0a8e0d403213d16eab9ac
+未执行其安装脚本，未复制其静态补丁实现。保留现有术语，仅补缺失标签。
+
+另参考 showfor/antigravity-hans-optimized 的覆盖范围与事件驱动方式：
+https://github.com/showfor/antigravity-hans-optimized
+固定提交：66d34e6d664d6719968baea5082982355142a64c
+未复制其实现；本项目继续复用单个 MutationObserver。
+
+MIT License
+
+Copyright (c) 2026 good9527
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+MIT License
+
+Copyright (c) 2026 showfor
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

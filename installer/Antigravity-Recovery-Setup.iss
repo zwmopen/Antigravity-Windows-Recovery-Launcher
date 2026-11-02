@@ -1,5 +1,5 @@
 ﻿#define MyAppName "Antigravity 智能启动器"
-#define MyAppVersion "2.9.12"
+#define MyAppVersion "2.9.13"
 #define MyAppPublisher "zwmopen"
 #define MyAppURL "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher"
 #define MyAppExeName "Antigravity-Recovery-Launcher.exe"
@@ -32,11 +32,11 @@ CloseApplications=no
 RestartApplications=no
 LicenseFile=..\LICENSE
 InfoBeforeFile=..\docs\INSTALLER-README.txt
-VersionInfoVersion=2.9.12.0
+VersionInfoVersion=2.9.13.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Setup
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=2.9.12.0
+VersionInfoProductVersion=2.9.13.0
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"

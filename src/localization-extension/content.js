@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   'use strict';
 
   // ── 永久隐藏右上角"安装 IDE"/"打开 IDE"/骨架加载按钮 ──────────────────
@@ -25,14 +25,6 @@
   // every React update traverse the page more than once.
   var core = globalThis.AntigravityZhCore;
   if (!core) return;
-  if (globalThis.__AntigravityZhContentInstalled) {
-    if (typeof globalThis.__AntigravityZhForceTranslate === 'function') {
-      globalThis.__AntigravityZhForceTranslate();
-    }
-    return;
-  }
-  globalThis.__AntigravityZhContentInstalled = true;
-
   var DEBOUNCE_MS = 80;
   var MAX_WAIT_MS = 300;
   var pendingNodes = new Set();
@@ -41,6 +33,18 @@
   var applying = false;
   var lastTextValues = new WeakMap();
   var lastAttributeValues = new WeakMap();
+
+  // Live upgrades reuse the observer and refresh the UI scope predicate.
+  globalThis.__AntigravityZhUiScope = isUiTextElement;
+  if (globalThis.__AntigravityZhContentInstalled) {
+    if (typeof globalThis.__AntigravityZhForceTranslate === 'function') {
+      globalThis.__AntigravityZhForceTranslate();
+    }
+    translateSubtree(document.body || document.documentElement);
+    document.documentElement.setAttribute('data-antigravity-zhcn', core.VERSION);
+    return;
+  }
+  globalThis.__AntigravityZhContentInstalled = true;
 
   function closest(element, selector) {
     return element && element.closest ? element.closest(selector) : null;
@@ -95,7 +99,8 @@
     return !!closest(element,
       'button, a[href], [role="button"], [role="menuitem"], [role="menuitemcheckbox"], ' +
       '[role="menuitemradio"], [role="menu"], [role="option"], [role="tab"], ' +
-      'label, h1, h2, h3, h4, h5, h6, [role="heading"], [data-testid^="settings-nav-item-"]'
+      'label, h1, h2, h3, h4, h5, h6, [role="heading"], [data-testid^="settings-nav-item-"], ' +
+      '[role="dialog"], [role="alertdialog"], [role="tooltip"], [aria-modal="true"]'
     );
   }
 
@@ -142,7 +147,7 @@
     var oldValue = node.nodeValue;
     var rowTimestamp = closest(node.parentElement, '[data-testid="conversation-row-sidebar"]');
     var isPill = isToolOrStatusPillText(oldValue);
-    var useUiTranslation = isUiTextElement(node.parentElement) ||
+    var useUiTranslation = (globalThis.__AntigravityZhUiScope || isUiTextElement)(node.parentElement) ||
       isSettingsSurface(node.parentElement) || rowTimestamp || isPill;
     var previous = lastTextValues.get(node);
     if (previous && previous.value === oldValue && previous.useUi === !!useUiTranslation) return 0;
