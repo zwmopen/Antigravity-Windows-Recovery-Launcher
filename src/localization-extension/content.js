@@ -20,6 +20,65 @@
   })();
   // ─────────────────────────────────────────────────────────────────────────
 
+  // Command names are display labels; never change slash-command values or drafts.
+  // This small observer also bridges already-open pages using the older text runtime.
+  (function installCommandLabels() {
+    if (globalThis.__AntigravityZhCommandLabels) {
+      globalThis.__AntigravityZhCommandLabels.scan(document.body);
+      return;
+    }
+    var labels = Object.freeze({
+      'btw': 'btw（顺便问）',
+      'goal': 'goal（目标）',
+      'compact': 'compact（压缩对话）',
+      'schedule': 'schedule（定时任务）',
+      'browser': 'browser（浏览器）',
+      '浏览器': 'browser（浏览器）',
+      'plan': 'plan（规划）',
+      '套餐计划': 'plan（规划）',
+      '规划': 'plan（规划）',
+      'grill-me': 'grill-me（深入访谈）',
+      'teamwork': 'teamwork（团队协作）'
+    });
+    var selector = '[data-testid="menu-option-label"]';
+    function translateLabel(label) {
+      if (!label || !label.closest('[role="option"]') ||
+          label.closest('[contenteditable="true"], [data-message-author-role], [data-testid*="message" i], [class*="markdown" i], pre, code, textarea')) return;
+      var walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+      var node;
+      while ((node = walker.nextNode())) {
+        var value = node.nodeValue;
+        var key = value.trim().toLowerCase();
+        if (!Object.prototype.hasOwnProperty.call(labels, key)) continue;
+        node.nodeValue = value.replace(value.trim(), labels[key]);
+      }
+    }
+    function scan(root) {
+      if (!root) return;
+      var element = root.nodeType === 1 ? root : root.parentElement;
+      if (!element) return;
+      var label = element.closest(selector);
+      if (label) translateLabel(label);
+      if (root.querySelectorAll) {
+        Array.prototype.forEach.call(root.querySelectorAll(selector), translateLabel);
+      }
+    }
+    function handleRecords(records) {
+      records.forEach(function (record) {
+        if (record.type === 'characterData') scan(record.target);
+        else Array.prototype.forEach.call(record.addedNodes || [], scan);
+      });
+    }
+    // Fresh documents share the general observer below. Only legacy live pages
+    // need this narrow bridge, because their observer callback cannot be replaced.
+    if (globalThis.__AntigravityZhContentInstalled) {
+      var observer = new MutationObserver(handleRecords);
+      observer.observe(document.documentElement, {subtree: true, childList: true, characterData: true});
+    }
+    globalThis.__AntigravityZhCommandLabels = {scan: scan, handleRecords: handleRecords};
+    scan(document.body);
+  }());
+
   // The CDP loader and the Chromium fallback can both reach the same
   // document during an upgrade.  Installing a second observer would make
   // every React update traverse the page more than once.
@@ -273,6 +332,7 @@
 
     var observer = new MutationObserver(function (records) {
       if (applying) return;
+      globalThis.__AntigravityZhCommandLabels.handleRecords(records);
       records.forEach(function (record) {
         if (record.type === 'attributes' || record.type === 'characterData') {
           if (isInstantUiNode(record.target)) {

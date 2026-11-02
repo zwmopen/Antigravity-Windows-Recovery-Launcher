@@ -52,8 +52,8 @@ assert.deepStrictEqual(fixtures.map(n=>n.nodeValue),[
 ]);
 console.log('localization-ui-scope.test.js: PASS (sidebar/menu translated; aliases/messages/titles/code/drafts preserved)');
 
-// Reinjecting an upgrade must update labels and marker without a second observer.
+// Reinjecting an upgrade must not duplicate either observer.
 fixtures[0].nodeValue = 'MCP Server Status';
 vm.runInNewContext(fs.readFileSync(path.join(root,'content.js'),'utf8'),context);
 assert.strictEqual(fixtures[0].nodeValue, 'MCP 服务状态');
-assert.strictEqual(observerCount, 1);
+assert.strictEqual(observerCount, 1); // Fresh documents share one UI observer.

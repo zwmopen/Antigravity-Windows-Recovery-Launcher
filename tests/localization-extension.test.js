@@ -13,7 +13,7 @@ const contentSource = fs.readFileSync(path.join(extensionRoot, 'content.js'), 'u
 const loaderSource = fs.readFileSync(path.join(projectRoot, 'src', 'Antigravity-CdpLocalizationLoader.cs'), 'utf8');
 
 assert.strictEqual(manifest.manifest_version, 3);
-assert.strictEqual(manifest.version, '0.4.2');
+assert.strictEqual(manifest.version, '0.4.3');
 assert.deepStrictEqual(manifest.content_scripts[0].js, ['translation-core.js', 'content.js']);
 assert.ok(manifest.content_scripts[0].matches.includes('https://127.0.0.1/*'));
 assert.ok(contentSource.includes('DEBOUNCE_MS = 80'));

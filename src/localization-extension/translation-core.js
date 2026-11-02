@@ -1,7 +1,7 @@
 ﻿(function (root) {
   'use strict';
 
-  var VERSION = '0.4.2';
+  var VERSION = '0.4.3';
 
   // Full phrases are deliberately separate from exact UI labels. This
   // prevents words such as Settings, On, Model, and Rules from leaking
