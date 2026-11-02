@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.11.0")]
-[assembly: AssemblyFileVersion("2.9.11.0")]
-[assembly: AssemblyInformationalVersion("2.9.11")]
+[assembly: AssemblyVersion("2.9.12.0")]
+[assembly: AssemblyFileVersion("2.9.12.0")]
+[assembly: AssemblyInformationalVersion("2.9.12")]
 
 namespace AntigravityLauncher
 {
@@ -1052,6 +1052,9 @@ namespace AntigravityLauncher
             accountText = "验证账号  " + (string.IsNullOrEmpty(verifiedEmail) ? "暂无记录" : verifiedEmail);
             selectedText = accountMismatch ? "Cockpit 另选：" + selectedEmail + " · 是否已载入待确认" : "Cockpit 选择" + (string.IsNullOrEmpty(selectedEmail) ? "未知" : "一致") + " · 软件内实际账号待确认";
             AccessibleDescription = accountText + "; " + selectedText + "; " + networkText + "; " + subtitleText;
+            accountText = "正在读取软件内账号…";
+            selectedText = "从当前运行的反重力读取，不改变账号";
+            Shown += delegate { ReadRuntimeIdentity(); };
             detailTip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 300, ReshowDelay = 100 };
             detailTip.SetToolTip(this, accountText + "\n" + selectedText + "\n" + networkText + "\n" + subtitleText + "\n账号来源 Cockpit；独立代理端口 17897。验证记录不代表当前请求一定成功。");
             FormClosed += delegate { detailTip.Dispose(); };
@@ -1176,6 +1179,42 @@ namespace AntigravityLauncher
             };
             if (uiScale != 1F) Scale(new SizeF(uiScale, uiScale));
             countdownTimer.Start();
+        }
+
+        private void ReadRuntimeIdentity() {
+            Task.Run(delegate {
+                string liveEmail = "";
+                try {
+                    string helper = Path.Combine(Program.AppDirectory, "antigravity_runtime_identity.py");
+                    string pythonw = Program.ResolvePythonw();
+                    string python = Path.Combine(Path.GetDirectoryName(pythonw) ?? "", "python.exe");
+                    var info = new ProcessStartInfo(python, "\"" + helper + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                    using (var process = Process.Start(info)) {
+                        var output = process.StandardOutput.ReadToEndAsync();
+                        var error = process.StandardError.ReadToEndAsync();
+                        if (!process.WaitForExit(3500)) { try { process.Kill(); } catch { } }
+                        else if (process.ExitCode == 0 && output.Wait(300)) {
+                            string json = output.Result;
+                            if (JsonValue(json, "status") == "live") liveEmail = JsonValue(json, "email");
+                        }
+                    }
+                } catch { }
+                if (IsDisposed || Disposing || !IsHandleCreated) return;
+                try { BeginInvoke(new Action(delegate {
+                    if (IsDisposed) return;
+                    if (!string.IsNullOrEmpty(liveEmail)) {
+                        accountText = "软件内账号  " + liveEmail;
+                        accountMismatch = !string.IsNullOrEmpty(selectedEmail) && !string.Equals(liveEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
+                        selectedText = accountMismatch ? "Cockpit 另选：" + selectedEmail + " · 与软件内账号不同" : "已从运行中的反重力读取" + (string.IsNullOrEmpty(selectedEmail) ? "" : " · Cockpit 选择一致");
+                    } else {
+                        accountText = "最近验证账号  " + (string.IsNullOrEmpty(verifiedEmail) ? "暂无记录" : verifiedEmail);
+                        selectedText = "暂时读不到软件内账号 · 可进入软件设置查看";
+                    }
+                    AccessibleDescription = accountText + "; " + selectedText + "; " + networkText;
+                    detailTip.SetToolTip(this, accountText + "\n" + selectedText + "\n" + networkText + "\n" + subtitleText);
+                    Invalidate();
+                })); } catch { }
+            });
         }
 
         internal void PauseCountdown() {

@@ -17,7 +17,8 @@ try {
     foreach ($name in @('accountText','selectedText','networkText')) {
         if ([string]::IsNullOrWhiteSpace($type.GetField($name,$flags).GetValue($form))) { throw ('missing_state:' + $name) }
     }
-    if (-not $type.GetField('selectedText',$flags).GetValue($form).Contains('待确认') -and -not $type.GetField('selectedText',$flags).GetValue($form).Contains('非编辑器实时')) { throw 'runtime_identity_overclaim' }
+    if (-not $type.GetField('accountText',$flags).GetValue($form).Contains('正在读取')) { throw 'identity_claimed_before_live_read' }
+
     # Reflection hosts use PowerShell's base directory; explicitly supply the packaged icon for the render fixture.
     $iconReader = $assembly.GetType('AntigravityLauncher.Program').GetMethod('LoadIconOrPng',$flags)
     $type.GetField('appIcon',$flags).SetValue($form,$iconReader.Invoke($null,@([string](Join-Path $root 'releases\current\Antigravity-Launcher.ico'))))

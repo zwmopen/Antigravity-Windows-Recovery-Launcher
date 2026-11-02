@@ -1,4 +1,6 @@
-﻿> v2.9.11：小卡片默认倒计时5秒，账号文案改为“软件内实际账号待确认”。
+﻿> v2.9.12：小卡片直接只读回读当前反重力运行服务的账号，与Cockpit选择区分；异步读取不阻塞5秒倒计时。
+
+> v2.9.11：小卡片默认倒计时5秒，账号文案改为“软件内实际账号待确认”。
 
 > v2.9.10：修复小卡片高DPI字体发虚与图标/说明重叠；统一实际DPI缩放和文本行距。
 
@@ -20,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-v2.9.11-blue.svg" alt="版本 v2.9.11" />
+  <img src="https://img.shields.io/badge/版本-v2.9.12-blue.svg" alt="版本 v2.9.12" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线沙盒-127.0.0.1:17897-teal.svg" alt="专线沙盒" />
   <img src="https://img.shields.io/badge/算力调度-四级智能优先级-orange.svg" alt="算力调度" />
