@@ -259,7 +259,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.9.7-core'
+            version = '2.9.8-core'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -2069,6 +2069,66 @@ function Test-IsLanguageServerReady {
     return $false
 }
 
+function Invoke-BoundedModelProcess {
+    param([string]$FilePath, [string]$Arguments, [string]$DiagnosticPath, [int]$TimeoutSeconds = 40)
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = $FilePath
+    $info.Arguments = $Arguments
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $info
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $abortReason = ''
+    try {
+        if (-not $process.Start()) { throw 'model_probe_start_failed' }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $lastHeartbeat = 0
+        while (-not $process.WaitForExit(250)) {
+            if (Test-Path -LiteralPath $DiagnosticPath) {
+                $tail = (Get-Content -LiteralPath $DiagnosticPath -Tail 25 -ErrorAction SilentlyContinue) -join ' '
+                if ($tail -match '(?i)User location is not supported|UNSUPPORTED_LOCATION|not currently available in your location') {
+                    $abortReason = 'model_location'
+                    break
+                }
+            }
+            if ($clock.Elapsed.TotalSeconds -ge $TimeoutSeconds) { $abortReason = 'model_timeout'; break }
+            if ($clock.Elapsed.TotalSeconds -ge ($lastHeartbeat + 5)) {
+                $lastHeartbeat = [int]$clock.Elapsed.TotalSeconds
+                Write-SafeLog -Event 'model_probe_waiting' -Values @{elapsed_seconds=$lastHeartbeat; limit_seconds=$TimeoutSeconds}
+            }
+        }
+        if ($abortReason) {
+            Write-SafeLog -Event 'model_probe_aborted' -Values @{reason=$abortReason; elapsed_seconds=[int]$clock.Elapsed.TotalSeconds}
+            # Only this invocation's CLI and its own descendants; never the editor or a shared server.
+            if (-not $process.HasExited) {
+                $stopInfo = New-Object Diagnostics.ProcessStartInfo
+                $stopInfo.FileName = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+                $stopInfo.Arguments = '/PID ' + $process.Id + ' /T /F'
+                $stopInfo.UseShellExecute = $false
+                $stopInfo.CreateNoWindow = $true
+                $stopInfo.RedirectStandardOutput = $true
+                $stopInfo.RedirectStandardError = $true
+                $stopper = [Diagnostics.Process]::Start($stopInfo)
+                try {
+                    $null = $stopper.StandardOutput.ReadToEndAsync()
+                    $null = $stopper.StandardError.ReadToEndAsync()
+                    if (-not $stopper.WaitForExit(5000)) { $stopper.Kill() }
+                } finally { $stopper.Dispose() }
+                if (-not $process.WaitForExit(3000)) { $process.Kill() }
+            }
+        }
+        if (-not $process.WaitForExit(3000)) { throw 'model_probe_cleanup_failed' }
+        $output = ''
+        if ($stdout.Wait(2000)) { $output += $stdout.Result }
+        if ($stderr.Wait(2000)) { $output += [Environment]::NewLine + $stderr.Result }
+        return @{Output=$output; ExitCode=$process.ExitCode; AbortReason=$abortReason}
+    } finally { $clock.Stop(); $process.Dispose() }
+}
+
 function Test-RealModelGeneration {
     $script:LastModelProbeState = 'running'
     if (-not (Test-Path -LiteralPath $AgyPath)) {
@@ -2104,12 +2164,10 @@ function Test-RealModelGeneration {
         $env:HTTPS_PROXY = $ProxyUrl
         $env:ALL_PROXY = $ProxyUrl
         $env:NO_PROXY = 'localhost,127.0.0.1,::1'
-        $previousErrorPreference = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = 'Continue'
-            $probeOutput = @(& $AgyPath -p $ModelProbePrompt --output-format json --effort low --disable-slash-commands --print-timeout ($ModelProbeTimeoutSeconds.ToString() + 's') --sandbox --log-file $probeLog 2>&1)
-            $exitCode = $LASTEXITCODE
-        } finally { $ErrorActionPreference = $previousErrorPreference }
+        $arguments = '-p "' + $ModelProbePrompt.Replace('"', '\"') + '" --output-format json --effort low --disable-slash-commands --print-timeout ' + $ModelProbeTimeoutSeconds + 's --sandbox --log-file "' + $probeLog + '"'
+        $bounded = Invoke-BoundedModelProcess -FilePath $AgyPath -Arguments $arguments -DiagnosticPath $probeLog -TimeoutSeconds 40
+        $probeOutput = @($bounded.Output -split '[\r\n]+')
+        $exitCode = $bounded.ExitCode
     } finally {
         Restore-ProcessEnvironment -Previous $previousEnvironment
     }
@@ -2144,17 +2202,17 @@ function Test-RealModelGeneration {
         $status = 'INVALID_OUTPUT'
     }
 
-    $locationFailure = $false
+    $locationFailure = $bounded.AbortReason -eq 'model_location'
     if (Test-Path -LiteralPath $probeLog) {
         try {
             $probeDiagnosticText = Get-Content -LiteralPath $probeLog -Raw -ErrorAction SilentlyContinue
-            $locationFailure = [bool](Select-String -LiteralPath $probeLog -Pattern 'User location is not supported|FAILED_PRECONDITION.*400' -CaseSensitive:$false -Quiet)
+            $locationFailure = $locationFailure -or [bool](Select-String -LiteralPath $probeLog -Pattern 'User location is not supported|FAILED_PRECONDITION.*400' -CaseSensitive:$false -Quiet)
         } catch { }
     }
     Remove-Item -LiteralPath $probeLog -Force -ErrorAction SilentlyContinue
 
     $durationMs = [int][math]::Round(((Get-Date) - $startedAt).TotalMilliseconds)
-    if ($exitCode -eq 0 -and $status -eq 'SUCCESS' -and $responseText -ceq 'OK') {
+    if (-not $bounded.AbortReason -and -not $locationFailure -and $exitCode -eq 0 -and $status -eq 'SUCCESS' -and $responseText -ceq 'OK') {
         $script:LastModelProbeState = 'passed'
         Write-SafeLog -Event 'model_generation_probe_passed' -Values @{ duration_ms = $durationMs }
         return $true
@@ -3073,7 +3131,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.9.7-core'
+    version = '2.9.8-core'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId

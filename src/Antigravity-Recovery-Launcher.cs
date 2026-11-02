@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.7.0")]
-[assembly: AssemblyFileVersion("2.9.7.0")]
-[assembly: AssemblyInformationalVersion("2.9.7")]
+[assembly: AssemblyVersion("2.9.8.0")]
+[assembly: AssemblyFileVersion("2.9.8.0")]
+[assembly: AssemblyInformationalVersion("2.9.8")]
 
 namespace AntigravityLauncher
 {
@@ -1913,6 +1913,12 @@ namespace AntigravityLauncher
                     if (int.TryParse(GetValue(line, "candidate_index"), out pIndex) && pIndex > 0) candidateIndex = pIndex;
                     else candidateIndex++;
                     if (int.TryParse(GetValue(line, "candidate_total"), out pTotal) && pTotal > 0) candidateTotal = pTotal;
+                    state.LinePassed = false;
+                    state.GooglePassed = false;
+                    state.GoogleText = "正在验证新线路…";
+                    state.ModelPassed = false;
+                    state.ModelText = "等待当前线路 AI 验证…";
+                    state.FooterText = "正在检查候选 " + candidateIndex + "/" + candidateTotal + "（找到可用线路即停止）";
                     state.TargetProgress = Math.Max(state.TargetProgress, 35);
                     state.Ceiling = Math.Max(state.Ceiling, 45);
                 }
@@ -1954,6 +1960,25 @@ namespace AntigravityLauncher
                     state.TargetProgress = Math.Max(state.TargetProgress, 75);
                     state.Ceiling = Math.Max(state.Ceiling, 82);
                 }
+                else if (line.Contains("formal_model_gate_started") || line.Contains("model_probe_waiting"))
+                {
+                    string elapsed = GetValue(line, "elapsed_seconds");
+                    state.ModelPassed = false;
+                    state.ModelText = "正在请求真实 AI 回复" + (string.IsNullOrEmpty(elapsed) ? "…" : " · 已等待 " + elapsed + " 秒 / 上限 40 秒");
+                    state.FooterText = "AI 验证中 · 地区受限即换线，单次请求上限 40 秒";
+                }
+                else if (line.Contains("model_probe_aborted") || line.Contains("model_generation_probe_failed"))
+                {
+                    bool location = line.Contains("model_location");
+                    state.ModelPassed = false;
+                    state.ModelText = location ? "当前线路受地区限制 · 正在换线…" : "当前线路 AI 验证失败或超时 · 正在换线…";
+                    state.FooterText = state.ModelText;
+                }
+                else if (line.Contains("preflight_account_check_started"))
+                {
+                    state.AccountText = "正在检查账号健康与缓存额度…";
+                    state.AccountPassed = false;
+                }
                 else if (line.Contains("model_generation_probe_passed"))
                 {
                     string countryDesc = egressCountry == "JP" ? "日本 JP" : (egressCountry == "US" ? "美国 US" : (!string.IsNullOrEmpty(egressCountry) ? egressCountry : "高速专线"));
@@ -1965,22 +1990,8 @@ namespace AntigravityLauncher
                 }
                 else if (line.Contains("preflight_account_check_completed"))
                 {
-                    string accEmail = GetValue(line, "account_email");
-                    string q5h = GetValue(line, "account_5h");
-                    string qw = GetValue(line, "account_weekly");
-                    string action = GetValue(line, "account_action");
-                    if (!string.IsNullOrEmpty(accEmail))
-                    {
-                        if (action == "switched")
-                        {
-                            state.AccountText = "自动接力 · " + accEmail + " [5h: " + q5h + "% · 周: " + qw + "%]";
-                        }
-                        else
-                        {
-                            state.AccountText = accEmail + " [5h: " + q5h + "% · 周: " + qw + "% · 满血就绪]";
-                        }
-                        state.AccountPassed = true;
-                    }
+                    state.AccountText = "账号门禁通过 · 额度来源：Cockpit 本地缓存";
+                    state.AccountPassed = true;
                 }
                 else if (line.Contains("antigravity_started"))
                 {
