@@ -1,4 +1,6 @@
-﻿> v2.9.10：修复小卡片高DPI字体发虚与图标/说明重叠；统一实际DPI缩放和文本行距。
+﻿> v2.9.11：小卡片默认倒计时5秒，账号文案改为“软件内实际账号待确认”。
+
+> v2.9.10：修复小卡片高DPI字体发虚与图标/说明重叠；统一实际DPI缩放和文本行距。
 
 > v2.9.9：小卡片合并重复账号、真实节点名称、清晰状态与主次操作；选线分轮日本2→美国2→日本补2→美国补2，最多各4次，候选阶段300秒预算，优先复验当前可用线路。
 
@@ -18,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-v2.9.10-blue.svg" alt="版本 v2.9.10" />
+  <img src="https://img.shields.io/badge/版本-v2.9.11-blue.svg" alt="版本 v2.9.11" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线沙盒-127.0.0.1:17897-teal.svg" alt="专线沙盒" />
   <img src="https://img.shields.io/badge/算力调度-四级智能优先级-orange.svg" alt="算力调度" />

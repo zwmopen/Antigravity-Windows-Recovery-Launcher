@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.10.0")]
-[assembly: AssemblyFileVersion("2.9.10.0")]
-[assembly: AssemblyInformationalVersion("2.9.10")]
+[assembly: AssemblyVersion("2.9.11.0")]
+[assembly: AssemblyFileVersion("2.9.11.0")]
+[assembly: AssemblyInformationalVersion("2.9.11")]
 
 namespace AntigravityLauncher
 {
@@ -123,7 +123,7 @@ namespace AntigravityLauncher
             Application.SetCompatibleTextRenderingDefault(false);
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 
-            // 3. 检查 Antigravity 是否已经在运行中 (热启动场景：带 3 秒自动进入的双选卡片)
+            // 3. 检查 Antigravity 是否已经在运行中 (热启动场景：带 5 秒自动进入的双选卡片)
             bool antigravityRunning = IsAntigravityRunning();
             TraceLog("antigravityRunning=" + antigravityRunning + ", forceLaunch=" + forceLaunch);
 
@@ -966,12 +966,12 @@ namespace AntigravityLauncher
     }
 
     // ==========================================
-    // 热启动拟态选项卡片：带 3 秒自动进入倒计时 (AntigravityHotLaunchChoiceForm)
+    // 热启动拟态选项卡片：带 5 秒自动进入倒计时 (AntigravityHotLaunchChoiceForm)
     // ==========================================
     internal class AntigravityHotLaunchChoiceForm : Form
     {
         internal HotLaunchAction Action { get; private set; }
-        private int remainingSeconds = 3;
+        private int remainingSeconds = 5;
         private float uiScale = 1F;
         private Rectangle Px(int x, int y, int width, int height) {
             return new Rectangle((int)Math.Round(x * uiScale), (int)Math.Round(y * uiScale), (int)Math.Round(width * uiScale), (int)Math.Round(height * uiScale));
@@ -986,8 +986,8 @@ namespace AntigravityLauncher
         private string statusBadgeText = "编辑器运行中";
         private string subtitleText = "账号状态待核实";
         private string networkText = "当前网络：未知";
-        private string accountText = "最近验证账号：未知（编辑器登录态未核实）";
-        private string selectedText = "编辑器登录态未核实";
+        private string accountText = "最近验证账号：未知（软件内实际账号待确认）";
+        private string selectedText = "软件内实际账号待确认";
         private bool networkVerified;
         private bool accountMismatch;
         private string verifiedEmail = "";
@@ -1050,7 +1050,7 @@ namespace AntigravityLauncher
 
             accountMismatch = !string.IsNullOrEmpty(verifiedEmail) && !string.IsNullOrEmpty(selectedEmail) && !string.Equals(verifiedEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
             accountText = "验证账号  " + (string.IsNullOrEmpty(verifiedEmail) ? "暂无记录" : verifiedEmail);
-            selectedText = accountMismatch ? "Cockpit 另选：" + selectedEmail + " · 是否已载入未核实" : "Cockpit 选择" + (string.IsNullOrEmpty(selectedEmail) ? "未知" : "一致") + " · 编辑器登录态未核实";
+            selectedText = accountMismatch ? "Cockpit 另选：" + selectedEmail + " · 是否已载入待确认" : "Cockpit 选择" + (string.IsNullOrEmpty(selectedEmail) ? "未知" : "一致") + " · 软件内实际账号待确认";
             AccessibleDescription = accountText + "; " + selectedText + "; " + networkText + "; " + subtitleText;
             detailTip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 300, ReshowDelay = 100 };
             detailTip.SetToolTip(this, accountText + "\n" + selectedText + "\n" + networkText + "\n" + subtitleText + "\n账号来源 Cockpit；独立代理端口 17897。验证记录不代表当前请求一定成功。");
@@ -1093,7 +1093,7 @@ namespace AntigravityLauncher
                 }
             };
 
-            btnActivate = new HotLaunchButton("进入反重力 (3s)")
+            btnActivate = new HotLaunchButton("进入反重力 (5s)")
             {
                 IsPrimary = true,
                 Location = new Point(20, 194),
