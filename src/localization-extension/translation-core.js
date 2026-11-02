@@ -1,12 +1,22 @@
 (function (root) {
   'use strict';
 
-  var VERSION = '0.4.0';
+  var VERSION = '0.4.1';
 
   // Full phrases are deliberately separate from exact UI labels. This
   // prevents words such as Settings, On, Model, and Rules from leaking
   // into ordinary descriptions, skill text, or user-authored titles.
   var PHRASE_PAIRS = Object.freeze([
+    ["Automations", "自动化任务"],
+    ["Customizations", "自定义扩展"],
+    ["Ask a quick question without interrupting the main conversation.", "提出一个简短问题，不中断当前主对话。"],
+    ["Run until the specified goal is completely finished.", "持续执行，直到指定目标全部完成。"],
+    ["Compact the conversation now (summarize history to free up the context window).", "立即压缩对话（总结历史，释放上下文空间）。"],
+    ["Run a prompt on a routine or one-time schedule.", "按固定周期或单次计划执行提示词。"],
+    ["Plan carefully before executing on the user's request.", "先仔细规划，再执行用户请求。"],
+    ["Interview me in depth about my idea.", "深入访谈，帮我梳理想法。"],
+    ["Invoke a team of agents to autonomously tackle large, parallelizable projects.", "调用智能体团队，协作处理可并行的大型项目。"],
+    ["Invoke a browser agent for web tasks.", "调用浏览器智能体处理网页任务。"],
   [
     "See our",
     "请查阅"
@@ -1839,6 +1849,7 @@
 ]);
 
   var UI_PAIRS = Object.freeze([
+    ["Automations", "自动化任务"],
   [
     "Inherit General",
     "继承常规设置"

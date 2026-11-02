@@ -1,4 +1,6 @@
-﻿> v2.9.8：真实AI探测增加外部40秒期限，地区受限立即换线；进度显示等待秒数、账号检查通过及当前验证阶段。总启动时长仍受网络与候选切换影响。
+﻿> v2.9.9：小卡片合并重复账号、真实节点名称、清晰状态与主次操作；选线分轮日本2→美国2→日本补2→美国补2，最多各4次，候选阶段300秒预算，优先复验当前可用线路。
+
+> v2.9.8：真实AI探测增加外部40秒期限，地区受限立即换线；进度显示等待秒数、账号检查通过及当前验证阶段。总启动时长仍受网络与候选切换影响。
 
 > v2.9.7：默认恢复小卡片入口；显示最近验证账号、Cockpit 当前选择、节点和验证记录时间。编辑器实时登录态尚无可靠回读，界面明确标注，不能把 Cockpit 选择或守护器锚点冒充已载入账号。账号和额度来自 Cockpit 本地数据（额度为缓存）；线路来自 Clash/Mihomo 订阅。
 
@@ -14,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-v2.9.8-blue.svg" alt="版本 v2.9.8" />
+  <img src="https://img.shields.io/badge/版本-v2.9.9-blue.svg" alt="版本 v2.9.9" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/专线沙盒-127.0.0.1:17897-teal.svg" alt="专线沙盒" />
   <img src="https://img.shields.io/badge/算力调度-四级智能优先级-orange.svg" alt="算力调度" />

@@ -259,7 +259,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.9.8-core'
+            version = '2.9.9-core'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -2069,6 +2069,33 @@ function Test-IsLanguageServerReady {
     return $false
 }
 
+function Get-AdmissionRoundOrder {
+    param([object[]]$Candidates)
+    $buckets = @{}
+    foreach ($regionName in @('JP','US')) {
+        $remaining = New-Object Collections.Generic.List[object]
+        foreach ($item in @($Candidates | Where-Object { $_.Region -eq $regionName })) { $remaining.Add($item) }
+        $diverse = @()
+        while ($remaining.Count -gt 0) {
+            $seen = @{}
+            foreach ($item in @($remaining.ToArray())) {
+                if (-not $seen.ContainsKey([string]$item.SourceId)) {
+                    $seen[[string]$item.SourceId] = $true
+                    $diverse += $item
+                    $null = $remaining.Remove($item)
+                }
+            }
+        }
+        $buckets[$regionName] = @($diverse)
+    }
+    # Two per region in the first round, two more in the second round.
+    foreach ($round in 0..1) {
+        foreach ($regionName in @('JP','US')) {
+            $buckets[$regionName] | Select-Object -Skip ($round * 2) -First 2
+        }
+    }
+}
+
 function Invoke-BoundedModelProcess {
     param([string]$FilePath, [string]$Arguments, [string]$DiagnosticPath, [int]$TimeoutSeconds = 40)
     $info = New-Object System.Diagnostics.ProcessStartInfo
@@ -2780,7 +2807,13 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
                     $fastStartupPassed = $true
                     $failoverState = Get-FailoverState
                     $script:CurrentFailoverState = $failoverState
+                    $savedNodeName = [string]$lastSavedState.target_node
+                    if ($savedNodeName -eq 'CURRENT-VERIFIED-FAILOVER-CANDIDATE' -or [string]::IsNullOrWhiteSpace($savedNodeName)) {
+                        $localMatch = @(Get-CandidateNodeDefinitions | Where-Object { $_.Id -eq $lastSavedState.active_node_id } | Select-Object -First 1)
+                        $savedNodeName = if ($localMatch.Count) { [string]$localMatch[0].Name } else { '' }
+                    }
                     $selectedCandidate = [pscustomobject]@{
+                        Name = $savedNodeName
                         Id = [string]$lastSavedState.active_node_id
                         SourceId = [string]$lastSavedState.active_source_id
                         SmartScore = if ($null -ne $lastSavedState.active_node_score) { [int]$lastSavedState.active_node_score } else { 0 }
@@ -2913,12 +2946,13 @@ if (-not $fastStartupPassed) {
     $orderedCandidates = @($latencyCandidates | Sort-Object @{Expression={if ($_.Candidate.Region -eq 'JP') {0} elseif ($_.Candidate.Region -eq 'US') {1} else {2}}}, RttMs | ForEach-Object { $_.Candidate }) + @($unprobedCandidates)
     $orderIndex=0
     $orderedCandidates = @($orderedCandidates | ForEach-Object { [pscustomobject]@{Candidate=$_; Index=($orderIndex++); Rank=$(if ($_.Region -eq 'JP') {0} elseif ($_.Region -eq 'US') {1} else {2})} } | Sort-Object Rank,Index | ForEach-Object {$_.Candidate})
+    $orderedCandidates = @(Get-AdmissionRoundOrder -Candidates $orderedCandidates)
     $candidateTotal = $orderedCandidates.Count
     $script:CandidateTotal = $candidateTotal
 }
 
 if ($null -eq $selectedCandidate) {
-    $maxFormalModelAttempts = 4
+    $maxFormalModelAttempts = 8
     $formalAttemptsByRegion = @{}
     $formalModelAttempts = 0
     $bestIsolatedCandidate = $null
@@ -2930,7 +2964,7 @@ if ($null -eq $selectedCandidate) {
         if (((Get-Date) - $script:AdmissionStartedAt).TotalSeconds -ge 300) { break }
         $region = [string]$candidate.Region
         if (-not $formalAttemptsByRegion.ContainsKey($region)) { $formalAttemptsByRegion[$region] = 0 }
-        if ($formalAttemptsByRegion[$region] -ge 2) { continue }
+        if ($formalAttemptsByRegion[$region] -ge 4) { continue }
         if ($formalModelAttempts -ge $maxFormalModelAttempts) { break }
         $candidateIndex++
         $script:CandidateIndex = $candidateIndex
@@ -3022,7 +3056,7 @@ $existingAntigravity = @(Get-CimInstance Win32_Process -ErrorAction SilentlyCont
     [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedAntigravityPath
 })
 $hasExistingAntigravity = $existingAntigravity.Count -gt 0
-$forceRestartRequested = ($RecoveryReason -in @('Force', 'UserRequestedRepair', 'AccountChange', 'cockpit_account_changed'))
+$forceRestartRequested = ($RecoveryReason -in @('Force', 'AccountChange', 'cockpit_account_changed'))
 
 $antigravityPid = 0
 $readiness = @{ LanguageServerPid = 0; ProxyConnections = 0 }
@@ -3131,13 +3165,13 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.9.8-core'
+    version = '2.9.9-core'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId
     config_hash = $configState.ConfigHash
     target_alias = $TargetAlias
-    target_node = 'CURRENT-VERIFIED-FAILOVER-CANDIDATE'
+    target_node = [string]$selectedCandidate.Name
     active_node_id = [string]$selectedCandidate.Id
     active_source_id = [string]$selectedCandidate.SourceId
     active_node_score = if ($null -ne $selectedCandidate.PSObject.Properties['SmartScore']) { [int]$selectedCandidate.SmartScore } else { 0 }

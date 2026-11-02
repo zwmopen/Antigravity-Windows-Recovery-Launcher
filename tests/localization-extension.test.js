@@ -13,7 +13,7 @@ const contentSource = fs.readFileSync(path.join(extensionRoot, 'content.js'), 'u
 const loaderSource = fs.readFileSync(path.join(projectRoot, 'src', 'Antigravity-CdpLocalizationLoader.cs'), 'utf8');
 
 assert.strictEqual(manifest.manifest_version, 3);
-assert.strictEqual(manifest.version, '0.4.0');
+assert.strictEqual(manifest.version, '0.4.1');
 assert.deepStrictEqual(manifest.content_scripts[0].js, ['translation-core.js', 'content.js']);
 assert.ok(manifest.content_scripts[0].matches.includes('https://127.0.0.1/*'));
 assert.ok(contentSource.includes('DEBOUNCE_MS = 80'));
@@ -41,6 +41,8 @@ assert.ok(core);
 
 const requiredTranslations = {
   'New Conversation': '新建对话',
+  'Automations': '自动化任务',
+  'Customizations': '自定义扩展',
   'Projects': '项目管理',
   'Scheduled Tasks': '定时任务',
   'Skills & Customizations': '技能与自定义扩展',
@@ -195,5 +197,19 @@ assert.strictEqual(core.translateUiText('4 commands'), '4 条命令');
 assert.strictEqual(core.translateUiText('1 file, 2 tasks'), '1 个文件，2 个任务');
 assert.strictEqual(core.translateUiText('Running 2 commands'), '正在运行 2 条命令');
 assert.strictEqual(core.translateUiText('Ran 4 commands'), '已运行 4 条命令');
+
+
+// New sidebar links and slash descriptions must translate without renaming command aliases.
+assert.ok(contentSource.includes('button, a[href]'));
+assert.strictEqual(core.translateText("Ask a quick question without interrupting the main conversation."), "提出一个简短问题，不中断当前主对话。");
+assert.strictEqual(core.translateText("Run until the specified goal is completely finished."), "持续执行，直到指定目标全部完成。");
+assert.strictEqual(core.translateText("Compact the conversation now (summarize history to free up the context window)."), "立即压缩对话（总结历史，释放上下文空间）。");
+assert.strictEqual(core.translateText("Run a prompt on a routine or one-time schedule."), "按固定周期或单次计划执行提示词。");
+assert.strictEqual(core.translateText("Plan carefully before executing on the user's request."), "先仔细规划，再执行用户请求。");
+assert.strictEqual(core.translateText("Interview me in depth about my idea."), "深入访谈，帮我梳理想法。");
+assert.strictEqual(core.translateText("Invoke a team of agents to autonomously tackle large, parallelizable projects."), "调用智能体团队，协作处理可并行的大型项目。");
+assert.strictEqual(core.translateText("Invoke a browser agent for web tasks."), "调用浏览器智能体处理网页任务。");
+for (const alias of ['btw','goal','compact','schedule','grill-me','teamwork']) assert.strictEqual(core.translateUiText(alias), alias);
+assert.strictEqual(core.translateUiText('Automations'), '自动化任务');
 
 console.log('localization-extension.test.js: PASS');

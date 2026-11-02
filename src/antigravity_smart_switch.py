@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Antigravity Smart Account Switcher & Smooth Launcher
 =====================================================
@@ -3076,12 +3076,14 @@ def notify_frontend_auth_state_update(target_account_id=None, target_email=None,
         logger.warning("⚠️ 动态热更新后发现语言服务进程异常退出，需触发自愈重启")
         return {"success": False, "reason": "language_server_died_unexpectedly"}
 
-    logger.info(f"✨ [免杀切号成功] 0 杀进程、0 刷窗口！语言服务 PID={current_pids} 持续运行，凭据已原子热生效！")
+    logger.info(f"认证更新消息已派发；语言服务 PID={current_pids} 持续运行。编辑器实际登录态与服务端接受结果仍待真实请求验证。")
     return {
         "success": True,
         "method": "CDP+BroadcastChannel+HostBridge",
         "ls_pids": list(current_pids),
         "cdp_notified": cdp_notified,
+        "server_verified": False,
+        "verification_state": "dispatched_pending_real_request",
         "host_bridge_alive": hb_alive,
         "zero_kill": True
     }
@@ -3987,7 +3989,7 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     hot_restart_success = False
 
     if zero_kill_success:
-        logger.info(f"✅ [步骤 3/5 完成] 动态凭据热更新成功 ({hot_update_res.get('method', 'CDP+BroadcastChannel')})！0 杀进程、0 刷窗口，多智能体与编辑器状态 100% 完好！")
+        logger.info(f"[步骤 3/5] 凭据写入与认证更新消息派发完成 ({hot_update_res.get('method', 'CDP+BroadcastChannel')})；服务端接受新账号待真实请求验证，编辑器保持运行。")
     else:
         logger.warning(f"⚠️ [步骤 3/5] 动态凭据热更新未完成 ({hot_update_res.get('reason', '未知')})，自动降级为语言服务热重启方案...")
         hot_restart_success = hot_restart_language_server(wait_timeout=25.0)
@@ -4083,15 +4085,15 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
 
     # 6. 切换成功：原地更新飞书原消息为绿色完成状态（严禁发送第二条独立消息打扰！）
     mode_desc = "动态热更新免杀切号（0杀进程、0刷窗口）" if zero_kill_success else ("无缝热重启（编辑器窗口未关闭）" if hot_restart_success else "完整重启")
-    succ_title = "🟢【Antigravity｜切号完成】"
+    succ_title = "【Antigravity｜账号凭据更新已提交】"
     succ_card_md = (
         f"`{curr_email}` → `{best_acc['email']}`\n\n"
-        f"新账号额度：\n"
+        f"新账号缓存额度：\n"
         f"5h：`{best_acc['gemini_5h']}%`｜周：`{best_acc['gemini_weekly']}%`\n\n"
-        f"✅ 当前任务已接力\n"
-        f"✅ 断点会话已恢复\n"
-        f"✅ 订阅状态已更新\n\n"
-        f"状态：正常运行｜无需处理"
+        f"账号更新流程已执行，实际登录态待真实请求验证。\n"
+        f"当前任务与断点续接结果尚未确认。\n"
+        f"网络与订阅状态请以启动器验证记录为准。\n\n"
+        f"状态：等待下一次真实请求确认"
     )
 
     feishu_event_manager.close_event(
@@ -4113,7 +4115,7 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     # 桌面通知如果开启则提示，不开启则静默（skip_feishu=True 避免再发文本消息）
     send_windows_notification(
         succ_title,
-        f"账号已成功切换至: {best_acc['email']}\n{mode_desc}",
+        f"目标账号: {best_acc['email']}\n{mode_desc}\n实际登录态与请求结果待验证",
         status="info",
         skip_feishu=True
     )
@@ -4424,7 +4426,14 @@ def check_language_server_quota_error():
 
                 # 3. 核心指纹比对：检查 target_reset_utc 是否与非当前账号的重置时刻吻合
                 matched_non_current = None
-                if accounts:
+                # Reset windows may be shared by multiple accounts. A current
+                # account match takes precedence over an old account fingerprint.
+                current_reset_match = bool(curr_acc and any(
+                    isinstance(curr_acc.get(key), datetime)
+                    and abs((target_reset_utc - curr_acc[key]).total_seconds()) <= 180
+                    for key in ("reset_time_5h", "reset_time_weekly")
+                ))
+                if accounts and not current_reset_match:
                     for acc in accounts:
                         if acc.get("is_current"):
                             continue
@@ -4454,8 +4463,14 @@ def check_language_server_quota_error():
                         record_quarantine_account(old_acc["id"], duration)
                         return True
 
+                    curr_dec = decrypt_cockpit_account(curr_acc["id"]) if curr_acc else None
+                    curr_rt = (curr_dec.get("token", {}).get("refresh_token") or "").strip() if curr_dec else ""
+                    if not (win_rt and curr_rt and win_rt == curr_rt):
+                        logger.warning("旧账号重置指纹命中，但无法确认当前系统凭据归属；不能把本次429当作已解决。")
+                        return True
+
                     logger.info(f"💡 [日志穿透感知] 捕获到 429 报错重置时刻 ({target_reset_utc.strftime('%H:%M:%S UTC')}) 指向已耗尽账号 {old_acc['email']} ({rt_key}: {rt_val.strftime('%H:%M:%S UTC')})")
-                    logger.info(f"   当前在用账号 ({curr_email}) 状态健康 (5h: {curr_5h}%)。")
+                    logger.info(f"   Cockpit当前账号 ({curr_email}) 缓存5h额度: {curr_5h}%；不等同编辑器实时登录态或服务端接受结果。")
                     # 关押该已耗尽账号，确保关押期内绝不误切回该账号
                     record_quarantine_account(old_acc["id"], duration)
                     # 【核心自愈】：虽然 Windows 凭据与 Cockpit 已经指向健康账号，
@@ -4463,11 +4478,13 @@ def check_language_server_quota_error():
                     # 优先尝试免杀动态凭据热更新踢掉重试死锁，若未成功再降级热重启
                     hu_res = notify_frontend_auth_state_update(target_email=curr_email)
                     if hu_res.get("success"):
-                        logger.info("✨ [内存重试自愈成功] 0 杀进程动态认证热更新成功，语言服务已加载最新健康凭据！")
+                        logger.info("认证更新消息已派发；保留当前账号，等待真实请求验证，不将旧账号429再次触发整池切号。")
                     else:
-                        logger.warning(f"⚡ [内存重试死锁自愈] 动态热更新未完成 ({hu_res.get('reason')})，触发语言服务热重启自愈...")
-                        hot_restart_language_server(wait_timeout=15.0)
-                    return True
+                        logger.warning(f"旧账号429恢复消息未完成 ({hu_res.get('reason')})；保留编辑器与当前账号，认证加载状态待核实，不执行重启。")
+                    # This error belongs to an old identity and current Windows
+                    # credentials are confirmed. The caller interprets True as
+                    # CURRENT quota exhaustion and would force another switch.
+                    return False
 
 
                 # 5. 若未匹配到离线旧账号，确认为当前在用账号真实 429 耗尽

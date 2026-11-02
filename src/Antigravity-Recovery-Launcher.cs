@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.8.0")]
-[assembly: AssemblyFileVersion("2.9.8.0")]
-[assembly: AssemblyInformationalVersion("2.9.8")]
+[assembly: AssemblyVersion("2.9.9.0")]
+[assembly: AssemblyFileVersion("2.9.9.0")]
+[assembly: AssemblyInformationalVersion("2.9.9")]
 
 namespace AntigravityLauncher
 {
@@ -860,19 +860,22 @@ namespace AntigravityLauncher
         private bool isHovered = false;
         private bool isPressed = false;
         private string buttonText;
+        internal bool IsPrimary { get; set; }
 
         internal HotLaunchButton(string text)
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
             BackColor = Color.Transparent;
             buttonText = text;
+            AccessibleName = text;
+            AccessibleRole = AccessibleRole.PushButton;
             Cursor = Cursors.Hand;
         }
 
         internal string ButtonText
         {
             get { return buttonText; }
-            set { buttonText = value; Invalidate(); }
+            set { buttonText = value; AccessibleName = value; Invalidate(); }
         }
 
         protected override void OnMouseEnter(EventArgs e) { isHovered = true; Invalidate(); base.OnMouseEnter(e); }
@@ -900,6 +903,15 @@ namespace AntigravityLauncher
                     textColor = Color.FromArgb(30, 58, 138);
                 }
 
+                if (IsPrimary) {
+                    c1 = isHovered ? Color.FromArgb(37, 99, 235) : Color.FromArgb(45, 108, 223);
+                    c2 = Color.FromArgb(29, 78, 190);
+                    border = Color.FromArgb(29, 78, 190);
+                    textColor = Color.White;
+                } else {
+                    c1 = Color.White; c2 = Color.FromArgb(248, 250, 252);
+                    border = Color.FromArgb(210, 218, 229); textColor = Color.FromArgb(51, 65, 85);
+                }
                 using (var fill = new LinearGradientBrush(r, c1, c2, 90F))
                 using (var pen = new Pen(border, 1.2F))
                 {
@@ -957,11 +969,17 @@ namespace AntigravityLauncher
         private CapsuleCloseButton closeButton;
         private Image appIcon = null;
         private string egressBadgeText = "网络待核实";
-        private string statusBadgeText = "● 运行中";
+        private string statusBadgeText = "编辑器运行中";
         private string subtitleText = "账号状态待核实";
         private string networkText = "当前网络：未知";
         private string accountText = "最近验证账号：未知（编辑器登录态未核实）";
-        private string selectedText = "Cockpit 当前选择：未知";
+        private string selectedText = "编辑器登录态未核实";
+        private bool networkVerified;
+        private bool accountMismatch;
+        private string verifiedEmail = "";
+        private string selectedEmail = "";
+        private ToolTip detailTip;
+
 
         private static string JsonValue(string json, string key)
         {
@@ -993,24 +1011,34 @@ namespace AntigravityLauncher
                 string country = JsonValue(json, "egress_country");
                 string node = JsonValue(json, "target_node");
                 bool passed = JsonValue(json, "real_model_probe") == "passed" && JsonValue(json, "status") == "ready";
-                egressBadgeText = (country == "JP" ? "日本" : country == "US" ? "美国" : country) + (passed ? " · 上次验证通过" : " · 待验证");
-                networkText = "当前网络：" + (string.IsNullOrEmpty(node) ? "未知" : node) + "  ·  独立代理 17897";
+                networkVerified = passed;
+                egressBadgeText = (country == "JP" ? "日本" : country == "US" ? "美国" : country) + (passed ? " · 已验证" : " · 待验证");
+                if (node == "CURRENT-VERIFIED-FAILOVER-CANDIDATE") node = "节点名称待同步";
+                networkText = "线路  " + (country == "JP" ? "日本" : country == "US" ? "美国" : country) + " · " + (string.IsNullOrEmpty(node) ? "节点名称待同步" : node);
                 if (File.Exists(Program.SupervisorStatePath))
-                    subtitleText = "网络状态记录 " + File.GetLastWriteTime(Program.SupervisorStatePath).ToString("MM-dd HH:mm") + " · 点击卡片暂停倒计时";
+                    subtitleText = "网络验证记录 " + File.GetLastWriteTime(Program.SupervisorStatePath).ToString("MM-dd HH:mm") + "  ·  点击空白处暂停倒计时";
                 string receipt = Path.Combine(Program.RuntimeDirectory, "launch-account-status.json");
                 if (File.Exists(receipt))
                 {
                     string email = JsonValue(File.ReadAllText(receipt), "email");
-                    if (!string.IsNullOrEmpty(email)) accountText = "最近验证账号：" + email + "（非编辑器实时登录态）";
+                    verifiedEmail = email;
                 }
                 string selected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".antigravity_cockpit", "current_account.json");
                 if (File.Exists(selected))
                 {
                     string email = JsonValue(File.ReadAllText(selected), "email");
-                    if (!string.IsNullOrEmpty(email)) selectedText = "Cockpit 当前选择：" + email;
+                    selectedEmail = email;
                 }
             }
             catch { }
+
+            accountMismatch = !string.IsNullOrEmpty(verifiedEmail) && !string.IsNullOrEmpty(selectedEmail) && !string.Equals(verifiedEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
+            accountText = "验证账号  " + (string.IsNullOrEmpty(verifiedEmail) ? "暂无记录" : verifiedEmail);
+            selectedText = accountMismatch ? "Cockpit 另选：" + selectedEmail + " · 是否已载入未核实" : "Cockpit 选择" + (string.IsNullOrEmpty(selectedEmail) ? "未知" : "一致") + " · 编辑器登录态未核实";
+            AccessibleDescription = accountText + "; " + selectedText + "; " + networkText + "; " + subtitleText;
+            detailTip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 300, ReshowDelay = 100 };
+            detailTip.SetToolTip(this, accountText + "\n" + selectedText + "\n" + networkText + "\n" + subtitleText + "\n账号来源 Cockpit；独立代理端口 17897。验证记录不代表当前请求一定成功。");
+            FormClosed += delegate { detailTip.Dispose(); };
 
             closeButton = new CapsuleCloseButton
             {
@@ -1042,15 +1070,16 @@ namespace AntigravityLauncher
             settingsButton.Click += delegate
             {
                 StopTimer();
-                btnActivate.ButtonText = "打开继续使用";
+                btnActivate.ButtonText = "进入反重力";
                 using (var sf = new LauncherSettingsForm())
                 {
                     sf.ShowDialog(this);
                 }
             };
 
-            btnActivate = new HotLaunchButton("打开继续使用 (3s)")
+            btnActivate = new HotLaunchButton("进入反重力 (3s)")
             {
+                IsPrimary = true,
                 Location = new Point(20, 158),
                 Size = new Size(252, 46)
             };
@@ -1061,7 +1090,7 @@ namespace AntigravityLauncher
                 Close();
             };
 
-            btnRepair = new HotLaunchButton("⚡ 网络自愈重连")
+            btnRepair = new HotLaunchButton("检查并切换线路")
             {
                 Location = new Point(288, 158),
                 Size = new Size(252, 46)
@@ -1082,7 +1111,7 @@ namespace AntigravityLauncher
             MouseDown += delegate(object s, MouseEventArgs me)
             {
                 StopTimer();
-                btnActivate.ButtonText = "打开继续使用";
+                btnActivate.ButtonText = "进入反重力";
                 if (me.Button == MouseButtons.Left)
                 {
                     Program.ReleaseCapture();
@@ -1126,7 +1155,7 @@ namespace AntigravityLauncher
                 }
                 else
                 {
-                    btnActivate.ButtonText = "打开继续使用 (" + remainingSeconds + "s)";
+                    btnActivate.ButtonText = "进入反重力 (" + remainingSeconds + "s)";
                 }
             };
             countdownTimer.Start();
@@ -1258,22 +1287,26 @@ namespace AntigravityLauncher
                 e.Graphics.DrawString("Antigravity", fontTitle, titleBrush, new PointF(64, 15));
             }
 
-            int currentBadgeX = 168;
+            int currentBadgeX = 174;
             using (var fontBadge = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold))
             {
                 var size1 = e.Graphics.MeasureString(egressBadgeText, fontBadge);
-                DrawPillBadge(e.Graphics, egressBadgeText, currentBadgeX, 16, Color.FromArgb(224, 238, 255), Color.FromArgb(147, 197, 253), Color.FromArgb(29, 78, 216));
+                DrawPillBadge(e.Graphics, egressBadgeText, currentBadgeX, 16, networkVerified ? Color.FromArgb(232, 247, 238) : Color.FromArgb(255, 247, 225), networkVerified ? Color.FromArgb(179, 221, 193) : Color.FromArgb(241, 211, 151), networkVerified ? Color.FromArgb(34, 115, 67) : Color.FromArgb(157, 99, 20));
                 currentBadgeX += (int)size1.Width + 14 + 8;
-                DrawPillBadge(e.Graphics, statusBadgeText, currentBadgeX, 16, Color.FromArgb(220, 252, 231), Color.FromArgb(134, 239, 172), Color.FromArgb(21, 128, 61));
+                DrawPillBadge(e.Graphics, statusBadgeText, currentBadgeX, 16, Color.FromArgb(241, 245, 249), Color.FromArgb(219, 225, 233), Color.FromArgb(71, 85, 105));
             }
 
-            using (var fontSubtitle = new Font("Microsoft YaHei UI", 9F))
-            using (var subBrush = new SolidBrush(Color.FromArgb(71, 85, 105)))
+            using (var body = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold))
+            using (var small = new Font("Microsoft YaHei UI", 8.5F))
+            using (var normalBrush = new SolidBrush(Color.FromArgb(30, 41, 59)))
+            using (var muted = new SolidBrush(Color.FromArgb(100, 116, 139)))
+            using (var warning = new SolidBrush(Color.FromArgb(166, 101, 21)))
             using (var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             {
-                string[] lines = { subtitleText, accountText, selectedText, networkText };
-                for (int i = 0; i < lines.Length; i++)
-                    e.Graphics.DrawString(lines[i], fontSubtitle, subBrush, new RectangleF(20, 48 + i * 25, Width - 40, 23), format);
+                e.Graphics.DrawString(accountText, body, normalBrush, new RectangleF(20, 62, Width - 40, 25), format);
+                e.Graphics.DrawString(selectedText, small, accountMismatch ? warning : muted, new RectangleF(20, 89, Width - 40, 22), format);
+                e.Graphics.DrawString(networkText, body, normalBrush, new RectangleF(20, 115, Width - 40, 25), format);
+                e.Graphics.DrawString(subtitleText, small, muted, new RectangleF(20, 43, Width - 40, 19), format);
             }
         }
     }

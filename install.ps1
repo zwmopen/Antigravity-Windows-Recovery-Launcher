@@ -86,6 +86,16 @@ if (-not (Test-Path -LiteralPath $sourceLauncher) -or -not (Test-Path -LiteralPa
 
 # Stop only old copies owned by this project before replacing the installed
 # runtime. This keeps the desktop entry independent of the source checkout.
+# Stop the Python daemon before the native watcher: an active daemon can
+# relaunch the watcher between Stop-Process and Copy-Item during upgrades.
+$daemonScriptPaths = @((Join-Path $app 'antigravity_smart_switch.py'), (Join-Path $installRoot 'antigravity_smart_switch.py'))
+$upgradeDaemons = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -in @('python.exe','pythonw.exe') -and $_.CommandLine -match '(?:^|\s)--watch(?:\s|$)' -and
+    ($_.CommandLine.Contains($daemonScriptPaths[0]) -or $_.CommandLine.Contains($daemonScriptPaths[1]))
+})
+foreach ($daemon in $upgradeDaemons) {
+    Stop-Process -Id ([int]$daemon.ProcessId) -Force -ErrorAction SilentlyContinue
+}
 $watcherPaths = @($sourceWatcher, $watcher, $previousWatcherPath)
 foreach ($watcherPath in ($watcherPaths | Select-Object -Unique)) {
     if ([string]::IsNullOrWhiteSpace($watcherPath)) { continue }
@@ -123,7 +133,7 @@ foreach ($processInfo in $runningTrays) {
 }
 # 停止旧版本常驻的 Python 智能看门狗守护进程，防止热更新时内存旧字节码屏蔽新修复
 $runningPyWatchers = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    ($_.Name -match '^python(w)?\.exe$') -and ($_.CommandLine -like "*antigravity_smart_switch.py*")
+    ($_.Name -match '^python(w)?\.exe$') -and ($_.CommandLine -like "*antigravity_smart_switch.py*") -and ($_.CommandLine -match "(?:^|\s)--watch(?:\s|$)")
 })
 foreach ($pyProc in $runningPyWatchers) {
     Stop-Process -Id ([int]$pyProc.ProcessId) -Force -ErrorAction SilentlyContinue
@@ -134,7 +144,19 @@ $sourceAppFull = [System.IO.Path]::GetFullPath($app).TrimEnd('\')
 $installRootFull = [System.IO.Path]::GetFullPath($installRoot).TrimEnd('\')
 if (-not [string]::Equals($sourceAppFull, $installRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
     Copy-Item -LiteralPath $sourceLauncher -Destination $launcher -Force
-    Copy-Item -LiteralPath $sourceWatcher -Destination $watcher -Force
+    # A launcher clicked during the upgrade may have just re-created its watcher.
+    # Retry only this exact installed binary, with a bounded wait for file release.
+    for ($copyAttempt = 0; $copyAttempt -lt 3; $copyAttempt++) {
+        try { Copy-Item -LiteralPath $sourceWatcher -Destination $watcher -Force; break }
+        catch {
+            if ($copyAttempt -eq 2) { throw }
+            $restartedWatchers = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.Name -ieq 'Antigravity-AccountWatcher.exe' -and [string]$_.ExecutablePath -ieq $watcher
+            })
+            foreach ($ownedWatcher in $restartedWatchers) { Stop-Process -Id ([int]$ownedWatcher.ProcessId) -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Milliseconds 400
+        }
+    }
     Copy-Item -LiteralPath $sourceLocalizationLoader -Destination $installedLocalizationLoader -Force
     Copy-Item -LiteralPath $sourceSupervisor -Destination $installedSupervisor -Force
     Copy-Item -LiteralPath $sourceLocalizationHelper -Destination $installedLocalizationHelper -Force

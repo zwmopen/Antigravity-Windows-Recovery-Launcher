@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -398,7 +398,7 @@ internal static class AntigravityCdpLocalizationLoader
             }
             if (injectedCount > 0)
             {
-                Log("injection_succeeded", "targets=" + injectedCount + " version=0.4.0");
+                Log("injection_succeeded", "targets=" + injectedCount + " version=0.4.1");
                 return 0;
             }
             Log("injection_failed", "no_targets_succeeded");
