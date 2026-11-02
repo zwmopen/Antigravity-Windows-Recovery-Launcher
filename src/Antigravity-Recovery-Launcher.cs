@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.14.0")]
-[assembly: AssemblyFileVersion("2.9.14.0")]
-[assembly: AssemblyInformationalVersion("2.9.14")]
+[assembly: AssemblyVersion("2.9.15.0")]
+[assembly: AssemblyFileVersion("2.9.15.0")]
+[assembly: AssemblyInformationalVersion("2.9.15")]
 
 namespace AntigravityLauncher
 {
@@ -141,7 +141,9 @@ namespace AntigravityLauncher
                     TraceLog("Hot launch: activating existing main window...");
                     bool activated = ActivateExistingAntigravity();
                     TraceLog("Activate result: " + activated);
-                    return 0;
+                    if (activated) return 0;
+                    TraceLog("Hot launch: no activatable window; falling back to visible launch recovery.");
+                    forceLaunch = true;
                 }
                 else if (choiceForm.Action == HotLaunchAction.Repair)
                 {
@@ -163,8 +165,14 @@ namespace AntigravityLauncher
 
             if (capsule.ExitCode == 0)
             {
-                ActivateExistingAntigravity();
+                bool activated = ActivateExistingAntigravity();
                 EnsureWatcherRunning();
+                if (!activated)
+                {
+                    TraceLog("Launch completed but no foreground window was verified.");
+                    MessageBox.Show("未能打开反重力主窗口，启动日志已记录失败原因。请重新点击启动器重试。", "反重力启动失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return 1;
+                }
             }
 
             return capsule.ExitCode;
@@ -286,12 +294,9 @@ namespace AntigravityLauncher
 
         internal static bool IsAntigravityRunning()
         {
-            try
-            {
-                Process[] procs = Process.GetProcessesByName("Antigravity");
-                return procs != null && procs.Length > 0;
-            }
-            catch { return false; }
+            // Plugins also run under Antigravity.exe in ELECTRON_RUN_AS_NODE mode.
+            // A process name alone does not mean there is an editor to enter.
+            return FindAntigravityMainWindow() != IntPtr.Zero;
         }
 
         internal static bool IsSupervisorRunning()
@@ -527,8 +532,17 @@ namespace AntigravityLauncher
                     AttachThreadInput(curThread, fgThread, false);
                 }
 
-                TraceLog("ActivateExistingAntigravity: successfully brought to foreground.");
-                return true;
+                for (int attempt = 0; attempt < 10; attempt++)
+                {
+                    if (GetForegroundWindow() == hWnd)
+                    {
+                        TraceLog("ActivateExistingAntigravity: verified foreground HWND=" + hWnd);
+                        return true;
+                    }
+                    Thread.Sleep(50);
+                }
+                TraceLog("ActivateExistingAntigravity: foreground verification failed HWND=" + hWnd);
+                return false;
             }
             catch (Exception ex)
             {

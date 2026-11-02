@@ -259,7 +259,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.9.14-core'
+            version = '2.9.15-core'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -2276,15 +2276,32 @@ function Test-RealModelGeneration {
     throw $failureKind
 }
 
+function Test-AntigravityMainProcess {
+    param([Parameter(Mandatory = $true)]$ProcessInfo)
+    if ($ProcessInfo.Name -ine 'Antigravity.exe') { return $false }
+    if ([string]::IsNullOrWhiteSpace([string]$ProcessInfo.ExecutablePath) -or
+        [string]::IsNullOrWhiteSpace([string]$ProcessInfo.CommandLine)) { return $false }
+    if ([System.IO.Path]::GetFullPath([string]$ProcessInfo.ExecutablePath) -ine
+        [System.IO.Path]::GetFullPath($AntigravityPath)) { return $false }
+    if ([int]$ProcessInfo.SessionId -ne [System.Diagnostics.Process]::GetCurrentProcess().SessionId) { return $false }
+    # Electron's Node sidecars share the official EXE, but cannot display the app.
+    $command = [string]$ProcessInfo.CommandLine
+    if ($command -match '(?i)(?:^|\s)--(?:type|import|require)(?:=|\s)' -or
+        $command -match '(?i)(?:^|\s)-(?:e|p)(?:\s|$)' -or
+        $command -match '(?i)\.(?:mjs|cjs|js)(?:["'']?)(?:\s|$)') { return $false }
+    return $true
+}
+
+function Get-AntigravityMainProcess {
+    @(Get-CimInstance Win32_Process -Filter "Name = 'Antigravity.exe'" -ErrorAction SilentlyContinue | Where-Object {
+        Test-AntigravityMainProcess -ProcessInfo $_
+    })
+}
+
 function Start-AntigravityBeforeModelGate {
     if (-not $PrelaunchClient) { return 0 }
 
-    $normalizedAntigravityPath = [System.IO.Path]::GetFullPath($AntigravityPath)
-    $existing = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -ieq 'Antigravity.exe' -and
-        -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
-        [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedAntigravityPath
-    })
+    $existing = @(Get-AntigravityMainProcess)
     if ($existing.Count -gt 0) {
         return [int]$existing[0].ProcessId
     }
@@ -2625,7 +2642,7 @@ function Wait-AntigravityReady {
         if ($null -eq $main) {
             # Electron bootstrapping or single-instance delegation may shift the main PID.
             # Check if any active Antigravity.exe is still alive before assuming startup crash.
-            $aliveInstances = @(Get-CimInstance Win32_Process -Filter "Name = 'Antigravity.exe'" -ErrorAction SilentlyContinue)
+            $aliveInstances = @(Get-AntigravityMainProcess)
             if ($aliveInstances.Count -gt 0) {
                 $MainPid = [int]$aliveInstances[0].ProcessId
                 $main = Get-Process -Id $MainPid -ErrorAction SilentlyContinue
@@ -3049,12 +3066,7 @@ if (-not $fastStartupPassed) {
 }
 Sync-AntigravityProxySetting
 
-$normalizedAntigravityPath = [System.IO.Path]::GetFullPath($AntigravityPath)
-$existingAntigravity = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.Name -ieq 'Antigravity.exe' -and
-    -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
-    [System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $normalizedAntigravityPath
-})
+$existingAntigravity = @(Get-AntigravityMainProcess)
 $hasExistingAntigravity = $existingAntigravity.Count -gt 0
 $forceRestartRequested = ($RecoveryReason -in @('Force', 'AccountChange', 'cockpit_account_changed'))
 
@@ -3073,7 +3085,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
         Show-ProxyNotification -Event 'recovery_success' -Values @{ region = $egressCountry; node = $nodeName; rtt = $script:LastProbeRttMs }
     }
 } else {
-    Stop-ExistingAntigravity
+    if ($forceRestartRequested) { Stop-ExistingAntigravity }
 
     $previousEnvironment = @{}
     foreach ($name in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')) {
@@ -3165,7 +3177,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.9.14-core'
+    version = '2.9.15-core'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId

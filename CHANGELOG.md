@@ -1,4 +1,13 @@
-﻿## v2.9.14 斜杠菜单双语命令名（2026-11-02）
+﻿## v2.9.15 修复进入反重力无反应（2026-11-02）
+
+- 现场日志：14:20 两次点击 Activate=False/Find HWND=0；14:22 恢复流程把旧插件 sidecar PID29412 误记为 live attached。四个残留 Antigravity.exe 实际为 --import=...register_loader.js 的 Node 插件，没有主窗口。
+- 热入口按可激活窗口判断，不按同名进程数量判断；激活失败继续显示恢复胶囊；前台窗口真实核验后才记录成功，最终失败明确提示，不再静默退出。
+- 恢复器主进程识别统一要求官方路径、当前会话、可读命令行，排除 --import/--require/--type、Node 脚本和 -e/-p；预启动、热接入和启动期间PID接管共用。普通冷启动不再强杀插件进程，显式强制重启入口保留。
+- 主窗口已恢复（本轮PID19664）。真实按钮鼠标点击：卡片退出、前台PID19664；最小化后默认5秒倒计时：exit0、已还原、前台PID19664。未发送模型消息、切号或编辑草稿。此前用户发起的网络修复已结束，真实模型门禁记录通过。
+- 回归：client-process-identity、startup-login-prelaunch、proxy-start-order、launcher-ui、supervisor-state-contract、编译卡片状态与100/150/200% DPI通过。初次恢复尝试曾出现官方启动失败对话框并退出；第二次启动已成功，不能把所有官方启动失败都归于进程误判。
+- 既有 GUI 未提交修改不纳入提交或发行。
+
+## v2.9.14 斜杠菜单双语命令名（2026-11-02）
 
 - 按用户截图要求，八个菜单标题显示英文原名（中文）：btw（顺便问）、goal（目标）、compact（压缩对话）、schedule（定时任务）、browser（浏览器）、plan（规划）、grill-me（深入访谈）、teamwork（团队协作）。plan 不再误显示成“套餐计划”。
 - 仅匹配 role=option 内的 menu-option-label；不改命令值、事件处理器、输入值或草稿。保留右侧中文说明；未知插件命令名保持原样。
