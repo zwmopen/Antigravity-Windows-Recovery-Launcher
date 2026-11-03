@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.15.0")]
-[assembly: AssemblyFileVersion("2.9.15.0")]
-[assembly: AssemblyInformationalVersion("2.9.15")]
+[assembly: AssemblyVersion("2.9.16.0")]
+[assembly: AssemblyFileVersion("2.9.16.0")]
+[assembly: AssemblyInformationalVersion("2.9.16")]
 
 namespace AntigravityLauncher
 {
@@ -139,6 +139,11 @@ namespace AntigravityLauncher
                 if (choiceForm.Action == HotLaunchAction.Activate)
                 {
                     TraceLog("Hot launch: activating existing main window...");
+                    if (choiceForm.AccountMismatch && !string.IsNullOrEmpty(choiceForm.SelectedEmail))
+                    {
+                        TraceLog("Hot launch: account mismatch detected; triggering smart switch to " + choiceForm.SelectedEmail);
+                        TriggerSmartSwitch(choiceForm.SelectedEmail);
+                    }
                     bool activated = ActivateExistingAntigravity();
                     TraceLog("Activate result: " + activated);
                     if (activated) return 0;
@@ -255,6 +260,28 @@ namespace AntigravityLauncher
                 if (File.Exists(c)) return c;
             }
             return "pythonw.exe";
+        }
+
+        internal static void TriggerSmartSwitch(string targetEmail)
+        {
+            try
+            {
+                string pyScript = Path.Combine(AppDirectory, "antigravity_smart_switch.py");
+                if (!File.Exists(pyScript)) return;
+                string pyw = ResolvePythonw();
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = pyw,
+                    Arguments = "\"" + pyScript + "\" --target \"" + targetEmail + "\" --force",
+                    WorkingDirectory = AppDirectory,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+            }
+            catch (Exception ex)
+            {
+                TraceLog("TriggerSmartSwitch error: " + ex.Message);
+            }
         }
 
         internal static void EnsureQuotaWatcherRunning()
@@ -985,6 +1012,8 @@ namespace AntigravityLauncher
     internal class AntigravityHotLaunchChoiceForm : Form
     {
         internal HotLaunchAction Action { get; private set; }
+        internal bool AccountMismatch { get { return accountMismatch; } }
+        internal string SelectedEmail { get { return selectedEmail; } }
         private int remainingSeconds = 5;
         private float uiScale = 1F;
         private Rectangle Px(int x, int y, int width, int height) {
@@ -1103,14 +1132,14 @@ namespace AntigravityLauncher
             settingsButton.Click += delegate
             {
                 StopTimer();
-                btnActivate.ButtonText = "进入反重力";
+                btnActivate.ButtonText = accountMismatch ? "同步切号并进入" : "进入反重力";
                 using (var sf = new LauncherSettingsForm())
                 {
                     sf.ShowDialog(this);
                 }
             };
 
-            btnActivate = new HotLaunchButton("进入反重力 (5s)")
+            btnActivate = new HotLaunchButton(accountMismatch ? "同步切号并进入 (5s)" : "进入反重力 (5s)")
             {
                 IsPrimary = true,
                 Location = new Point(20, 194),
@@ -1144,7 +1173,7 @@ namespace AntigravityLauncher
             MouseDown += delegate(object s, MouseEventArgs me)
             {
                 StopTimer();
-                btnActivate.ButtonText = "进入反重力";
+                btnActivate.ButtonText = accountMismatch ? "同步切号并进入" : "进入反重力";
                 if (me.Button == MouseButtons.Left)
                 {
                     Program.ReleaseCapture();
@@ -1188,7 +1217,7 @@ namespace AntigravityLauncher
                 }
                 else
                 {
-                    btnActivate.ButtonText = "进入反重力 (" + remainingSeconds + "s)";
+                    btnActivate.ButtonText = (accountMismatch ? "同步切号并进入 (" : "进入反重力 (") + remainingSeconds + "s)";
                 }
             };
             if (uiScale != 1F) Scale(new SizeF(uiScale, uiScale));
@@ -1219,7 +1248,11 @@ namespace AntigravityLauncher
                     if (!string.IsNullOrEmpty(liveEmail)) {
                         accountText = "软件内账号  " + liveEmail;
                         accountMismatch = !string.IsNullOrEmpty(selectedEmail) && !string.Equals(liveEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
-                        selectedText = accountMismatch ? "Cockpit 另选：" + selectedEmail + " · 与软件内账号不同" : "已从运行中的反重力读取" + (string.IsNullOrEmpty(selectedEmail) ? "" : " · Cockpit 选择一致");
+                        selectedText = accountMismatch ? "Cockpit 另选：" + selectedEmail + " · 点击或倒计时将自动同步切号" : "已从运行中的反重力读取" + (string.IsNullOrEmpty(selectedEmail) ? "" : " · Cockpit 选择一致");
+                        if (accountMismatch) {
+                            if (countdownTimer != null) btnActivate.ButtonText = "同步切号并进入 (" + remainingSeconds + "s)";
+                            else btnActivate.ButtonText = "同步切号并进入";
+                        }
                     } else {
                         accountText = "最近验证账号  " + (string.IsNullOrEmpty(verifiedEmail) ? "暂无记录" : verifiedEmail);
                         selectedText = "暂时读不到软件内账号 · 可进入软件设置查看";
@@ -1233,7 +1266,7 @@ namespace AntigravityLauncher
 
         internal void PauseCountdown() {
             StopTimer();
-            btnActivate.ButtonText = "进入反重力";
+            btnActivate.ButtonText = accountMismatch ? "同步切号并进入" : "进入反重力";
         }
 
         private void StopTimer()

@@ -3996,6 +3996,9 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
         if hot_restart_success:
             logger.info("✅ [步骤 3/5 降级完成] 语言服务热重启成功，编辑器窗口完好，跳过步骤 4（无需重新拉起启动器）")
         else:
+            if not is_antigravity_running():
+                logger.info("Antigravity 当前未运行，系统凭据与 Cockpit 状态已写入，启动时将自动加载。")
+                return "switched"
             logger.warning("⚠️ [步骤 3/5] 热重启未就绪，自动降级为完整重启方案...")
             logger.info(f"🚪 [步骤 3/5 降级] 退出反重力：正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
             gracefully_exit_antigravity(timeout_seconds=5.0)
@@ -4630,7 +4633,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
                 loop_count = 0
                 continue
 
-            # 2.5 人工手动切号感知与锚点对齐 (解决机制缺失2：避免二段误杀)
+            # 2.5 人工手动切号感知与锚点对齐 (Cockpit 为真源标准，检测到外部切号主动同步)
             try:
                 current_id, accounts = get_all_accounts_and_quotas()
                 curr_acc = next((a for a in accounts if a["is_current"]), None)
@@ -4641,15 +4644,20 @@ def run_watch_daemon(threshold=5.0, interval=30):
                         with open(WATCHER_CURRENT_ACCOUNT_FILE, "r", encoding="utf-8") as f:
                             handled_acc_id = f.read().strip()
                     pending = read_pending_switch()
-                    if handled_acc_id and current_id != handled_acc_id and not pending:
-                        logger.info(f"💡 [人工切号感知] 检测到用户在 Cockpit 手动切号至: {curr_email} (ID: {current_id})")
-                        logger.info("   正在平滑同步本地锚点 watcher-current-account.txt，彻底抑制二段误杀！")
+                    if not handled_acc_id:
                         with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as f:
                             f.write(current_id.strip())
+                    elif current_id != handled_acc_id and not pending:
+                        logger.info(f"💡 [Cockpit 切号感知] 检测到 Cockpit 账号发生切换至: {curr_email} (ID: {current_id})")
+                        logger.info("   Cockpit 为真源标准，正在启动无感热切号与凭据同步，确保编辑器与 Cockpit 100% 物理对齐...")
                         reset_language_server_log_pos()
                         remove_quarantined_account(current_id)
+                        switch_result = run_smart_switch(target=current_id, force=True)
+                        if switch_result == "switched":
+                            logger.info(f"✅ Cockpit 同步切换完成，已对齐至 {curr_email}")
+                            time.sleep(3)
             except Exception as e:
-                logger.debug(f"人工切号感知异常: {e}")
+                logger.debug(f"Cockpit 切号感知异常: {e}")
 
             # 3. 常规磁盘配额轮询
             now_running = is_antigravity_running()

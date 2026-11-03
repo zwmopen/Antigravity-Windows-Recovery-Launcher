@@ -1,4 +1,19 @@
-﻿## v2.9.15 修复进入反重力无反应（2026-11-02）
+## v2.9.16 Cockpit 账号主动同步切号与热卡片无感直切闭环（2026-11-03）
+
+- 现场根因：
+  1. 用户在 Cockpit 切换至新账号后，Cockpit 仅写入自身 accounts.json/current_account.json，不负责向 Windows Credential Manager 注入凭据或通知 Antigravity 2.0。
+  2. 原守护神 Section 2.5 捕获到 Cockpit 切换后，仅同步落盘 watcher-current-account.txt 抑制 Watcher 二段误杀，未调用 run_smart_switch；导致 C# Watcher 误以为账号已处理，两者均未执行切号，编辑器滞留旧账号直至 429 报错。
+  3. 热启动卡片检测到 accountMismatch 后仅在界面显示黄字提示，主按钮仍为“进入反重力”，倒计时结束或点击仅将前台窗口拉起，未向编辑器执行切号同步。
+- 闭环修复：
+  1. smart-quota-watcher 守护进程 Section 2.5 升级：捕获 Cockpit current_id 变动后，以 Cockpit 为真源标准，直接触发 run_smart_switch(target=current_id, force=True)，通过 CDP + BroadcastChannel + Windows 凭据直写执行 0 杀进程无感切号，热重载 Language Server 并精准续接“继续”。
+  2. 保护非运行态：若 Antigravity 未运行，run_smart_switch 仅落盘系统凭据与状态文件，不误唤起启动器或冷启动编辑器。
+  3. 热启动卡片主动同步：AntigravityHotLaunchChoiceForm 在 accountMismatch 为 true 时，主按钮动态变为“同步切号并进入 (5s)”；点击或倒计时结束时由 Program.TriggerSmartSwitch 在后台异步派发无感切号至 Cockpit 选定账号，彻底消除卡片“只看不切”断点。
+- 验收结果：
+  1. 真实 429 自动秒切已于 14:02:51 验证通过：Language Server 429 捕获后毫秒级下发免杀更新，新 Language Server PID=22192 启动，断点续接 1/1 派发“继续”并复活子智能体，实机 GetUserStatus 成功回读 orlandocardozo706@gmail.com。
+  2. 测试通过：hot-card-state、hot-card-dpi（100/150/200%）、runtime-identity（5/5 OK）、client-process-identity、smart-switch-priority（6/6 OK）。
+  3. 部署核对：安装目录 Antigravity-Recovery-Launcher.exe 版本已更新为 2.9.16.0；守护神 PID 38300 后台就绪，当前在用账号与 Cockpit 一致（orlandocardozo706@gmail.com）。
+
+## v2.9.15 修复进入反重力无反应（2026-11-02）
 
 - 现场日志：14:20 两次点击 Activate=False/Find HWND=0；14:22 恢复流程把旧插件 sidecar PID29412 误记为 live attached。四个残留 Antigravity.exe 实际为 --import=...register_loader.js 的 Node 插件，没有主窗口。
 - 热入口按可激活窗口判断，不按同名进程数量判断；激活失败继续显示恢复胶囊；前台窗口真实核验后才记录成功，最终失败明确提示，不再静默退出。
