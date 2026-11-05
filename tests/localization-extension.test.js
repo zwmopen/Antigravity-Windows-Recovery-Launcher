@@ -13,7 +13,7 @@ const contentSource = fs.readFileSync(path.join(extensionRoot, 'content.js'), 'u
 const loaderSource = fs.readFileSync(path.join(projectRoot, 'src', 'Antigravity-CdpLocalizationLoader.cs'), 'utf8');
 
 assert.strictEqual(manifest.manifest_version, 3);
-assert.strictEqual(manifest.version, '0.4.6');
+assert.strictEqual(manifest.version, '0.4.7');
 assert.deepStrictEqual(manifest.content_scripts[0].js, ['translation-core.js', 'content.js']);
 assert.ok(manifest.content_scripts[0].matches.includes('https://127.0.0.1/*'));
 assert.ok(contentSource.includes('DEBOUNCE_MS = 80'));
@@ -50,6 +50,9 @@ const requiredTranslations = {
   'Built In': '内置',
   'Custom Skills': '自定义技能',
   'Skills & Rules': '技能与规则',
+  'Notice': '提示',
+  'Unavailable': '不可用',
+  '5h limit': '5小时额度',
   'New Conversation': '新建对话',
   'Automations': '自动化任务',
   'Customizations': '自定义扩展',
@@ -95,6 +98,9 @@ for (const [source, target] of Object.entries(requiredTranslations)) {
   }
 }
 
+assert.strictEqual(core.translateUiText('31% left'), '剩余 31%');
+assert.strictEqual(core.translateUiText('Resets in 5d 22h'), '5天 22小时后重置');
+assert.strictEqual(core.translateUiText('Resets in 1h 3m'), '1小时 3分钟后重置');
 assert.strictEqual(
   core.translateUiText('New Conversation / always-proceed'),
   '新建对话 / always-proceed'

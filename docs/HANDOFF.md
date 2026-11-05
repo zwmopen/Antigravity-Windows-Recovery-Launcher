@@ -1,3 +1,23 @@
+## v2.9.25 模型选择与用量配额浮窗全量汉化交付（2026-11-05）
+
+- 现场根因：
+  1. 用户点击底部模型选择器时，弹出的模型列表与右侧用量配额明细浮窗中，存在多处英文遗留：
+     - 模型状态徽标：`Notice`（模型提示）与 `Unavailable`（暂不可用）；
+     - 配额类型行：`5h limit`（5小时额度）；
+     - 配额百分比：`31% left`、`56% left`、`96% left`、`93% left`；
+     - 重置倒计时：`Resets in 5d 22h`、`Resets in 1h 3m`、`Resets in 6d 20h`。
+  2. 根本机理：Radix UI 的 Popper 浮层容器（`.agy-overlay`、`[data-radix-popper-content-wrapper]`）未被纳入 `isUiTextElement` 作用域白名单，导致非 button/menuitem 纯文本节点被回退为纯文本模式，未执行动态正则和 UI 字典转译。
+- 闭环修复：
+  1. 浮层容器纳入 UI 作用域白名单（`content.js`）：
+     - `isUiTextElement` 与 `isInstantUiNode` 扩展选择器支持：`[class*="overlay" i]`, `[class*="popover" i]`, `[class*="dropdown" i]`, `[data-radix-popper-content-wrapper]`, `[data-radix-menu-content]`，确保悬浮窗与抽屉文本 100% 纳入 UI 翻译通道。
+  2. 字典与动态规则扩充（`translation-core.js` v0.4.7）：
+     - 静态 UI 词条：`Notice` -> `提示`、`Unavailable` -> `不可用`、`5h limit` -> `5小时额度`；
+     - 动态配额百分比正则：`/^(\d+(?:\.\d+)?%?)\s+left$/i` -> `剩余 $1`；
+     - 动态重置倒计时正则：`/^(?:Resets|Refreshes) in (.+?)\.?$/i` -> `formatRelativeTime($1) + '后重置'`（如 `5天 22小时后重置`、`1小时 3分钟后重置`）。
+  3. 自动化测试与实机验证：
+     - 测试套件更新至 `0.4.7`，全量测试 100% PASS；
+     - `build.ps1` 与 `install.ps1` 完成重新编译安装，CDP 热注入实机回读，悬浮窗全部项目实时转译为简体中文。
+
 ## v2.9.24 全量 82 个技能/插件双语标签与描述汉化 + Customizations 表面全面本地化（2026-11-05）
 
 - 现场根因：

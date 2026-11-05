@@ -1,7 +1,7 @@
 ﻿(function (root) {
   'use strict';
 
-  var VERSION = '0.4.6';
+  var VERSION = '0.4.7';
 
   // Full phrases are deliberately separate from exact UI labels. This
   // prevents words such as Settings, On, Model, and Rules from leaking
@@ -5267,6 +5267,21 @@
     ['Your Plan:', '您的方案：'],
     ['Your Plan', '您的方案'],
     ['Your plan', '您的方案'],
+    ['Notice', '提示'],
+    ['Unavailable', '不可用'],
+    ['5h limit', '5小时额度'],
+    ['5h Limit', '5小时额度'],
+    ['5-hour limit', '5小时额度'],
+    ['5 hour limit', '5小时额度'],
+    ['24h limit', '24小时额度'],
+    ['Daily limit', '每日额度'],
+    ['Weekly limit', '周额度'],
+    ['Monthly limit', '月度额度'],
+    ['Experimental', '实验性'],
+    ['Limited availability', '受限可用'],
+    ['Rate limit reached', '已达速率限制'],
+    ['Higher rate limits', '更高调用限额'],
+
     ['Marketplace', '市场'],
     ['Installed', '已安装'],
     ['Skills & Rules', '技能与规则'],
@@ -5985,6 +6000,13 @@
   }
 
   var DYNAMIC_PATTERNS = Object.freeze([
+    { pattern: /^(\d+(?:\.\d+)?%?)\s+left$/i, replace: function (_m, n) { return '剩余 ' + n; } },
+    { pattern: /^(\d+)\s*(?:h|hour|hours?)\s+limit$/i, replace: function (_m, n) { return n + ' 小时额度'; } },
+    { pattern: /^(\d+)\s*(?:d|day|days?)\s+limit$/i, replace: function (_m, n) { return n + ' 天额度'; } },
+    { pattern: /^(\d+)\s*(?:m|min|minutes?)\s+limit$/i, replace: function (_m, n) { return n + ' 分钟额度'; } },
+    { pattern: /^(?:Resets|Refreshes) in\s+(?:less than a minute|<1m|\u003c1m)$/i, replace: function () { return '少于 1 分钟后重置'; } },
+    { pattern: /^(?:Resets|Refreshes) in (.+?)\.?$/i, replace: function (_m, time) { return formatRelativeTime(time) + '后重置'; } },
+    { pattern: /^Resets (.+)$/i, replace: function (_m, time) { return formatRelativeTime(time) + '重置'; } },
     { pattern: /^(?:Thought for|深度思考)\s*(\d+)\s*m(?:in(?:utes?)?)?(?:\s*(\d+)\s*s(?:econds?)?)?$/i, replace: function (_m, mins, secs) { return '深度思考 ' + mins + ' 分钟' + (secs ? ' ' + secs + ' 秒' : ''); } },
     { pattern: /^(?:Thought for|深度思考)\s*(\d+)\s*s(?:econds?)?$/i, replace: function (_m, n) { return '深度思考 ' + n + ' 秒'; } },
     { pattern: /^(?:Thought for|深度思考)\s*(\d+)\s*h(?:ours?)?$/i, replace: function (_m, n) { return '深度思考 ' + n + ' 小时'; } },

@@ -156,6 +156,7 @@
   function isUiTextElement(element) {
     if (!element || isProtectedTextElement(element)) return false;
     return !!closest(element,
+      '[class*="overlay" i], [class*="popover" i], [class*="dropdown" i], [data-radix-popper-content-wrapper], [data-radix-menu-content], ' +
       'button, a[href], [role="button"], [role="menuitem"], [role="menuitemcheckbox"], ' +
       '[role="menuitemradio"], [role="menu"], [role="option"], [role="tab"], ' +
       'label, h1, h2, h3, h4, h5, h6, [role="heading"], [data-testid^="settings-nav-item-"], ' +
