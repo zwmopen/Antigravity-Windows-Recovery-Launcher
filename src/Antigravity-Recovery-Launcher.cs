@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -139,10 +139,11 @@ namespace AntigravityLauncher
                 if (choiceForm.Action == HotLaunchAction.Activate)
                 {
                     TraceLog("Hot launch: activating existing main window...");
-                    if (choiceForm.AccountMismatch && !string.IsNullOrEmpty(choiceForm.SelectedEmail))
+                    string targetToSwitch = !string.IsNullOrEmpty(choiceForm.BestTargetEmail) ? choiceForm.BestTargetEmail : choiceForm.SelectedEmail;
+                    if ((choiceForm.AccountMismatch || choiceForm.NeedSwitch) && !string.IsNullOrEmpty(targetToSwitch))
                     {
-                        TraceLog("Hot launch: account mismatch detected; triggering smart switch to " + choiceForm.SelectedEmail);
-                        TriggerSmartSwitch(choiceForm.SelectedEmail);
+                        TraceLog("Hot launch: account switch required (mismatch=" + choiceForm.AccountMismatch + ", needSwitch=" + choiceForm.NeedSwitch + "); triggering smart switch to " + targetToSwitch);
+                        TriggerSmartSwitch(targetToSwitch);
                     }
                     bool activated = ActivateExistingAntigravity();
                     TraceLog("Activate result: " + activated);
@@ -911,6 +912,7 @@ namespace AntigravityLauncher
         private bool isPressed = false;
         private string buttonText;
         internal bool IsPrimary { get; set; }
+        internal bool IsWarning { get; set; }
 
         internal HotLaunchButton(string text)
         {
@@ -954,10 +956,17 @@ namespace AntigravityLauncher
                 }
 
                 if (IsPrimary) {
-                    c1 = isHovered ? Color.FromArgb(37, 99, 235) : Color.FromArgb(45, 108, 223);
-                    c2 = Color.FromArgb(29, 78, 190);
-                    border = Color.FromArgb(29, 78, 190);
-                    textColor = Color.White;
+                    if (IsWarning) {
+                        c1 = isHovered ? Color.FromArgb(249, 115, 22) : Color.FromArgb(234, 88, 12);
+                        c2 = Color.FromArgb(194, 65, 12);
+                        border = Color.FromArgb(194, 65, 12);
+                        textColor = Color.White;
+                    } else {
+                        c1 = isHovered ? Color.FromArgb(37, 99, 235) : Color.FromArgb(45, 108, 223);
+                        c2 = Color.FromArgb(29, 78, 190);
+                        border = Color.FromArgb(29, 78, 190);
+                        textColor = Color.White;
+                    }
                 } else {
                     c1 = Color.White; c2 = Color.FromArgb(248, 250, 252);
                     border = Color.FromArgb(210, 218, 229); textColor = Color.FromArgb(51, 65, 85);
@@ -1013,7 +1022,9 @@ namespace AntigravityLauncher
     {
         internal HotLaunchAction Action { get; private set; }
         internal bool AccountMismatch { get { return accountMismatch; } }
+        internal bool NeedSwitch { get { return needSwitch; } }
         internal string SelectedEmail { get { return selectedEmail; } }
+        internal string BestTargetEmail { get { return bestTargetEmail; } }
         private int remainingSeconds = 5;
         private float uiScale = 1F;
         private Rectangle Px(int x, int y, int width, int height) {
@@ -1027,14 +1038,23 @@ namespace AntigravityLauncher
         private Image appIcon = null;
         private string egressBadgeText = "网络待核实";
         private string statusBadgeText = "编辑器运行中";
+        private string quotaBadgeText = "";
+        private Color quotaBadgeBg = Color.FromArgb(232, 247, 238);
+        private Color quotaBadgeBorder = Color.FromArgb(179, 221, 193);
+        private Color quotaBadgeFg = Color.FromArgb(34, 115, 67);
         private string subtitleText = "账号状态待核实";
         private string networkText = "当前网络：未知";
         private string accountText = "最近验证账号：未知（软件内实际账号待确认）";
         private string selectedText = "软件内实际账号待确认";
         private bool networkVerified;
         private bool accountMismatch;
+        private bool needSwitch;
+        private bool isExhausted;
+        private bool isPro = true;
         private string verifiedEmail = "";
         private string selectedEmail = "";
+        private string bestTargetEmail = "";
+        private string bestTargetPlan = "";
         private ToolTip detailTip;
 
 
@@ -1079,8 +1099,44 @@ namespace AntigravityLauncher
                 string receipt = Path.Combine(Program.RuntimeDirectory, "launch-account-status.json");
                 if (File.Exists(receipt))
                 {
-                    string email = JsonValue(File.ReadAllText(receipt), "email");
-                    verifiedEmail = email;
+                    string rJson = File.ReadAllText(receipt);
+                    verifiedEmail = JsonValue(rJson, "email");
+                    string h5Str = JsonValue(rJson, "gemini_5h");
+                    string wStr = JsonValue(rJson, "gemini_weekly");
+                    isPro = JsonValue(rJson, "is_pro") != "False";
+                    isExhausted = JsonValue(rJson, "is_exhausted") == "True";
+                    needSwitch = isExhausted || JsonValue(rJson, "need_switch") == "True";
+                    bestTargetEmail = JsonValue(rJson, "best_target_email");
+                    bestTargetPlan = JsonValue(rJson, "best_target_plan");
+                    double h5 = 0; double.TryParse(h5Str, out h5);
+                    double w = 0; double.TryParse(wStr, out w);
+                    string planTag = isPro ? "PRO" : "FREE";
+                    if (isExhausted || (h5 <= 5.0 && w <= 5.0))
+                    {
+                        isExhausted = true;
+                        needSwitch = true;
+                        quotaBadgeText = "额度已耗尽 (0%)";
+                        quotaBadgeBg = Color.FromArgb(254, 242, 242);
+                        quotaBadgeBorder = Color.FromArgb(252, 165, 165);
+                        quotaBadgeFg = Color.FromArgb(220, 38, 38);
+                        subtitleText = "当前账号算力已耗尽 · 倒计时或点击将自动切号接力";
+                    }
+                    else if (h5 <= 15.0)
+                    {
+                        quotaBadgeText = planTag + " · 低额预警 " + Math.Round(h5) + "%";
+                        quotaBadgeBg = Color.FromArgb(255, 247, 237);
+                        quotaBadgeBorder = Color.FromArgb(253, 186, 116);
+                        quotaBadgeFg = Color.FromArgb(194, 65, 12);
+                        subtitleText = "当前账号配额较低 · 点击空白处可暂停倒计时";
+                    }
+                    else
+                    {
+                        quotaBadgeText = planTag + " · 额度充裕 " + Math.Round(h5) + "%";
+                        quotaBadgeBg = Color.FromArgb(236, 253, 245);
+                        quotaBadgeBorder = Color.FromArgb(167, 243, 208);
+                        quotaBadgeFg = Color.FromArgb(5, 150, 105);
+                        subtitleText = "网络与算力大盘监控 · 点击空白处可暂停倒计时";
+                    }
                 }
                 string selected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".antigravity_cockpit", "current_account.json");
                 if (File.Exists(selected))
@@ -1092,8 +1148,11 @@ namespace AntigravityLauncher
             catch { }
 
             accountMismatch = !string.IsNullOrEmpty(verifiedEmail) && !string.IsNullOrEmpty(selectedEmail) && !string.Equals(verifiedEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
-            accountText = "验证账号  " + (string.IsNullOrEmpty(verifiedEmail) ? "暂无记录" : verifiedEmail);
-            selectedText = accountMismatch ? "Cockpit 另选：" + selectedEmail + " · 是否已载入待确认" : "Cockpit 选择" + (string.IsNullOrEmpty(selectedEmail) ? "未知" : "一致") + " · 软件内实际账号待确认";
+            if (accountMismatch) needSwitch = true;
+            accountText = "正在读取软件内账号…";
+            selectedText = (needSwitch || accountMismatch)
+                ? ("⚡ 优选接力  目标：" + (!string.IsNullOrEmpty(bestTargetEmail) ? bestTargetEmail : selectedEmail) + " · 倒计时或点击自动切号")
+                : "✅ 状态评估  当前在用账号配额充足健康，保持在用";
             AccessibleDescription = accountText + "; " + selectedText + "; " + networkText + "; " + subtitleText;
             accountText = "正在读取软件内账号…";
             selectedText = "从当前运行的反重力读取，不改变账号";
@@ -1139,9 +1198,10 @@ namespace AntigravityLauncher
                 }
             };
 
-            btnActivate = new HotLaunchButton(accountMismatch ? "同步切号并进入 (5s)" : "进入反重力 (5s)")
+            btnActivate = new HotLaunchButton((needSwitch || accountMismatch) ? "优选切号并进入 (5s)" : "进入反重力 (5s)")
             {
                 IsPrimary = true,
+                IsWarning = (needSwitch || accountMismatch),
                 Location = new Point(20, 194),
                 Size = new Size(252, 46)
             };
@@ -1217,7 +1277,7 @@ namespace AntigravityLauncher
                 }
                 else
                 {
-                    btnActivate.ButtonText = (accountMismatch ? "同步切号并进入 (" : "进入反重力 (") + remainingSeconds + "s)";
+                    btnActivate.ButtonText = ((needSwitch || accountMismatch) ? "优选切号并进入 (" : "进入反重力 (") + remainingSeconds + "s)";
                 }
             };
             if (uiScale != 1F) Scale(new SizeF(uiScale, uiScale));
@@ -1243,19 +1303,72 @@ namespace AntigravityLauncher
                     }
                 } catch { }
                 if (IsDisposed || Disposing || !IsHandleCreated) return;
+                string liveJson = "";
+                try {
+                    string helper = Path.Combine(Program.AppDirectory, "antigravity_runtime_identity.py");
+                    string pythonw = Program.ResolvePythonw();
+                    string python = Path.Combine(Path.GetDirectoryName(pythonw) ?? "", "python.exe");
+                    var info = new ProcessStartInfo(python, "\"" + helper + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                    using (var process = Process.Start(info)) {
+                        var output = process.StandardOutput.ReadToEndAsync();
+                        if (process.WaitForExit(3500) && output.Wait(300)) liveJson = output.Result;
+                    }
+                } catch { }
+
+                if (IsDisposed || Disposing || !IsHandleCreated) return;
                 try { BeginInvoke(new Action(delegate {
                     if (IsDisposed) return;
-                    if (!string.IsNullOrEmpty(liveEmail)) {
-                        accountText = "软件内账号  " + liveEmail;
-                        accountMismatch = !string.IsNullOrEmpty(selectedEmail) && !string.Equals(liveEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
-                        selectedText = accountMismatch ? "Cockpit 另选：" + selectedEmail + " · 点击或倒计时将自动同步切号" : "已从运行中的反重力读取" + (string.IsNullOrEmpty(selectedEmail) ? "" : " · Cockpit 选择一致");
-                        if (accountMismatch) {
-                            if (countdownTimer != null) btnActivate.ButtonText = "同步切号并进入 (" + remainingSeconds + "s)";
-                            else btnActivate.ButtonText = "同步切号并进入";
+                    if (!string.IsNullOrEmpty(liveJson)) {
+                        string liveEm = JsonValue(liveJson, "email");
+                        if (!string.IsNullOrEmpty(liveEm)) liveEmail = liveEm;
+                        string h5Str = JsonValue(liveJson, "gemini_5h");
+                        string wStr = JsonValue(liveJson, "gemini_weekly");
+                        double h5 = 0; double.TryParse(h5Str, out h5);
+                        double w = 0; double.TryParse(wStr, out w);
+                        isPro = JsonValue(liveJson, "is_pro") != "False";
+                        isExhausted = JsonValue(liveJson, "is_exhausted") == "True";
+                        if (JsonValue(liveJson, "need_switch") == "True") needSwitch = true;
+                        string bTarget = JsonValue(liveJson, "best_target_email");
+                        if (!string.IsNullOrEmpty(bTarget)) bestTargetEmail = bTarget;
+
+                        string planTag = isPro ? "PRO" : "FREE";
+                        if (isExhausted || (h5 <= 5.0 && w <= 5.0)) {
+                            isExhausted = true;
+                            needSwitch = true;
+                            quotaBadgeText = "额度已耗尽 (0%)";
+                            quotaBadgeBg = Color.FromArgb(254, 242, 242);
+                            quotaBadgeBorder = Color.FromArgb(252, 165, 165);
+                            quotaBadgeFg = Color.FromArgb(220, 38, 38);
+                        } else if (h5 <= 15.0) {
+                            quotaBadgeText = planTag + " · 低额预警 " + Math.Round(h5) + "%";
+                            quotaBadgeBg = Color.FromArgb(255, 247, 237);
+                            quotaBadgeBorder = Color.FromArgb(253, 186, 116);
+                            quotaBadgeFg = Color.FromArgb(194, 65, 12);
+                        } else {
+                            quotaBadgeText = planTag + " · 额度充裕 " + Math.Round(h5) + "%";
+                            quotaBadgeBg = Color.FromArgb(236, 253, 245);
+                            quotaBadgeBorder = Color.FromArgb(167, 243, 208);
+                            quotaBadgeFg = Color.FromArgb(5, 150, 105);
                         }
-                    } else {
-                        accountText = "最近验证账号  " + (string.IsNullOrEmpty(verifiedEmail) ? "暂无记录" : verifiedEmail);
-                        selectedText = "暂时读不到软件内账号 · 可进入软件设置查看";
+
+                        accountText = "当前在用  " + liveEmail + " (" + planTag + " · 5h: " + Math.Round(h5) + "% | 周: " + Math.Round(w) + "%)";
+                        accountMismatch = !string.IsNullOrEmpty(selectedEmail) && !string.Equals(liveEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
+                        if (accountMismatch) needSwitch = true;
+
+                        string targetShow = !string.IsNullOrEmpty(bestTargetEmail) ? bestTargetEmail : selectedEmail;
+                        if (needSwitch || accountMismatch) {
+                            selectedText = "⚡ 优选接力  目标：" + targetShow + " · 倒计时或点击自动切号";
+                            btnActivate.IsWarning = true;
+                            if (countdownTimer != null) btnActivate.ButtonText = "优选切号并进入 (" + remainingSeconds + "s)";
+                            else btnActivate.ButtonText = "优选切号并进入";
+                        } else {
+                            selectedText = "✅ 状态评估  当前在用账号配额充足健康，保持在用";
+                            btnActivate.IsWarning = false;
+                            if (countdownTimer != null) btnActivate.ButtonText = "进入反重力 (" + remainingSeconds + "s)";
+                            else btnActivate.ButtonText = "进入反重力";
+                        }
+                    } else if (!string.IsNullOrEmpty(liveEmail)) {
+                        accountText = "当前在用  " + liveEmail;
                     }
                     AccessibleDescription = accountText + "; " + selectedText + "; " + networkText;
                     detailTip.SetToolTip(this, accountText + "\n" + selectedText + "\n" + networkText + "\n" + subtitleText);
@@ -1381,12 +1494,15 @@ namespace AntigravityLauncher
                 DrawCardText(e.Graphics, "Antigravity", title, Px(64, 18, 110, 32), Color.FromArgb(20, 34, 54), false);
             int badgeX = Px(178, 0, 0, 0).X;
             badgeX = DrawStatusBadge(e.Graphics, egressBadgeText, badgeX, networkVerified ? Color.FromArgb(232, 247, 238) : Color.FromArgb(255, 247, 225), networkVerified ? Color.FromArgb(179, 221, 193) : Color.FromArgb(241, 211, 151), networkVerified ? Color.FromArgb(34, 115, 67) : Color.FromArgb(157, 99, 20));
+            if (!string.IsNullOrEmpty(quotaBadgeText)) {
+                badgeX = DrawStatusBadge(e.Graphics, quotaBadgeText, badgeX, quotaBadgeBg, quotaBadgeBorder, quotaBadgeFg);
+            }
             DrawStatusBadge(e.Graphics, statusBadgeText, badgeX, Color.FromArgb(241, 245, 249), Color.FromArgb(219, 225, 233), Color.FromArgb(71, 85, 105));
             using (var body = new Font("微软雅黑", 10F, FontStyle.Regular, GraphicsUnit.Point, 134))
             using (var small = new Font("微软雅黑", 9F, FontStyle.Regular, GraphicsUnit.Point, 134)) {
                 DrawCardText(e.Graphics, subtitleText, small, Px(20, 64, 520, 22), Color.FromArgb(85, 101, 123), false);
                 DrawCardText(e.Graphics, accountText, body, Px(20, 94, 520, 24), Color.FromArgb(23, 38, 59), false);
-                DrawCardText(e.Graphics, selectedText, small, Px(20, 124, 520, 22), accountMismatch ? Color.FromArgb(157, 99, 20) : Color.FromArgb(85, 101, 123), false);
+                DrawCardText(e.Graphics, selectedText, small, Px(20, 124, 520, 22), (needSwitch || accountMismatch) ? Color.FromArgb(194, 65, 12) : Color.FromArgb(22, 101, 52), false);
                 DrawCardText(e.Graphics, networkText, body, Px(20, 154, 520, 24), Color.FromArgb(23, 38, 59), false);
             }
         }

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Antigravity Smart Account Switcher & Smooth Launcher
 =====================================================
@@ -1195,39 +1195,89 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
             results = []
             resumed_hrefs = set()
 
-            # 1. 优先处理切号前的前台任务
+            # 1. 优先处理切号前的前台任务与会话对齐
             current_tasks = [t for t in running_tasks if t.get("is_current")]
             target_dest = full_url or target_href
-            if current_tasks or target_dest:
-                target_rel = normalize_target_path(target_dest) or (current_tasks[0].get("href") if current_tasks else None)
+            target_rel = normalize_target_path(target_dest) or (current_tasks[0].get("href") if current_tasks else None)
+
+            # 严格嗅探当前窗口路由与消息状态，防止向空白新建对话发送"继续"
+            try:
+                chk_route_res = await cdp_call("Runtime.evaluate", {
+                    "expression": """(() => {
+                        const p = window.location.pathname || '';
+                        const isBlank = (p === '/' || p === '/c' || p === '/c/');
+                        const msgCount = document.querySelectorAll('div[class*="message"], div[class*="turn"], div[class*="prose"]').length;
+                        return { pathname: p, isBlank: isBlank, msgCount: msgCount };
+                    })()""",
+                    "returnByValue": True
+                })
+                route_info = chk_route_res.get("result", {}).get("result", {}).get("value") or {}
+                is_blank_page = route_info.get("isBlank") or (route_info.get("msgCount", 0) == 0 and route_info.get("pathname", "") in ("/", "/c", "/c/"))
+            except Exception:
+                is_blank_page = False
+
+            # 若当前停留在空白新建会话，必须先重定向恢复真实工作会话；若无法找到则坚决静默，不发"继续"
+            if is_blank_page:
+                if not target_rel or target_rel in ("/", "/c", "/c/"):
+                    recent_brains = get_recent_brain_active_conversations(max_age_seconds=300)
+                    if recent_brains:
+                        target_rel = recent_brains[0]["href"]
+                        logger.info(f"🧭 [会话自愈对齐] 页面停留在空白新建会话，自动重定向至最近活跃断点会话: {target_rel}")
+
                 if target_rel and target_rel not in ("/", "/c", "/c/") and "/c/" in target_rel:
                     align_url_js = f"""
                     (() => {{
-                        const curRel = (window.location.pathname || '') + (window.location.search || '');
                         const target = {json.dumps(target_rel)};
-                        if (decodeURIComponent(curRel) !== decodeURIComponent(target) && !curRel.includes(target)) {{
-                            if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
-                                window.__TSR_ROUTER__.navigate({{ href: target }});
-                            }} else {{
-                                window.location.href = window.location.origin + target;
-                            }}
-                            return true;
+                        if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                            window.__TSR_ROUTER__.navigate({{ href: target }});
+                        }} else {{
+                            window.location.href = window.location.origin + target;
                         }}
-                        return false;
+                        return true;
                     }})()
                     """
-                    align_res = await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
-                    if align_res.get("result", {}).get("result", {}).get("value"):
-                        logger.info(f"🧭 [会话对齐] 正在对齐恢复切号前真实工作会话 ({target_rel})...")
-                        _align_t0 = time.time()
-                        while time.time() - _align_t0 < 1.2:
-                            _ed_chk = await cdp_call("Runtime.evaluate", {
-                                "expression": "!!document.querySelector('[data-testid=\"agent-input-box\"] [data-lexical-editor=\"true\"], [data-lexical-editor=\"true\"], div[contenteditable=\"true\"]')",
-                                "returnByValue": True
-                            })
-                            if _ed_chk.get("result", {}).get("result", {}).get("value"):
-                                break
-                            await asyncio.sleep(0.04)
+                    await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
+                    logger.info(f"🧭 [会话对齐] 正在等待恢复工作会话视图 ({target_rel})...")
+                    _align_t0 = time.time()
+                    while time.time() - _align_t0 < 2.5:
+                        await asyncio.sleep(0.08)
+                        _nav_chk = await cdp_call("Runtime.evaluate", {
+                            "expression": "!!document.querySelector('[data-testid=\"agent-input-box\"] [data-lexical-editor=\"true\"], [data-lexical-editor=\"true\"], div[contenteditable=\"true\"]')",
+                            "returnByValue": True
+                        })
+                        if _nav_chk.get("result", {}).get("result", {}).get("value"):
+                            break
+                else:
+                    logger.warning("ℹ️ [断点防御] 当前页面为全新空白对话且无任何历史活跃会话，保持静默，绝不误发'继续'！")
+                    return {"success": True, "processed": 0, "reason": "empty_new_conversation", "results": []}
+            elif target_rel and target_rel not in ("/", "/c", "/c/") and "/c/" in target_rel:
+                align_url_js = f"""
+                (() => {{
+                    const curRel = (window.location.pathname || '') + (window.location.search || '');
+                    const target = {json.dumps(target_rel)};
+                    if (decodeURIComponent(curRel) !== decodeURIComponent(target) && !curRel.includes(target)) {{
+                        if (window.__TSR_ROUTER__ && typeof window.__TSR_ROUTER__.navigate === 'function') {{
+                            window.__TSR_ROUTER__.navigate({{ href: target }});
+                        }} else {{
+                            window.location.href = window.location.origin + target;
+                        }}
+                        return true;
+                    }}
+                    return false;
+                }})()
+                """
+                align_res = await cdp_call("Runtime.evaluate", {"expression": align_url_js, "returnByValue": True})
+                if align_res.get("result", {}).get("result", {}).get("value"):
+                    logger.info(f"🧭 [会话对齐] 正在对齐恢复切号前真实工作会话 ({target_rel})...")
+                    _align_t0 = time.time()
+                    while time.time() - _align_t0 < 1.5:
+                        _ed_chk = await cdp_call("Runtime.evaluate", {
+                            "expression": "!!document.querySelector('[data-testid=\"agent-input-box\"] [data-lexical-editor=\"true\"], [data-lexical-editor=\"true\"], div[contenteditable=\"true\"]')",
+                            "returnByValue": True
+                        })
+                        if _ed_chk.get("result", {}).get("result", {}).get("value"):
+                            break
+                        await asyncio.sleep(0.04)
 
             # 若前台任务切号前确实在运行，向前台派发“继续”
             if current_tasks:
@@ -1496,35 +1546,13 @@ def find_active_and_interrupted_subagents(root_conv_ids=None, max_age_seconds=90
     if root_conv_ids:
         target_parents.update(extract_conversation_ids_from_targets(root_conv_ids))
 
-    now = time.time()
-    # 仅在未显式指定目标会话时，才全局回溯扫描近 max_age_seconds 内深度活跃的会话目录（杜绝全量跨会话污染）
+    # 若未指定 target_parents，尝试从当前前台活动页面提取，绝不跨会话全局盲扫
     if not target_parents:
-        try:
-            for entry in os.scandir(brain_dir):
-                if entry.is_dir() and len(entry.name) == 36:
-                    try:
-                        # 深度 mtime 计算：解决 Windows NTFS 目录下级文件修改不刷新顶层目录 mtime 的硬伤
-                        t_path = os.path.join(entry.path, ".system_generated", "logs", "transcript.jsonl")
-                        sub_dir = os.path.join(entry.path, ".system_generated", "subagents")
-                        mtimes = [entry.stat().st_mtime]
-                        if os.path.exists(t_path):
-                            try:
-                                mtimes.append(os.path.getmtime(t_path))
-                            except Exception:
-                                pass
-                        if os.path.exists(sub_dir):
-                            try:
-                                mtimes.append(os.path.getmtime(sub_dir))
-                            except Exception:
-                                pass
-                        latest_mtime = max(mtimes)
-                        if now - latest_mtime <= max_age_seconds:
-                            if os.path.exists(sub_dir) and os.listdir(sub_dir):
-                                target_parents.add(entry.name)
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.debug(f"扫描活跃父会话异常: {e}")
+        active_cid = get_active_page_conversation_id()
+        if active_cid:
+            target_parents.add(active_cid)
+        else:
+            return []
 
     candidates = []
     seen_subagents = set()
@@ -1549,6 +1577,24 @@ def find_active_and_interrupted_subagents(root_conv_ids=None, max_age_seconds=90
                                 sdata = json.load(fp)
                             desc = sdata.get("subagentDescriptor") or {}
                             state = sdata.get("state", "SUBAGENT_STATE_ALIVE")
+                            # 严禁复活已被显式终止 (KILLED) 的子智能体，尊重生命周期决策
+                            if state == "SUBAGENT_STATE_KILLED":
+                                continue
+
+                            # 检查子智能体 transcript：若已处于 DONE/COMPLETED 态，跳过复活
+                            sub_t_path = os.path.join(brain_dir, sub_id, ".system_generated", "logs", "transcript.jsonl")
+                            if os.path.exists(sub_t_path):
+                                try:
+                                    with open(sub_t_path, "rb") as stf:
+                                        stf.seek(max(0, os.path.getsize(sub_t_path) - 2048))
+                                        tail_lines = stf.read().decode("utf-8", errors="ignore").strip().splitlines()
+                                        if tail_lines:
+                                            last_step = json.loads(tail_lines[-1])
+                                            if last_step.get("status") in ("DONE", "COMPLETED"):
+                                                continue
+                                except Exception:
+                                    pass
+
                             candidates.append({
                                 "subagent_id": sub_id,
                                 "parent_id": pid,
@@ -1628,6 +1674,9 @@ def revive_subagent(parent_id, subagent_id, wake_text="系统已就绪，请继�
             with open(descriptor_path, "r", encoding="utf-8") as f:
                 desc_data = json.load(f)
             prev_state = desc_data.get("state", "UNKNOWN")
+        if prev_state == "SUBAGENT_STATE_KILLED":
+            logger.info(f"ℹ️ 子智能体 [{subagent_id[:8]}] 处于 SUBAGENT_STATE_KILLED 态，尊重终止决策，坚决不盲目复活。")
+            return {"subagent_id": subagent_id, "parent_id": parent_id, "revived": False, "reason": "already_killed"}
         desc_data["conversationId"] = subagent_id
         desc_data["state"] = "SUBAGENT_STATE_ALIVE"
         if "subagentDescriptor" not in desc_data:
@@ -2130,9 +2179,11 @@ def get_all_accounts_and_quotas():
         # 1. 历史版本：quota_summary.groups 中包含 'Gemini Models' 组 ('gemini-weekly' & 'gemini-5h')
         # 2. 最新版本：Google 将 Gemini 限额直接嵌入 models['gemini-2.5-pro'].quotaInfo 中 (或 gemini-3.8-flash-tiered)
         #    而只有购买了 PRO 订阅的账号，其 quota_summary.groups 中才会分配 'Claude and GPT models' (含 3p-weekly / 3p-5h)！
-        #    对于 FREE 免费号，groups 为空 []，且 accounts.json 中显式标注 is_free / plan=FREE。
-        is_free_acc = bool(acc.get("is_free") or acc.get("plan") == "FREE")
-        has_3p_pro = (q_claude_weekly is not None)
+        #    对于 FREE 免费号，groups 为空 []。同时兼容 accounts.json 中的 plan/tier 标记。
+        tier_val = (payload.get("user_tier") or payload.get("tier") or payload.get("plan") or acc.get("tier") or acc.get("plan") or "").upper()
+        is_pro = bool(len(groups) > 0 or tier_val in ("PRO", "PLUS", "ADVANCED"))
+        is_free_acc = not is_pro
+        has_3p_pro = bool(q_claude_weekly is not None or is_pro)
 
         if q_weekly is None:
             # 尝试从 models 对象中提取 Gemini 官方真实配额与重置时刻
@@ -2141,19 +2192,20 @@ def get_all_accounts_and_quotas():
             g_rem = g_qi.get("remainingFraction")
             g_rt = parse_iso_datetime(g_qi.get("resetTime"))
             
-            if g_rem is not None and has_3p_pro and not is_free_acc:
-                # 确认为真实 PRO 账号，Gemini 实时额度为 g_rem
+            if g_rem is not None:
+                # 【全系账号平等支持（PRO + FREE 免费账号全部纳入备选调度）】：
+                # 无论 PRO 还是免费账号，只要 models 包含可用配额，就以 g_rem 真实配额为准！
+                # 免费账号受 5 小时滚动配额保护，等效周额度对齐 5h，绝不强制归零或剔除列表！
                 g_pct = round(float(g_rem) * 100.0, 1)
-                q_weekly = g_pct
                 q_5h = g_pct
-                rt_weekly = g_rt
                 rt_5h = g_rt
-            elif is_free_acc:
-                # 明确的免费号，严格按 0 处理或不参与 Pro 生产
-                q_weekly = 0.0
-                q_5h = 0.0
+                q_weekly = g_pct
+                rt_weekly = g_rt
+            elif q_5h is not None:
+                q_weekly = q_5h
+                rt_weekly = rt_5h
             else:
-                # 既无有效周额度桶也无 3P PRO 桶，确认为无配额/未开通/配额已撤销账号，严格归零
+                # 既无有效周额度桶也无 models 配额，确认为未开通/配额已撤销账号，归零
                 q_weekly = 0.0
                 q_5h = 0.0
 
@@ -2164,6 +2216,9 @@ def get_all_accounts_and_quotas():
                 q_5h = 100.0
             else:
                 q_5h = q_weekly
+        elif q_5h is not None and (q_weekly is None or q_weekly <= 0.0):
+            # 反向对齐：免费号只要有 5h 滚动额度，周额度等效对齐 5h，绝不因缺少周桶而被门禁淘汰！
+            q_weekly = q_5h
 
         # 增强容错 3：Claude / 3P 配额同步继承
         if q_weekly == 100.0:
@@ -2245,7 +2300,12 @@ def get_all_accounts_and_quotas():
         elif q_5h_val < 15.0:
             score_penalty -= 30.0
 
-        cockpit_score = round(urgency_tier_score + weekly_quota_score + hourly_quota_score + sub_day_urgency + score_penalty, 1)
+        # 0. 用户核心铁律：PRO 账号绝对第一主力优先级！
+        # 只要 PRO 账号额度充足 (>5%)，享有 20,000 分主力专属加成，绝对优先于 FREE 免费账号！
+        # 免费账号保留平权打分，当所有 PRO 账号耗尽或受限时，自动无缝救场接力。
+        pro_bonus = 20000.0 if is_pro else 0.0
+
+        cockpit_score = round(pro_bonus + urgency_tier_score + weekly_quota_score + hourly_quota_score + sub_day_urgency + score_penalty, 1)
         tiger_score = cockpit_score
 
         results.append({
@@ -2262,6 +2322,9 @@ def get_all_accounts_and_quotas():
             "days_to_w_reset": days_to_w_reset,
             "sec_to_w_reset": sec_to_w_reset,
             "effective_quota": effective,
+            "is_pro": is_pro,
+            "is_free": is_free_acc,
+            "plan": "PRO" if is_pro else "FREE",
             "score_5h": hourly_quota_score,
             "score_urgency": urgency_tier_score,
             "score_weekly": weekly_quota_score,
@@ -2310,6 +2373,17 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
     # 3. 排除处于 429 临时隔离关押期的账号；
     # 4. 【周额度门禁】：超过 5.0% 才算！周额度 <= 5.0% 必须彻底淘汰；
     # 5. 【5小时额度门禁】：5小时额度 <= 5.0% 必须淘汰。
+    quarantined = load_quarantined_accounts()
+    # 探活解冻：若隔离账号配额已经刷新（周额度>5%且5小时额度>门禁），立即解除隔离，恢复其竞选资格（特别是PRO主力）
+    for acc in accounts:
+        aid = acc.get("id")
+        a_email = acc.get("email", "").strip().lower()
+        if aid in quarantined and not acc.get("disabled", False) and aid != current_id and a_email not in HARD_BLOCKED_EMAILS:
+            w_q = float(acc.get("gemini_weekly", 0.0))
+            h_q = float(acc.get("gemini_5h", 0.0))
+            if w_q > 5.0 and h_q > threshold:
+                remove_quarantined_account(aid)
+                logger.info(f"💡 [智能解冻探活] 隔离账号 [{acc.get('email')}] 配额已刷新 (5h: {h_q}%, 周: {w_q}%)，自动解除隔离重归备选池！")
     quarantined = load_quarantined_accounts()
     candidates = [
         acc for acc in accounts
@@ -2363,8 +2437,16 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
         # 3. 周剩余额度最高 DESC
         # 4. 5小时滚动额度最高 DESC
         # 5. 剩余精确天数最少 ASC
+        # 多维复合排序（严格遵循用户核心铁律：PRO优先、临期优先、满额优先）：
+        # 1. PRO 账号主力优先 (1 if is_pro else 0)
+        # 2. 综合得分（PRO加成20000 + 天数阶梯主导 + 额度加成）DESC
+        # 3. 天数阶梯最小 (即将到期重置的天数最少，优先消化临期配额) ASC
+        # 4. 周剩余额度最高 (满的优先) DESC
+        # 5. 5小时滚动额度最高 (满血优先) DESC
+        # 6. 剩余精确天数最少 ASC
         candidates.sort(
             key=lambda x: (
+                1 if x.get("is_pro") else 0,
                 x.get("cockpit_score", 0.0),
                 -int(x.get("days_to_w_reset", 7.0)),
                 x.get("gemini_weekly", 0.0),
@@ -2653,6 +2735,17 @@ def guard_quota_pool_exhaustion(accounts, current_id=None, threshold=5.0, curr_f
 
     # 2. 检查除当前账号外是否存在合资格候选账号 (周额度 > 1.0% 且 5h > threshold)
     quarantined = load_quarantined_accounts()
+    # 探活解冻：若隔离账号配额已经刷新（周额度>5%且5小时额度>门禁），立即解除隔离，恢复其竞选资格（特别是PRO主力）
+    for acc in accounts:
+        aid = acc.get("id")
+        a_email = acc.get("email", "").strip().lower()
+        if aid in quarantined and not acc.get("disabled", False) and aid != current_id and a_email not in HARD_BLOCKED_EMAILS:
+            w_q = float(acc.get("gemini_weekly", 0.0))
+            h_q = float(acc.get("gemini_5h", 0.0))
+            if w_q > 5.0 and h_q > threshold:
+                remove_quarantined_account(aid)
+                logger.info(f"💡 [智能解冻探活] 隔离账号 [{acc.get('email')}] 配额已刷新 (5h: {h_q}%, 周: {w_q}%)，自动解除隔离重归备选池！")
+    quarantined = load_quarantined_accounts()
     candidates = [
         a for a in enabled_accounts
         if a.get("id") != current_id
@@ -2873,21 +2966,28 @@ def hot_restart_language_server(wait_timeout=25.0):
         except Exception as e:
             logger.warning(f"[热重启] Kill PID={p.pid} 异常: {e}")
 
+    # 等待旧进程完全退出，严防进程未死假阳性
+    try:
+        gone, alive = psutil.wait_procs(procs, timeout=3.0)
+        for p in alive:
+            try:
+                p.kill()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     # 3. 轮询等待 Electron 自动重新拉起新语言服务（新 PID 出现）
     logger.info(f"[热重启] 等待 Electron 自动重启语言服务（最多 {int(wait_timeout)}s）...")
     deadline = time.time() + wait_timeout
     while time.time() < deadline:
-        time.sleep(1.0)
+        time.sleep(0.5)
         new_procs = _find_ls()
         new_pids = {p.pid for p in new_procs}
-        # 新进程出现且 PID 与旧进程完全不同 → 热重启成功
+        # 新进程出现且 PID 与旧进程完全不同 → 热重启真实成功
         if new_pids and not (new_pids & old_pids):
-            elapsed = int(time.time() - (deadline - wait_timeout))
+            elapsed = round(time.time() - (deadline - wait_timeout), 1)
             logger.info(f"[热重启] 成功！{elapsed}s 后新 language_server 进程已就绪: PID={new_pids}")
-            return True
-        # 旧进程"复活"（Electron 复用原 PID，极罕见）：也视为成功
-        if new_pids and (new_pids & old_pids):
-            logger.info(f"[热重启] 旧进程 PID={new_pids & old_pids} 复活，视为成功")
             return True
 
     logger.warning(f"[热重启] 超过 {int(wait_timeout)}s，Electron 未自动重启 language_server，降级到完整重启")
@@ -3643,7 +3743,6 @@ def block_account(target_email_or_id, reason="用户手动封禁隔离"):
 
 
 def print_blocked_accounts():
-    """查看当前所有处于隔离或黑名单中的账号"""
     hard_blocked = load_hard_blocked_emails()
     quarantined = load_quarantined_accounts()
     current_id, accounts = get_all_accounts_and_quotas()
@@ -3988,17 +4087,15 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     zero_kill_success = bool(hot_update_res.get("success"))
     hot_restart_success = False
 
-    if zero_kill_success:
-        logger.info(f"[步骤 3/5] 凭据写入与认证更新消息派发完成 ({hot_update_res.get('method', 'CDP+BroadcastChannel')})；服务端接受新账号待真实请求验证，编辑器保持运行。")
-    else:
-        logger.warning(f"⚠️ [步骤 3/5] 动态凭据热更新未完成 ({hot_update_res.get('reason', '未知')})，自动降级为语言服务热重启方案...")
+    # 【铁律】：Google Antigravity 底层 Go 进程 language_server 仅在进程启动时读取 Windows 凭据管理器。
+    # 纯前端 BroadcastChannel 无法让已运行的 Go 后端重读凭据；因此必须无条件极速热重启 language_server
+    # (仅 kill 独立的 language_server.exe，耗时 1~2s，Electron 瞬间自愈重拉，主窗口与已开会话 100% 完好)
+    if is_antigravity_running():
+        logger.info("[步骤 3/5] 正在执行语言服务极速热重启 (耗时 1~2s，仅重启底层 Go 服务，窗口与会话完好保留)...")
         hot_restart_success = hot_restart_language_server(wait_timeout=25.0)
         if hot_restart_success:
-            logger.info("✅ [步骤 3/5 降级完成] 语言服务热重启成功，编辑器窗口完好，跳过步骤 4（无需重新拉起启动器）")
+            logger.info("✅ [步骤 3/5] 语言服务热重启成功，底层 Go 服务已加载最新系统凭据，编辑器主窗口完好保留，跳过冷启动！")
         else:
-            if not is_antigravity_running():
-                logger.info("Antigravity 当前未运行，系统凭据与 Cockpit 状态已写入，启动时将自动加载。")
-                return "switched"
             logger.warning("⚠️ [步骤 3/5] 热重启未就绪，自动降级为完整重启方案...")
             logger.info(f"🚪 [步骤 3/5 降级] 退出反重力：正在优雅退出旧 Antigravity 实例 (PID: {old_pid})...")
             gracefully_exit_antigravity(timeout_seconds=5.0)
@@ -4008,6 +4105,9 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
             # =====================================================================
             logger.info("🚀 [步骤 4/5 降级] 启动启动器：正在派发桌面智能启动器拉起全新实例并挂载专线代理...")
             launch_antigravity_via_launcher(recovery_reason="AccountChange", background=False)
+    else:
+        logger.info("Antigravity 当前未运行，系统凭据与 Cockpit 状态已写入，启动时将自动加载。")
+        return "switched"
 
     # =========================================================================
     # 【语言包保障】：在热更新或拉起后，主动确保 Antigravity 中文汉化包已注入生效
@@ -4123,6 +4223,62 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
         skip_feishu=True
     )
     return "switched"
+
+
+def update_launch_status_file(curr_acc, accounts, current_id, threshold=5.0):
+    if not curr_acc:
+        return {}
+    curr_email = curr_acc.get("email", "")
+    curr_5h = float(curr_acc.get("gemini_5h", 0.0))
+    curr_weekly = float(curr_acc.get("gemini_weekly", 0.0))
+    is_dis = bool(curr_acc.get("disabled", False) or (curr_email.lower() in HARD_BLOCKED_EMAILS))
+    is_ex = is_dis or (curr_5h <= threshold) or (curr_weekly <= 5.0)
+    is_p = bool(curr_acc.get("is_pro", not curr_acc.get("is_free", False)))
+
+    need_sw = is_ex
+    best_email = ""
+    best_is_p = False
+    best_5h = 0.0
+    best_w = 0.0
+    best_reason = ""
+
+    if is_ex:
+        try:
+            b_acc, b_reason = select_best_account(accounts, current_id, threshold=threshold)
+            if b_acc:
+                best_email = b_acc.get("email", "")
+                best_is_p = bool(b_acc.get("is_pro", not b_acc.get("is_free", False)))
+                best_5h = float(b_acc.get("gemini_5h", 0.0))
+                best_w = float(b_acc.get("gemini_weekly", 0.0))
+                best_reason = b_reason
+        except Exception:
+            pass
+
+    st = {
+        "email": curr_email,
+        "name": curr_acc.get("name", ""),
+        "plan": "PRO" if is_p else "FREE",
+        "is_pro": is_p,
+        "gemini_5h": curr_5h,
+        "gemini_weekly": curr_weekly,
+        "days_to_w_reset": float(curr_acc.get("days_to_w_reset", 7.0)),
+        "is_exhausted": is_ex,
+        "need_switch": need_sw,
+        "best_target_email": best_email,
+        "best_target_is_pro": best_is_p,
+        "best_target_plan": "PRO" if best_is_p else "FREE",
+        "best_target_5h": best_5h,
+        "best_target_weekly": best_w,
+        "best_target_reason": best_reason,
+        "timestamp": int(time.time())
+    }
+    try:
+        os.makedirs(os.path.dirname(LAUNCH_ACCOUNT_STATUS_FILE), exist_ok=True)
+        with open(LAUNCH_ACCOUNT_STATUS_FILE, "w", encoding="utf-8") as sf:
+            json.dump(st, sf, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return st
 
 
 def preflight_ensure_valid_account(threshold=5.0):
@@ -4592,15 +4748,23 @@ def run_watch_daemon(threshold=5.0, interval=30):
             current_ls_pids = get_language_server_pids()
             if _last_ls_pids and current_ls_pids and not (_last_ls_pids & current_ls_pids) and not read_pending_switch():
                 logger.warning(f"🚨 [异常重载自愈] 检测到 language_server 发生非切号突发重载 (旧 PID: {_last_ls_pids} ➔ 新 PID: {current_ls_pids})！")
-                logger.warning("   启动智能应急断点接力，正在向当前活跃前台工作窗口补发'继续'并重新注入汉化包...")
+                logger.warning("   启动智能应急断点接力，正在寻找真实中断的前台会话并重新注入汉化包...")
                 time.sleep(3.0)  # 等待新服务及 Electron 端口稳定
                 ensure_chinese_localization_injected()
                 try:
-                    execute_auto_resume(
-                        text="继续",
-                        wait_timeout=30,
-                        running_tasks=[{"title": "当前前台会话", "is_current": True}]
-                    )
+                    recent_interrupted = get_recent_brain_active_conversations(max_age_seconds=180)
+                    if recent_interrupted:
+                        best_interrupted = recent_interrupted[0]
+                        target_href = best_interrupted.get("href")
+                        logger.info(f"🎯 [异常重载自愈] 锁定最近被中断的真实工作会话: {target_href} (age: {best_interrupted.get('age_sec')}s)")
+                        execute_auto_resume(
+                            text="继续",
+                            wait_timeout=30,
+                            target_href=target_href,
+                            running_tasks=[{"title": best_interrupted.get("title", "中断工作会话"), "href": target_href, "is_current": True}]
+                        )
+                    else:
+                        logger.info("ℹ️ [异常重载自愈] 未发现近期被中断的活跃会话，保持静默，绝不误发'继续'到新建会话。")
                 except Exception as resume_err:
                     logger.warning(f"突发重载断点自愈续接异常: {resume_err}")
             if current_ls_pids:
@@ -4688,6 +4852,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
                     curr_weekly = curr_acc["gemini_weekly"]
                     
                     if loop_count % 10 == 0:
+                        update_launch_status_file(curr_acc, accounts, current_id, threshold=threshold)
                         logger.info(
                             f"[巡检心跳] Antigravity 运行中 | 当前在用: {curr_email} | "
                             f"有效额度: {curr_effective:.1f}% (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)"

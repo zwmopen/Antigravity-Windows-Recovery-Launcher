@@ -13,15 +13,28 @@ except ImportError:
     psutil = None
 
 EMAIL = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+\Z")
+STATUS_FILE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Antigravity", "private-proxy", "launch-account-status.json")
+
+
+def _read_cached_status():
+    if os.path.exists(STATUS_FILE):
+        try:
+            with open(STATUS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 
 def read_identity(budget=2.5):
+    cached = _read_cached_status()
     if psutil is None:
+        if cached.get("email"):
+            return dict(cached, status="cached", reason="process_reader_missing")
         return {"status": "unavailable", "reason": "process_reader_missing"}
+
     deadline = time.monotonic() + budget
     official = os.path.normcase(os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "antigravity", "Antigravity.exe"))
-    # Certificate verification is disabled only for a loopback listener owned
-    # by the running editor's own language service, never a remote host.
     client = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))
     identities = []
     for process in psutil.process_iter(["pid", "name"]):
@@ -65,11 +78,25 @@ def read_identity(budget=2.5):
                     continue
         except Exception:
             continue
+
     if not identities:
+        if cached.get("email"):
+            return dict(cached, status="cached", reason="live_identity_not_readable")
         return {"status": "unavailable", "reason": "live_identity_not_readable"}
+
     if len({item["email"].lower() for item in identities}) > 1:
         return {"status": "unavailable", "reason": "multiple_runtime_identities"}
-    return dict(identities[0], status="live", source="language_server.GetUserStatus", observed_at=datetime.now(timezone.utc).isoformat())
+
+    base = dict(identities[0], status="live", source="language_server.GetUserStatus", observed_at=datetime.now(timezone.utc).isoformat())
+    live_email = base["email"]
+
+    # Merge cached rich quota status if email matches
+    if cached and cached.get("email", "").lower() == live_email.lower():
+        for k in ("plan", "is_pro", "gemini_5h", "gemini_weekly", "days_to_w_reset", "is_exhausted", "need_switch", "best_target_email", "best_target_plan", "best_target_5h", "best_target_weekly", "best_target_reason"):
+            if k in cached:
+                base[k] = cached[k]
+
+    return base
 
 
 if __name__ == "__main__":

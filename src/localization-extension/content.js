@@ -159,7 +159,8 @@
       'button, a[href], [role="button"], [role="menuitem"], [role="menuitemcheckbox"], ' +
       '[role="menuitemradio"], [role="menu"], [role="option"], [role="tab"], ' +
       'label, h1, h2, h3, h4, h5, h6, [role="heading"], [data-testid^="settings-nav-item-"], ' +
-      '[role="dialog"], [role="alertdialog"], [role="tooltip"], [aria-modal="true"]'
+      '[role="dialog"], [role="alertdialog"], [role="tooltip"], [aria-modal="true"], ' +
+      '[data-testid*="onboarding" i], [data-testid*="welcome" i], [class*="max-w-xl" i], [class*="max-w-[560px]" i]'
     );
   }
 
@@ -169,14 +170,23 @@
     return typeof location !== 'undefined' && /(?:^|[?&])settingsOpen=true(?:&|$)/i.test(location.search || '');
   }
 
+  function isCustomizationsSurface(element) {
+    if (!element || isProtectedTextElement(element)) return false;
+    if (closest(element, '[data-testid*="customiz" i], [class*="customiz" i]')) return true;
+    return typeof location !== 'undefined' && (
+      (typeof location.pathname === 'string' && location.pathname.startsWith('/customizations')) ||
+      /(?:^|[?&])customizationsOpen=true(?:&|$)/i.test(location.search || '')
+    );
+  }
+
   function isInstantUiNode(node) {
     if (!node) return false;
     var el = node.nodeType === 1 ? node : node.parentElement;
     if (!el || isProtectedTextElement(el)) return false;
-    if (closest(el, '[role="dialog"], [role="menu"], [aria-modal="true"], [data-testid*="settings" i], [class*="modal" i], [class*="settings" i], [data-testid^="settings-nav-item-"]')) {
+    if (closest(el, '[role="dialog"], [role="menu"], [aria-modal="true"], [data-testid*="settings" i], [class*="modal" i], [class*="settings" i], [data-testid^="settings-nav-item-"], [data-testid*="onboarding" i], [data-testid*="welcome" i], [class*="max-w-xl" i]')) {
       return true;
     }
-    return isSettingsSurface(el) || isUiTextElement(el);
+    return isSettingsSurface(el) || isCustomizationsSurface(el) || isUiTextElement(el);
   }
 
   function isToolOrStatusPillText(text) {
@@ -207,7 +217,7 @@
     var rowTimestamp = closest(node.parentElement, '[data-testid="conversation-row-sidebar"]');
     var isPill = isToolOrStatusPillText(oldValue);
     var useUiTranslation = (globalThis.__AntigravityZhUiScope || isUiTextElement)(node.parentElement) ||
-      isSettingsSurface(node.parentElement) || rowTimestamp || isPill;
+      isSettingsSurface(node.parentElement) || isCustomizationsSurface(node.parentElement) || rowTimestamp || isPill;
     var previous = lastTextValues.get(node);
     if (previous && previous.value === oldValue && previous.useUi === !!useUiTranslation) return 0;
     var newValue = useUiTranslation

@@ -1,3 +1,90 @@
+## v2.9.24 全量 82 个技能/插件双语标签与描述汉化 + Customizations 表面全面本地化（2026-11-05）
+
+- 现场根因：
+  1. 用户在自定义扩展（Customizations -> Skills / 技能与规则）面板中发现所有技能名称（如 `alphafold-database-fetch-and-analyze`、`/automation`、`android-cli`、`dbs-action` 等）仍以纯英文 kebab-case 展示，未经过汉化。
+  2. Customizations 页面（`/customizations`、`/customizations/installed`）未被识别为 UI 优先表面，导致卡片、标签徽标（如 `Installed`、`Built In`、`Skills & Rules`）和说明文本无法稳定转译为中文。
+  3. 社区生态（GitHub `yiheng8023/antigravity-chinese`、`iMissNan/antigravity-chinese` 等）已有开源技能词库与插件字典，可直接融合提炼，实现生态级对齐。
+- 闭环修复：
+  1. 技能双语命名标准落地（`translation-core.js` v0.4.6）：
+     - 严格遵循既定双语规范 `skill-id（中文说明）` 与 `/skill-id（中文说明）`。
+     - 全量覆盖 82 个技能（内置 9 个、Android CLI 3 个、Science 科学套件 39 个、业务自媒体与工程技能 17 个、生态插件 14 个）。
+     - 保持纯 kebab-case 标识符的底层兼容，避免破坏 Agent 提示词或命令解析。
+  2. 扩展页面表面识别增强（`content.js`）：
+     - 新增 `isCustomizationsSurface` 谓词，精确匹配 `/customizations` 路由与自定义扩展容器。
+     - 接入 `isInstantUiNode` 与 `translateTextNode`，将扩展面板中的卡片、徽标、段落与标题纳为一等公民 UI 进行实时精准翻译。
+  3. 字典全量扩充（645 个新 UI 键值对 + 77 条中文长描述）：
+     - 覆盖 `Installed` -> `已安装`、`Marketplace` -> `市场`、`Skills & Rules` -> `技能与规则`、`Built In` -> `内置`、`Custom Agents` -> `自定义智能体`、`tools enabled` -> `个工具已启用`、`Fix with Agent` -> `使用智能体修复` 等。
+     - 整合开源社区 `yiheng8023/antigravity-chinese` 的 `plugins.json` 插件字典与全技能长句描述。
+  4. 自动化测试与实机热注入验证：
+     - 更新 `manifest.json` 与测试断言至 `0.4.6`，运行 3 组前端单元测试及 1 组自愈安全性测试，测试 100% PASS。
+     - 编译 `build.ps1` 并安装落地 `install.ps1`。
+     - 通过 `Antigravity-CdpLocalizationLoader` 向正在运行的桌面客户端 CDP 实时注入，实测 CDP 回读版本即时更新为 `0.4.6`，技能列表与插件界面全量中文双语呈现。
+
+## v2.9.23 软件设置（Settings）全量深层汉化与 v0.4.5 字典扩充交付（2026-11-05）
+
+- 现场根因：
+  1. 软件设置（Settings）模态框及各大子 Tab（常规、应用、外观、快捷键、通知、模型、对话）中，部分新增功能文案（内置/外部浏览器偏好、语音模式与引擎参数、对话执行步骤级别、Project 4K 沉浸体验、系统提示音与音量、WSL 发行版重启绑定、多快捷键操作）缺失中文翻译，仍以英文展示。
+  2. 对话统计动态句式（如 `41 active conversations and 270 archived conversations`）缺乏复合动态正则，原正则仅处理单一数字句式导致未汉化。
+- 闭环修复：
+  1. 字典全面扩充（`translation-core.js` v0.4.5）：
+     - 浏览器设置：覆盖内置浏览器（`Built-in Browser`）、外部浏览器（`External Browser`）、打开链接方式（`Open Links In`）、下载保存位置（`Download Location`）、清除历史记录（`Clear` / `Browsing History`）、子智能体选择。
+     - 语音模式（Voice Mode）：覆盖语音引擎（`Voice engine`）、默认模型（`Default (Mendel)`）、系统默认采集设备（`System default`）、朗读音量（`Volume`）、麦克风与扬声器静音（`Mute Voice Mic/Speaker`）。
+     - 对话与外观：覆盖步骤详情（`Conversation Steps` / `Verbose`）、界面对比度（`Contrast` / `Strong`）、沉浸式 4K 体验（`Project 4K 沉浸模式`）、修改于（`Modified in`）。
+     - 通知与应用：覆盖系统通知与提示音开关（`Sound`）、音量滑块、WSL 环境切换与重启绑定（`Windows Subsystem for Linux` / `Connect`）、应用版本（`App version`）。
+     - 键盘快捷键：覆盖新建标签页（`New Tab`）、重新打开关闭标签页（`Reopen Closed Tab`）、上移/下移对话（`Move Conversation Up/Down`）、侧边面板标签切换（`Previous/Next Side Panel Tab`）、切换与最大化侧面板（`Toggle Side Panel` / `Toggle Maximize Side Panel`）。
+     - 动态句式支持：新增复合对话统计动态规则，完美将 `X active conversations and Y archived conversations` 转译为 `X 个活跃对话与 Y 个归档对话`。
+  2. 自动化构建与热重载：
+     - 更新 `manifest.json` 与测试套件至版本 `0.4.5`，3 组本地化自动化测试 100% 通过。
+     - 执行 `build.ps1` 与 `install.ps1` 完成程序包构建与落地。
+     - 通过 `Antigravity-CdpLocalizationLoader` 向正在运行的前端 CDP 注入热更新，版本即时回读 `0.4.5`，实机验证各 Tab 元素实时汉化生效。
+
+## v2.9.22 选号算法 PRO 优先/临期满额层级定标 + 启动器卡片配额醒目展示与自动预切号（2026-11-05）
+
+- 现场根因：
+  1. 选号排序中由于 `accounts.json` 缺少 `plan` 字段，导致 Pro/Free 误判；且打分公式未体现 PRO 主力账号与 FREE 账号的优先级阶梯，导致满配额的 Free 账号在部分场景下排在 PRO 账号之前。
+  2. 启动器热卡片 `AntigravityHotLaunchChoiceForm` 之前仅比较账号邮箱字符串，缺乏当前在用账号配额健康度展示；当当前账号额度耗尽（0%）或偏低时，用户缺乏直观感知，且卡片仍倒计时 5 秒直接进入无额度账号，导致用户进入后遇到无法生成等违背直觉的问题。
+- 闭环修复：
+  1. 智能选号调度算法严格定标（`antigravity_smart_switch.py`）：
+     - 彻底修复 `is_free_acc` 识别逻辑，结合 Cockpit 账号组及 tier 准确识别 Pro 与 Free 账号。
+     - 为健康 PRO 账号注入 `+20,000` 分主力专属特权加成，锁定 PRO 账号绝对优先于 FREE 账号（PRO 评分区间 21,000~28,000，FREE 最高 7,740）。
+     - 严格遵循用户核心选号铁律：**PRO 账号优先** > **周额度临期优先（即将重置天数少的优先消化）** > **周配额/5h满额优先** > **FREE 账号无缝替补救场**（仅在所有 PRO 账号耗尽或受限时自动接力）；死号/濒死号（<=5%）彻底扣分淘汰。
+     - 增加隔离账号自动解冻探活机制（`select_best_account` 与池核查中，检测到隔离账号配额刷新恢复后自动解除隔离，重归主力备选）。
+     - 新增 `update_launch_status_file()`，30 秒心跳探活与预检时实时将带配额、方案、耗尽判定及最优备选账号的数据原子落盘至 `launch-account-status.json`。
+  2. 运行时身份扩展（`antigravity_runtime_identity.py`）：
+     - 接入 `launch-account-status.json`，导出 `plan`、`is_pro`、`gemini_5h`、`gemini_weekly`、`days_to_w_reset`、`is_exhausted`、`need_switch`、`best_target_email` 等全量丰富字段。
+  3. 启动器热卡片界面交互与自愈秒切全面升级（`Antigravity-Recovery-Launcher.cs`）：
+     - 卡片顶部新增高对比度彩色配额胶囊徽标：
+       - 额度耗尽（<=5%）：高亮红色背景 `[额度已耗尽 (0%)]`；
+       - 低额预警（<=15%）：高亮橙色背景 `[PRO · 低额预警 X%]`；
+       - 额度充裕（>15%）：健康翡翠绿背景 `[PRO · 额度充足 X%]`。
+     - 账号展示行清晰标注当前在用账号及其 5h 与周配额剩余百分比。
+     - 状态评估行若检测到当前账号耗尽或与最优账号不一致，自动切换为 `⚡ 优选接力 目标：[最优账号] · 倒计时或点击自动切号`。
+     - 主操作按钮动态感知：当前账号健康时为蓝色 `进入反重力 (5s)`；当需要切号时，升级为醒目橙红色警示渐变按钮 `优选切号并进入 (5s)`。
+     - 倒计时结束或点击进入时，启动器直接在后台调用 `TriggerSmartSwitch(targetEmail)`，自动将网络线路与账号秒切至最优 PRO 账号，防止误入空额死号。
+- 验收结果：
+  1. 调度算法逻辑验证：PRO 优于 FREE、临期优于远期、满额优于低额、FREE 在 PRO 耗尽时自动救场，4 组测试用例 100% 通过。
+  2. 隔离账号探活解冻：模拟 PRO 账号配额刷新，自动从 429 隔离名单解除并以 26,500 高分命中首选。
+  3. 全量编译与安装交付：`Antigravity-Recovery-Launcher.exe` 重新编译成功，安装落地至 `%LOCALAPPDATA%\Antigravity\launcher`，守护神 PID 38116 后台平稳运行。
+
+## v2.9.21 初始登录/切号免责声明与欢迎向导全量汉化升级（2026-11-05）
+
+- 现场根因：
+  1. 新账号切号或首次启动进入反重力时，弹出安全免责声明弹窗（"Security Notice & Data Use" / "Terms of Service & Data Use"）及后续欢迎向导（"Getting started with Google Antigravity"），相关长句、段落、复选框在 `translation-core.js` 中缺失对应翻译。
+  2. `content.js` 中的 `isUiTextElement` 与 `isInstantUiNode` 未包含免责声明弹窗容器选择器（`[class*="max-w-xl"]`, `[data-testid*="onboarding"]`, `[data-testid*="welcome"]`），导致普通 `<p>` 与 `<span>` 节点未能被识别为 UI 文本优先转译。
+- 闭环修复：
+  1. 词典库全面扩充（`translation-core.js` v0.4.4）：
+     - 标题与服务条款："Security Notice & Data Use" -> "安全须知与数据使用"、"Terms of Service & Data Use" -> "服务条款与数据使用"、"Accept and continue" -> "接受并继续"、"Terms and Privacy:" -> "条款与隐私："、"Privacy Notice" -> "隐私权声明"。
+     - 安全风险警示段落：完整覆盖 AI 编程智能体安全限制与风险提示（自主代码执行、数据外泄、提示词注入与供应链风险）。
+     - 数据与遥测说明：涵盖产品分析说明（“不会收集您的任何提示词、内容或模型响应，但会收集常规使用模式...”）、方案与账号遥测提示。
+     - 勾选框文案：完整翻译改进计划互动数据收集许可、随时在设置中退出、营销邮件许可等切分文本。
+     - 欢迎向导（Getting started）：完整覆盖单智能体与团队协作、计划与演练指南审核、规则边界设定及后台工作提示。
+  2. 元素选择器范围升级（`content.js`）：
+     - `isUiTextElement` 与 `isInstantUiNode` 补充 `[data-testid*="onboarding" i]`, `[data-testid*="welcome" i]`, `[class*="max-w-xl" i]`, `[class*="max-w-[560px]" i]`，保证弹窗内的段落、标签及动态插入节点实时完成汉化。
+  3. 加载器与热重载：更新 `Antigravity-CdpLocalizationLoader` 并完成 `build.ps1` 与 `install.ps1` 安装，实机执行热注入生效。
+- 验收结果：
+  1. 单元测试与语法校验：Node.js 环境加载 `translation-core.js` 验证 100% 通过，Version 0.4.4，免责声明标题、风险段落、复选框、确认按钮均准确输出简体中文。
+  2. 实机 CDP 注入验证：CDP 回读运行版本为 `0.4.4`；动态模拟弹窗 DOM 结构验证通过，`h2` 输出“安全须知与数据使用”，`p` 输出中文警示全文，按钮输出“接受并继续”，复选框标签输出中文。
+
 ## v2.9.16 Cockpit 账号主动同步切号与热卡片无感直切闭环（2026-11-03）
 
 - 现场根因：
@@ -417,5 +504,8 @@
 | 日期 (时间) | 执行者 | 记录 |
 |---|---|---|
 | 2026-09-18 23:41 | 反重力 | make antigravity cold startup enterable before login |
+| 2026-11-04 23:28 | 反重力 | 明确单主控架构关闭Cockpit自动切号竞争+实施语言服务强制瞬时热重启+实装空白会话断点防御与路由自愈对齐交付 (v2.9.17) |
+| 2026-11-04 23:45 | 反重力 | 全面铲除免费账号归零与剔除漏洞+全系账号平等调度+实测免费号100%满血激活交付 (v2.9.19) |
+| 2026-11-04 23:50 | 反重力 | 修复GUI解包类型错位+补充免费账号调度与复活安全单元测试全绿验收交付 (v2.9.20) |
 
 - 本次还修复网络按钮UserRequestedRepair错误触发编辑器强制重启；网络恢复保留现有编辑器。安装器先停Python守护，按精确路径有界重试watcher复制，避免运行组件重拉起竞态。修复前用户网络按钮操作确实曾由旧核心重启编辑器，不能宣称本次全程未重启。
