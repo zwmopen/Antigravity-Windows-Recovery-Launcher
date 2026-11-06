@@ -1005,6 +1005,73 @@ async def _cdp_execute_auto_resume(ws_url, max_windows=3, text="继续", target_
                     if resp.get("id") == seq:
                         return resp
 
+            # 优先自动穿透免责声明与安全须知弹窗，避免弹窗阻挡任务续接
+            try:
+                dismiss_expr = """
+                (() => {
+                    if (typeof globalThis.__AntigravityAutoDismissNotice === 'function') {
+                        return globalThis.__AntigravityAutoDismissNotice();
+                    }
+                    const dialogs = Array.from(document.querySelectorAll(
+                        '[role="dialog"], [role="alertdialog"], [aria-modal="true"], ' +
+                        '[data-testid*="onboarding" i], [data-testid*="welcome" i], [class*="modal" i], ' +
+                        '[class*="max-w-xl" i], [class*="max-w-[560px]" i]'
+                    ));
+                    for (const modal of dialogs) {
+                        const text = (modal.innerText || modal.textContent || '').toLowerCase();
+                        const isNotice = text.includes('security notice') ||
+                            text.includes('安全须知') ||
+                            text.includes('terms of service') ||
+                            text.includes('服务条款') ||
+                            text.includes('getting started') ||
+                            text.includes('开始使用') ||
+                            text.includes('data use') ||
+                            text.includes('数据使用') ||
+                            (modal.dataset && (modal.dataset.testid || '').toLowerCase().includes('onboarding')) ||
+                            (modal.dataset && (modal.dataset.testid || '').toLowerCase().includes('welcome'));
+                        if (!isNotice) continue;
+                        const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
+                        for (const cb of checkboxes) {
+                            if (!cb.checked && !cb.disabled) {
+                                try { cb.click(); cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); } catch(e){}
+                            }
+                        }
+                        const buttons = Array.from(modal.querySelectorAll('button, [role="button"], a[role="button"]'));
+                        for (const btn of buttons) {
+                            const btnText = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+                            if (
+                                btnText.includes('accept and continue') ||
+                                btnText.includes('接受并继续') ||
+                                btnText.includes('确认并继续') ||
+                                btnText.includes('agree and continue') ||
+                                btnText.includes('同意并继续') ||
+                                btnText.includes('get started') ||
+                                btnText.includes('开始使用') ||
+                                btnText.includes('got it') ||
+                                btnText.includes('知道了') ||
+                                btnText === 'accept' || btnText === '接受' ||
+                                btnText === 'continue' || btnText === '继续' ||
+                                btnText === '确认' || btnText === '确定'
+                            ) {
+                                if (!btn.disabled && !btn.getAttribute('aria-disabled')) {
+                                    try {
+                                        btn.focus();
+                                        btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                        btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                                        btn.click();
+                                        return true;
+                                    } catch(e){}
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                })()
+                """
+                await cdp_call("Runtime.evaluate", {"expression": dismiss_expr, "returnByValue": True})
+            except Exception as e:
+                logger.debug(f"续接前穿透安全须知弹窗异常: {e}")
+
             async def submit_and_verify(task_name="主会话", max_wait_sec=5.0):
                 """通过原生 Enter 键序列 + 物理坐标点击 + 极速毫秒级闭环验证循环，确保任务真正提交并进入生成态"""
                 # 1. 尝试全量 CDP 原生 Enter 键序列 (携带标准 key/code 与 text)
@@ -1893,6 +1960,10 @@ def execute_auto_resume(max_windows=3, text="继续", wait_timeout=180, exclude_
 
         # 在连接 CDP 执行窗口切换与续接前，先确保中文语言包已注入生效
         ensure_chinese_localization_injected()
+        try:
+            auto_dismiss_security_notice_via_cdp(ws_url=ws_url)
+        except Exception:
+            pass
 
         logger.info(f"已连接 Antigravity CDP ({ws_url})，正在执行断点自愈感知与发送'{text}'续接...")
         for retry in range(2):
@@ -3225,6 +3296,105 @@ def ensure_chinese_localization_injected():
         return False
 
 
+def auto_dismiss_security_notice_via_cdp(ws_url=None):
+    """
+    通过 CDP 自动穿透并确认安全免责声明/服务条款弹窗 (100% 零人工干预)
+    """
+    if websockets is None:
+        return {"dismissed": False, "reason": "no_websockets"}
+    try:
+        if not ws_url:
+            port = get_devtools_active_port(wait_timeout=2)
+            if not port:
+                return {"dismissed": False, "reason": "no_devtools_port"}
+            import urllib.request
+            req = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2)
+            pages = json.loads(req.read().decode("utf-8"))
+            page = next((p for p in pages if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+            if not page:
+                return {"dismissed": False, "reason": "no_page_found"}
+            ws_url = page["webSocketDebuggerUrl"]
+
+        js = """
+        (() => {
+            if (typeof globalThis.__AntigravityAutoDismissNotice === 'function') {
+                const res = globalThis.__AntigravityAutoDismissNotice();
+                if (res) return { dismissed: true, source: 'extension' };
+            }
+            const dialogs = Array.from(document.querySelectorAll(
+                '[role="dialog"], [role="alertdialog"], [aria-modal="true"], ' +
+                '[data-testid*="onboarding" i], [data-testid*="welcome" i], [class*="modal" i], ' +
+                '[class*="max-w-xl" i], [class*="max-w-[560px]" i]'
+            ));
+            for (const modal of dialogs) {
+                const text = (modal.innerText || modal.textContent || '').toLowerCase();
+                const isNotice = text.includes('security notice') ||
+                    text.includes('安全须知') ||
+                    text.includes('terms of service') ||
+                    text.includes('服务条款') ||
+                    text.includes('getting started') ||
+                    text.includes('开始使用') ||
+                    text.includes('data use') ||
+                    text.includes('数据使用') ||
+                    (modal.dataset && (modal.dataset.testid || '').toLowerCase().includes('onboarding')) ||
+                    (modal.dataset && (modal.dataset.testid || '').toLowerCase().includes('welcome'));
+                if (!isNotice) continue;
+
+                const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
+                for (const cb of checkboxes) {
+                    if (!cb.checked && !cb.disabled) {
+                        try { cb.click(); cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); } catch(e){}
+                    }
+                }
+
+                const buttons = Array.from(modal.querySelectorAll('button, [role="button"], a[role="button"]'));
+                for (const btn of buttons) {
+                    const btnText = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+                    if (
+                        btnText.includes('accept and continue') ||
+                        btnText.includes('接受并继续') ||
+                        btnText.includes('确认并继续') ||
+                        btnText.includes('agree and continue') ||
+                        btnText.includes('同意并继续') ||
+                        btnText.includes('get started') ||
+                        btnText.includes('开始使用') ||
+                        btnText.includes('got it') ||
+                        btnText.includes('知道了') ||
+                        btnText === 'accept' || btnText === '接受' ||
+                        btnText === 'continue' || btnText === '继续' ||
+                        btnText === '确认' || btnText === '确定'
+                    ) {
+                        if (!btn.disabled && !btn.getAttribute('aria-disabled')) {
+                            try {
+                                btn.focus();
+                                btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                                btn.click();
+                                return { dismissed: true, source: 'cdp_script', button: btnText };
+                            } catch(e){}
+                        }
+                    }
+                }
+            }
+            return { dismissed: false };
+        })()
+        """
+        async def _run_dismiss():
+            async with websockets.connect(ws_url, ping_interval=None, close_timeout=3) as ws:
+                payload = {"id": 99, "method": "Runtime.evaluate", "params": {"expression": js, "returnByValue": True}}
+                await ws.send(json.dumps(payload))
+                resp = json.loads(await ws.recv())
+                return resp.get("result", {}).get("result", {}).get("value", {})
+
+        res = asyncio.run(_run_dismiss())
+        if res and res.get("dismissed"):
+            logger.info(f"🛡️ [安全须知自动穿透] 成功通过 CDP 自动勾选并点击继续确认 (来源: {res.get('source')}, 按钮: {res.get('button')})！")
+        return res or {"dismissed": False}
+    except Exception as e:
+        logger.debug(f"CDP 自动穿透安全须知弹窗异常: {e}")
+        return {"dismissed": False, "error": str(e)}
+
+
 def decrypt_cockpit_account(account_id):
     """从 Cockpit Tools 本地安全加密存储中无损解密指定账号的完整数据 (含 access_token, refresh_token)"""
     key_path = os.path.join(COCKPIT_DIR, "secure-account-storage.key")
@@ -4114,6 +4284,11 @@ def _run_smart_switch_locked(threshold=5.0, target=None, dry_run=False, force=Fa
     # =========================================================================
     ensure_chinese_localization_injected()
     time.sleep(1.0)  # 留出 1 秒让中文语言包 MutationObserver 遍历并翻译当前界面
+    # 自动穿透免责声明与安全须知弹窗，实现 100% 零人工干预切号
+    try:
+        auto_dismiss_security_notice_via_cdp()
+    except Exception as e:
+        logger.debug(f"切号后执行安全须知弹窗自动穿透异常: {e}")
 
     # =========================================================================
     # 【核心顺序 5】：启动后在前 3 对话窗口发"继续"续接并全量复活子智能体

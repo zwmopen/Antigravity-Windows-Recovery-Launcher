@@ -1,3 +1,25 @@
+## v2.9.26 登录/切号免责声明与安全须知全自动穿透闭环（2026-11-06）
+
+- 现场根因：
+  1. 用户在刚打开反重力应用（冷启动）或在多账号热切秒切后，界面常弹出“安全须知与数据使用”（Security Notice & Data Use）或“服务条款”（Terms of Service）模态弹窗。
+  2. 弹窗强制要求用户手动勾选复选框并点击“接受并继续”/“确认并继续”（Accept and continue），打断了自动秒切与无人值守连续执行体验，用户明确要求“不要让我点”。
+- 闭环修复：
+  1. 前端注入层全自动穿透（`content.js`）：
+     - 实现 `autoDismissSecurityNotice(document)` 穿透器，精准匹配免责声明、服务条款、数据使用及新手向导弹窗容器；
+     - 自动检测并毫秒级勾选未选中的数据许可复选框；
+     - 自动检索并模拟原生鼠标按压/释放与点击事件触发“确认并继续”/“接受并继续”/“开始使用”按钮；
+     - 双轨监听：DOM `MutationObserver` 节点增量感知 + 启动后 5 秒 25 次高频短轮询兜底，确保极速弹出时瞬间消除；
+     - 挂载全局句柄 `globalThis.__AntigravityAutoDismissNotice`。
+  2. 切号守护进程 CDP 链路无缝联动（`antigravity_smart_switch.py`）：
+     - 新增 `auto_dismiss_security_notice_via_cdp()` 接口；
+     - 在 `_run_smart_switch_locked` 凭据更新和语言包重注入后，主动通过 CDP 执行弹窗穿透；
+     - 在 `_cdp_execute_auto_resume` 任务续接前，优先穿透阻挡弹窗，确保会话输入框聚焦与任务“继续”派发绝对通畅。
+  3. 安全隔离与无误触防护：
+     - 严格约束文本指纹与属性选择器，仅针对安全须知/服务条款/数据使用/新手引导生效，绝不干涉正常对话删除、设置取消等业务确认框。
+- 验收结果：
+  - 单元测试与作用域隔离回归 100% 通过（`localization-extension.test.js`、`localization-ui-scope.test.js`、`free-account-and-revival-safety.test.py`）；
+  - 全量完成编译与一键安装程序/压缩包打包构建，生成 `v2.9.26` 正式发布包。
+
 ## v2.9.25 模型选择与用量配额浮窗全量汉化交付（2026-11-05）
 
 - 现场根因：

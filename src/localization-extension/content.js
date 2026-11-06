@@ -95,11 +95,15 @@
 
   // Live upgrades reuse the observer and refresh the UI scope predicate.
   globalThis.__AntigravityZhUiScope = isUiTextElement;
+  globalThis.__AntigravityAutoDismissNotice = function () {
+    return autoDismissSecurityNotice(document);
+  };
   if (globalThis.__AntigravityZhContentInstalled) {
     if (typeof globalThis.__AntigravityZhForceTranslate === 'function') {
       globalThis.__AntigravityZhForceTranslate();
     }
     translateSubtree(document.body || document.documentElement);
+    autoDismissSecurityNotice(document);
     document.documentElement.setAttribute('data-antigravity-zhcn', core.VERSION);
     return;
   }
@@ -286,6 +290,7 @@
     lastTextValues = new WeakMap();
     lastAttributeValues = new WeakMap();
     if (document.body) translateSubtree(document.body);
+    autoDismissSecurityNotice(document);
   };
 
   function contains(ancestor, node) {
@@ -344,6 +349,7 @@
     var observer = new MutationObserver(function (records) {
       if (applying) return;
       globalThis.__AntigravityZhCommandLabels.handleRecords(records);
+      autoDismissSecurityNotice(document);
       records.forEach(function (record) {
         if (record.type === 'attributes' || record.type === 'characterData') {
           if (isInstantUiNode(record.target)) {
@@ -383,7 +389,115 @@
       applying = false;
     }
     document.documentElement.setAttribute('data-antigravity-zhcn', core.VERSION);
+
+    // ── 自动穿透免责声明与安全须知弹窗 (无需人工点击确认) ────────────────────────
+    autoDismissSecurityNotice(document);
+    var dismissAttempts = 0;
+    var dismissPoll = function () {
+      if (autoDismissSecurityNotice(document)) return;
+      dismissAttempts++;
+      if (dismissAttempts < 25 && typeof setTimeout === 'function') {
+        setTimeout(dismissPoll, 200);
+      }
+    };
+    if (typeof setTimeout === 'function') {
+      setTimeout(dismissPoll, 200);
+    }
+    // ──────────────────────────────────────────────────────────────────────────
   }
+
+  // ── 自动穿透免责声明与安全须知弹窗 (Auto-Dismiss Security Notice Modal) ────
+  function autoDismissSecurityNotice(doc) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return false;
+    try {
+      var dialogs = Array.from(doc.querySelectorAll(
+        '[role="dialog"], [role="alertdialog"], [aria-modal="true"], ' +
+        '[data-testid*="onboarding" i], [data-testid*="welcome" i], [class*="modal" i], ' +
+        '[class*="max-w-xl" i], [class*="max-w-[560px]" i]'
+      ));
+      if (!dialogs.length) return false;
+
+      for (var d = 0; d < dialogs.length; d++) {
+        var modal = dialogs[d];
+        var text = (modal.innerText || modal.textContent || '').toLowerCase();
+
+        var isNotice = text.includes('security notice') ||
+          text.includes('安全须知') ||
+          text.includes('terms of service') ||
+          text.includes('服务条款') ||
+          text.includes('getting started') ||
+          text.includes('开始使用') ||
+          text.includes('data use') ||
+          text.includes('数据使用') ||
+          (modal.dataset && (modal.dataset.testid || '').toLowerCase().includes('onboarding')) ||
+          (modal.dataset && (modal.dataset.testid || '').toLowerCase().includes('welcome'));
+
+        if (!isNotice) continue;
+
+        if (typeof modal.querySelectorAll === 'function') {
+          var checkboxes = modal.querySelectorAll('input[type="checkbox"]');
+          Array.prototype.forEach.call(checkboxes, function (cb) {
+            if (!cb.checked && cb.offsetParent !== null && !cb.disabled) {
+              try {
+                cb.click();
+                cb.checked = true;
+                if (typeof Event === 'function') {
+                  cb.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+              } catch (e) {}
+            }
+          });
+
+          var buttons = Array.from(modal.querySelectorAll('button, [role="button"], a[role="button"]'));
+          for (var b = 0; b < buttons.length; b++) {
+            var btn = buttons[b];
+            var btnText = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+
+            if (
+              btnText === 'accept and continue' ||
+              btnText === '接受并继续' ||
+              btnText === '确认并继续' ||
+              btnText.indexOf('accept and continue') !== -1 ||
+              btnText.indexOf('接受并继续') !== -1 ||
+              btnText.indexOf('确认并继续') !== -1 ||
+              btnText === 'confirm and continue' ||
+              btnText === 'agree and continue' ||
+              btnText === '同意并继续' ||
+              btnText === 'accept all' ||
+              btnText === '接受全部' ||
+              btnText === 'get started' ||
+              btnText === '开始使用' ||
+              btnText === 'got it' ||
+              btnText === '知道了' ||
+              btnText === 'accept' ||
+              btnText === '接受' ||
+              btnText === 'continue' ||
+              btnText === '继续' ||
+              btnText === '确认' ||
+              btnText === '确定'
+            ) {
+              if (btn.offsetParent !== null && !btn.disabled && !btn.getAttribute('aria-disabled')) {
+                try {
+                  btn.focus();
+                  if (typeof MouseEvent === 'function') {
+                    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                  }
+                  btn.click();
+                  return true;
+                } catch (e) {}
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  globalThis.__AntigravityAutoDismissNotice = function () {
+    return autoDismissSecurityNotice(document);
+  };
 
   globalThis.__AntigravityAutoResume = async function (maxCount, resumeText) {
     maxCount = typeof maxCount === 'number' ? maxCount : 3;

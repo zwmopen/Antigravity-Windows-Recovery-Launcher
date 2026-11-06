@@ -1,3 +1,11 @@
+## v2.9.26 免责声明/安全须知全自动穿透闭环与模型用量汉化发行版（2026-11-06）
+
+- 彻底消除应用启动或切号后的安全须知/服务条款（Security Notice & Data Use）确认弹窗，实现 100% 自动勾选并点击“确认并继续”，无需任何人工介入。
+- 前端扩展 `content.js`（MutationObserver + 5s 极速短轮询）与切号中枢 `antigravity_smart_switch.py`（CDP 自动穿透）双轨联动。
+- 整合 v2.9.25 模型选择器与用量配额浮窗汉化（Notice/Unavailable/5h limit/剩余百分比/重置倒计时）。
+- 整合 v2.9.24 全量 82 个技能/插件双语标签及 Customizations 页面全面汉化。
+- 发布 Windows x64 独立安装程序及便携发行版。
+
 ﻿## v2.9.15 修复进入反重力无反应（2026-11-02）
 
 - 现场日志：14:20 两次点击 Activate=False/Find HWND=0；14:22 恢复流程把旧插件 sidecar PID29412 误记为 live attached。四个残留 Antigravity.exe 实际为 --import=...register_loader.js 的 Node 插件，没有主窗口。
