@@ -1,3 +1,25 @@
+## v2.9.27 Claude/第三方模型限额隔离保护与防误切防闪屏（2026-11-07）
+
+- 现场根因：
+  1. 用户在使用 Claude 模型（Claude 3.5 Sonnet / 3.7 Sonnet）并将单项额度耗尽时，底层语言服务抛出 `agent executor error: generating and executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached`。
+  2. 既有 `check_language_server_quota_error()` 采用广义正则匹配 `RESOURCE_EXHAUSTED`，未区分官方单项限额与 Gemini 核心配额，将当前 Gemini 核心额度 100% 满血且距重置仅剩 0.2 天的宝贵账号（`jounachelo@gmail.com`）误判为彻底枯竭并关押 7573 分钟。
+  3. 随后触发强制切号并杀掉底层语言服务进行凭据热重载，导致前台编辑器界面出现一瞬间黑屏与语言服务断连，打断用户正常思路。
+- 闭环修复：
+  1. 单项模型限额精准穿透识别（`antigravity_smart_switch.py`）：
+     - 新增 `is_claude_or_individual_model_error` 判定器，精确匹配 `Individual quota reached` 及 Claude/Anthropic/Sonnet/Haiku/Opus/GPT/3P 等单项模型限额报错。
+  2. 落实用户终极铁律：
+     - **“Claude 不参与这个 5% 的切号门禁；只要 Gemini 核心额度（机密零）还在，就算 Claude 归零了也坚决不切！”**
+     - 在捕获到单项限额报错时，首先核验当前账号 Gemini 核心额度（`gemini_5h > threshold (5.0%)` 且 `gemini_weekly > 1.0%`）。若 Gemini 充足，**绝对不关押账号、不触发切号、不热重启语言服务**，保持编辑器平稳运行，消除突发黑屏。
+     - 仅当该账号自身 Gemini 额度也耗尽或全池见底时，才触发账号轮转。
+  3. 账号优选算法平滑增强：
+     - 多维排序以 Gemini 额度与天数阶梯为主导，Claude 剩余周限额作为同分辅助排序参考，绝不淘汰任何可用 Gemini 算力。
+  4. 历史误关押账号即时解冻：
+     - 即时从 `quarantined-accounts.json` 中移除了被误关押的 `jounachelo@gmail.com`。
+- 验收结果：
+  - 新增测试用例 `test_claude_individual_quota_reached_does_not_switch_when_gemini_healthy` 与 `test_claude_quota_reached_forces_switch_when_gemini_also_exhausted` 针对性验证通过；
+  - 全部 4 大测试套件 100% 通过（C# 18 项策略测试、Python 配额门禁/多维优选/子智能体自愈、前端扩展测试）；
+  - `build.ps1`、`build-installer.ps1`、`build-release.ps1` 与 `install.ps1` 全流程构建与安装通过，产出 `v2.9.27` 安装包与绿色便携版。
+
 ## v2.9.26 登录/切号免责声明与安全须知全自动穿透闭环（2026-11-06）
 
 - 现场根因：

@@ -2521,6 +2521,7 @@ def select_best_account(accounts, current_id, threshold=5.0, target_email_or_id=
                 x.get("cockpit_score", 0.0),
                 -int(x.get("days_to_w_reset", 7.0)),
                 x.get("gemini_weekly", 0.0),
+                x.get("claude_weekly", 0.0),
                 x.get("gemini_5h", 0.0),
                 -x.get("days_to_w_reset", 7.0)
             ),
@@ -4667,7 +4668,29 @@ def ensure_localization_daemon_running():
         logger.warning(f"自愈拉起本地汉化守护进程异常: {e}")
 
 
-def check_language_server_quota_error():
+def is_claude_or_individual_model_error(snippet: str) -> bool:
+    """
+    识别是否为 Claude / 3P 或特定单项模型配额耗尽报错（如 Google 官方限额 Individual quota reached）。
+    根据用户铁律：Claude 额度不参与 5% 切号门禁；只要当前在用账号的 Gemini 核心额度还在，绝不切号与重启。
+    """
+    if not snippet:
+        return False
+    s = str(snippet).lower()
+    return any(p in s for p in (
+        "individual quota reached",
+        "individual quota",
+        "claude",
+        "anthropic",
+        "sonnet",
+        "haiku",
+        "opus",
+        "gpt-",
+        "3p-",
+        "3p models"
+    ))
+
+
+def check_language_server_quota_error(threshold=5.0):
     """穿透监听 language_server.log，毫秒级感知 429 / RESOURCE_EXHAUSTED / quota 耗尽报错，并进行账号重置时刻指纹归属识别"""
     global _last_language_log_pos, _last_switch_time
 
@@ -4821,6 +4844,20 @@ def check_language_server_quota_error():
                     return False
 
 
+                # 4.5. 【用户铁律】：Claude 与 3P/单项模型限额隔离保护
+                # 报错包含 "Individual quota reached" 或明确指向 Claude/Anthropic/Sonnet/Haiku/Opus/GPT/3P 模型时：
+                # 只要当前在用账号的 Gemini 核心额度充足 (5h > threshold 且周限额 > 1.0%)：
+                # 就算 Claude 额度归零或抛出 429，坚决不切号、不关押账号、不杀语言服务！
+                # 保留编辑器窗口完好，用户可在模型列表切换至 Gemini 极速继续。
+                curr_weekly = curr_acc.get("gemini_weekly", 0.0) if curr_acc else 0.0
+                curr_gemini_alive = bool(curr_acc and curr_5h > threshold and curr_weekly > 1.0)
+                is_individual_or_claude = is_claude_or_individual_model_error(matched_snippet) or is_claude_or_individual_model_error(new_content)
+                if is_individual_or_claude and curr_gemini_alive:
+                    logger.info(f"💡 [Claude/单项模型限额隔离] 捕获到单项模型配额耗尽: {matched_snippet[:200]}")
+                    logger.info(f"   当前在用账号 [{curr_email}] 的 Gemini 核心额度充沛 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)！")
+                    logger.info("   严格遵循用户铁律：Claude 额度不参与 5% 切号门禁；只要 Gemini 核心额度尚存，坚决不切号、不关押、不杀语言服务。")
+                    return False
+
                 # 5. 若未匹配到离线旧账号，确认为当前在用账号真实 429 耗尽
                 logger.warning(f"🚨 [实时日志穿透感知] 核心语言服务检测到当前账号真实 429 额度耗尽！")
                 logger.warning(f"   * 当前在用账号: {curr_email} (5h: {curr_5h}%)")
@@ -4953,7 +4990,7 @@ def run_watch_daemon(threshold=5.0, interval=30):
                 ensure_chinese_localization_injected()
 
             # 2. 穿透监听：只要 language_server 出现配额耗尽/429 报错，无需等待磁盘缓存，立刻触发无感切号与续接！
-            log_quota_hit = check_language_server_quota_error()
+            log_quota_hit = check_language_server_quota_error(threshold=threshold)
             if log_quota_hit and is_antigravity_running():
                 current_id_tmp, accounts_tmp = get_all_accounts_and_quotas()
                 if guard_quota_pool_exhaustion(accounts_tmp, current_id=current_id_tmp, threshold=threshold, curr_force_exhausted=True):

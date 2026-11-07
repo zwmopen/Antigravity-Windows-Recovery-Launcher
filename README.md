@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/最新版本-v2.9.26-blue.svg" alt="版本 v2.9.26" />
+  <img src="https://img.shields.io/badge/最新版本-v2.9.27-blue.svg" alt="版本 v2.9.27" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/独立专线-127.0.0.1:17897-teal.svg" alt="独立专线" />
   <img src="https://img.shields.io/badge/深度汉化-全界面%2B技能%2B用量浮窗-blueviolet.svg" alt="界面汉化" />
@@ -84,12 +84,12 @@
 
 ### 选项 1：一键安装包（推荐，新手首选）
 1. 前往 [最新发行版页面 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest)；
-2. 下载 **`Antigravity-Windows-Recovery-Setup-2.9.26-windows-x64.exe`**；
+2. 下载 **`Antigravity-Windows-Recovery-Setup-2.9.27-windows-x64.exe`**；
 3. 双击运行，按照向导一路点击“下一步”，自动安装并生成桌面图标。
 
 ### 选项 2：绿色免安装便携版（解压即用）
 1. 前往 [最新发行版页面 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest)；
-2. 下载 **`Antigravity-Windows-Recovery-Launcher-2.9.26-windows-x64.zip`**；
+2. 下载 **`Antigravity-Windows-Recovery-Launcher-2.9.27-windows-x64.zip`**；
 3. 解压到任意目录（例如 `D:\Tools\Antigravity`），双击 `Antigravity-Recovery-Launcher.exe` 即可启动。
 
 > 💡 **跨电脑迁移超省心**：  
@@ -114,7 +114,11 @@
 
 ### Q2: 刚开软件弹出的那个“安全须知”弹窗，真的不用我点了吗？
 **真的不用点！**  
-最新 v2.9.26 版本实装了全自动穿透器。不管是冷启动还是切号后弹出的“安全须知与数据使用”或“服务条款”弹窗，启动器都会在后台毫秒级自动帮你勾选复选框并点击“确认并继续”，你只管专注写代码就行。
+最新 v2.9.27 版本实装了全自动穿透器。不管是冷启动还是切号后弹出的“安全须知与数据使用”或“服务条款”弹窗，启动器都会在后台毫秒级自动帮你勾选复选框并点击“确认并继续”，你只管专注写代码就行。
+
+### Q3: 我用 Claude 模型额度用完了，为什么不会突然切号或黑屏？
+**严格遵循用户铁律：Claude 额度不参与 5% 切号门禁！**  
+Claude 等模型属于单项高阶模型，而 Gemini 才是日常主力。只要你当前账号的 Gemini 核心额度充足（> 5% 且周额度 > 1%），就算 Claude 归零或遇到 429 限额，系统也坚决不切号、不关押账号、绝不热重启语言服务，彻底告别突发黑屏和会话被打断！你可以直接在模型菜单里切回 Gemini 极速继续工作。
 
 ### Q3: 这个工具会影响我平时电脑上的微信、浏览器或打游戏吗？
 **完全不会。**  
@@ -151,7 +155,7 @@
 
 ## 📚 延伸文档
 
-* 📋 [v2.9.26 正式版发布说明](docs/RELEASE-NOTES-2.9.26.md)
+* 📋 [v2.9.27 正式版发布说明](docs/RELEASE-NOTES-2.9.27.md)
 * 📖 [完整版本演进历史](CHANGELOG.md)
 * 🛠️ [踩坑与排障参考](docs/TROUBLESHOOTING.md)
 

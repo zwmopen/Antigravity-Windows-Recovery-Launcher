@@ -62,6 +62,19 @@ class QuotaLogIdentityTests(unittest.TestCase):
     def test_no_error_does_not_switch(self):
         Path(m.LANGUAGE_SERVER_LOG).write_text("prefix\nno errors\n")
         self.assertFalse(m.check_language_server_quota_error())
+    def test_claude_individual_quota_reached_does_not_switch_when_gemini_healthy(self):
+        err_line = "agent executor error: generating and executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription\n"
+        Path(m.LANGUAGE_SERVER_LOG).write_text("prefix\n" + err_line)
+        m._last_language_log_pos = len("prefix\n")
+        self.assertFalse(m.check_language_server_quota_error())
+        self.mocks[3].assert_not_called()
+    def test_claude_quota_reached_forces_switch_when_gemini_also_exhausted(self):
+        err_line = "agent executor error: generating and executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription\n"
+        Path(m.LANGUAGE_SERVER_LOG).write_text("prefix\n" + err_line)
+        m._last_language_log_pos = len("prefix\n")
+        self.current["gemini_5h"] = 2.0
+        self.assertTrue(m.check_language_server_quota_error())
+        self.mocks[3].assert_called_with("current", 9000)
 
 if __name__ == "__main__":
     result = unittest.main(exit=False).result
