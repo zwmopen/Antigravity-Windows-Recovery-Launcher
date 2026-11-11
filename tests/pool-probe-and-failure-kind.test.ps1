@@ -87,5 +87,51 @@ Assert-State 'pool_probe_completed pool_size=20 winners=14 elapsed_ms=2840 mode=
 Assert-State 'latency_probe_started candidate_index=3 candidate_total=20 region=US mode=concurrent_pool' 'LineText' '*测速 3/20*US*'
 Assert-State 'proxy_reused pid=1234 port=17897 mode=warm_fast_path' 'LinePassed' 'True'
 Assert-State 'warm_proxy_api_unhealthy api=0 cloudcode=0 oauth=404 rtt_ms=110' 'LinePassed' 'False'
+Assert-State 'preflight_account_check_completed plan=PRO gemini_5h=80 gemini_weekly=55' 'AccountText' 'Pro · 5 小时 80% · 周 55%*'
 
-Write-Output 'PASS: concurrent pool helpers, timeout/429 failure classification, and compiled capsule pool states verified'
+# 4. Verify hot card & DPI-aware settings form layout cleanly (no overlapping controls or top clutter)
+$prog = $asm.GetType('AntigravityLauncher.Program')
+$priorDpi = $prog.GetMethod('EnterSharpCardDpiContext', $flags).Invoke($null, @())
+try {
+    $hotType = $asm.GetType('AntigravityLauncher.AntigravityHotLaunchChoiceForm')
+    $hotForm = [Activator]::CreateInstance($hotType, $true)
+    try {
+        $hotType.GetMethod('StopTimer', $flags).Invoke($hotForm, @()) | Out-Null
+        $subText = [string]$hotType.GetField('subtitleText', $flags).GetValue($hotForm)
+        $selText = [string]$hotType.GetField('selectedText', $flags).GetValue($hotForm)
+        $remSec = [int]$hotType.GetField('remainingSeconds', $flags).GetValue($hotForm)
+        if ($subText -notlike '*5 秒倒计时*') { throw ('hot_subtitle_missing_5s:' + $subText) }
+        if ($selText -notlike '*状态评估*') { throw ('hot_selected_missing_eval:' + $selText) }
+        if ($remSec -ne 5) { throw ('hot_countdown_not_5:' + $remSec) }
+    } finally { $hotForm.Dispose() }
+
+    $settingsType = $asm.GetType('AntigravityLauncher.LauncherSettingsForm')
+    foreach ($scale in @(1.0, 1.5, 2.0)) {
+        $sf = [Activator]::CreateInstance($settingsType, $true)
+        try {
+            $existing = [float]$settingsType.GetField('uiScale', $flags).GetValue($sf)
+            if ([Math]::Abs(($scale / $existing) - 1.0) -gt 0.01) {
+                $sf.Scale((New-Object System.Drawing.SizeF(($scale / $existing), ($scale / $existing))))
+                $settingsType.GetField('uiScale', $flags).SetValue($sf, [float]$scale)
+            }
+            $sf.CreateControl()
+            $ctrls = @($sf.Controls)
+            for ($i = 0; $i -lt $ctrls.Count; $i++) {
+                $a = $ctrls[$i]
+                if ($a.Right -gt $sf.ClientSize.Width -or $a.Bottom -gt $sf.ClientSize.Height -or $a.Left -lt 0 -or $a.Top -lt 0) {
+                    throw ('settings_ctrl_out_of_bounds:' + $scale + ':' + $a.GetType().Name + ':' + $a.Text)
+                }
+                for ($j = $i + 1; $j -lt $ctrls.Count; $j++) {
+                    $b = $ctrls[$j]
+                    if ($a.Bounds.IntersectsWith($b.Bounds)) {
+                        throw ('settings_ctrl_overlap:' + $scale + ':' + $a.Text + '<->' + $b.Text)
+                    }
+                }
+            }
+        } finally { $sf.Dispose() }
+    }
+} finally {
+    if ($priorDpi -ne [IntPtr]::Zero) { $null = $prog.GetMethod('SetThreadDpiAwarenessContext', $flags).Invoke($null, @($priorDpi)) }
+}
+
+Write-Output 'PASS: concurrent pool helpers, timeout/429 failure classification, compiled capsule & settings DPI layout verified'

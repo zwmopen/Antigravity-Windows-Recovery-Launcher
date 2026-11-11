@@ -1,3 +1,11 @@
+## v2.9.29 启动卡片视觉精修 + 设置面板高分屏重排 + 真实节点直显（2026-11-12）
+
+- **旋转小圆圈加载动画（`DrawSpinnerCircle`）**：热启动卡片异步读取软件内账号期间显示旋转蓝色圆环；5 步冷启动胶囊正在执行的步骤圆圈外围绘制旋转加载环，状态变化直观可视。
+- **顶部栏极简瘦身**：移除热启动卡片顶部多余的 `· 待验证`、`PRO · 额度充裕`、`编辑器运行中` 胶囊，彻底解决与右上角 `⚙` 设置按钮碰撞问题。
+- **高分屏设置面板（`LauncherSettingsForm`）重排**：补全 `AutoScaleMode.None` + `uiScale` DPI 缩放，加宽至 `490x304` 逻辑尺寸并固定控件防溢出边界，清除在 WinForms 下变方框的 Emoji，`100% / 150% / 200%` 三档 DPI 下零重叠零截断。
+- **足额 5 秒倒计时 & 直觉人话格式**：热启动卡片在账号/线路真实结果渲染完毕后再从满 **5 秒**启动倒计时；副标题清晰提示“点击空白处可暂停 5 秒倒计时”；文案改为 `Pro · 5 小时 XX% | 周 XX%` 与持续可见的 `状态评估` 行。
+- **真实节点名称毫秒直显（告别“节点名称待同步”）**：[`Write-PrivateConfig`](src/Antigravity-ProxySupervisor.ps1) 在配置注释中保留目标节点与地区元数据；启动卡片新增 `TryResolveActiveNodeFromConfig`（支持从本地 `mihomo-antigravity.yaml` + Clash Verge / Mihomo Party 配置文件反查活跃节点的真实名称与国家），并并行轻测 `17897` 在线延迟，实机直接显示 `美国 · 美国凤凰城|hy2（在线 · ~ms）`。
+
 ## v2.9.28 多核并发竞速探活 + 策略一热复用提速 + 云端五步状态卡合流（2026-11-12）
 
 - **20 路单实例多核并发竞速（`Invoke-ConcurrentNodePoolProbe`）**：在 1 个临时沙盒 `antigravity-mihomo` 进程上通过原生 `listeners:` 绑定最多 20 个独立本地端口，先热身并测 `Google 204` 真实毫秒 RTT，再并发探测 `generativelanguage`、`daily-cloudcode-pa`（CloudCode）、`oauth2` 与 Cloudflare 出口国家；凑够双区可用优选专线且最短竞速窗口满足后立即“竞速早退”，不可用时自动无缝回落到原有单条探针。

@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.28.0")]
-[assembly: AssemblyFileVersion("2.9.28.0")]
-[assembly: AssemblyInformationalVersion("2.9.28")]
+[assembly: AssemblyVersion("2.9.29.0")]
+[assembly: AssemblyFileVersion("2.9.29.0")]
+[assembly: AssemblyInformationalVersion("2.9.29")]
 
 namespace AntigravityLauncher
 {
@@ -1032,20 +1032,19 @@ namespace AntigravityLauncher
         }
 
         private System.Windows.Forms.Timer countdownTimer;
+        private System.Windows.Forms.Timer spinnerTimer;
+        private int spinnerAngle = 0;
+        private bool isLoadingIdentity = true;
+        private bool countdownPaused = false;
+        private bool countdownStarted = false;
         private HotLaunchButton btnActivate;
         private HotLaunchButton btnRepair;
         private CapsuleCloseButton closeButton;
         private Image appIcon = null;
-        private string egressBadgeText = "网络待核实";
-        private string statusBadgeText = "编辑器运行中";
-        private string quotaBadgeText = "";
-        private Color quotaBadgeBg = Color.FromArgb(232, 247, 238);
-        private Color quotaBadgeBorder = Color.FromArgb(179, 221, 193);
-        private Color quotaBadgeFg = Color.FromArgb(34, 115, 67);
-        private string subtitleText = "账号状态待核实";
-        private string networkText = "当前网络：未知";
-        private string accountText = "最近验证账号：未知（软件内实际账号待确认）";
-        private string selectedText = "软件内实际账号待确认";
+        private string subtitleText = "网络与算力大盘监控 · 点击空白处可暂停 5 秒倒计时";
+        private string networkText = "线路  正在同步当前节点…";
+        private string accountText = "当前在用  正在读取软件内账号…";
+        private string selectedText = "⏳ 状态评估  正在核验账号额度与运行状态…";
         private bool networkVerified;
         private bool accountMismatch;
         private bool needSwitch;
@@ -1055,7 +1054,114 @@ namespace AntigravityLauncher
         private string selectedEmail = "";
         private string bestTargetEmail = "";
         private string bestTargetPlan = "";
+        private string resolvedRegionLabel = "";
+        private string resolvedNodeLabel = "";
         private ToolTip detailTip;
+
+        private static string FormatRegionLabel(string regionOrText)
+        {
+            string val = (regionOrText ?? "").Trim();
+            if (string.Equals(val, "JP", StringComparison.OrdinalIgnoreCase) || val.Contains("日本") || val.Contains("Tokyo") || val.Contains("Osaka") || val.Contains("🇯🇵")) return "日本";
+            if (string.Equals(val, "US", StringComparison.OrdinalIgnoreCase) || val.Contains("美国") || val.Contains("San Jose") || val.Contains("Los Angeles") || val.Contains("Phoenix") || val.Contains("凤凰城") || val.Contains("🇺🇸")) return "美国";
+            return val;
+        }
+
+        private static string MatchClashNodeByServerPort(string server, string port)
+        {
+            if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(port)) return "";
+            try
+            {
+                string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                string[] dirs = new[] {
+                    Path.Combine(appData, @"io.github.clash-verge-rev.clash-verge-rev\profiles"),
+                    Path.Combine(appData, @"mihomo-party\profiles")
+                };
+                string serverPat = "(?<![-\\w])server:\\s*['\"]?" + System.Text.RegularExpressions.Regex.Escape(server) + "['\"]?(?=[\\s,}])";
+                string portPat = "(?<![-\\w])port:\\s*['\"]?" + System.Text.RegularExpressions.Regex.Escape(port) + "['\"]?(?=[\\s,}])";
+                foreach (string dir in dirs)
+                {
+                    if (!Directory.Exists(dir)) continue;
+                    string[] files = Directory.GetFiles(dir, "*.y*ml");
+                    Array.Sort(files, delegate(string a, string b) { return File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)); });
+                    foreach (string file in files)
+                    {
+                        foreach (string line in File.ReadLines(file, Encoding.UTF8))
+                        {
+                            if (line.IndexOf(server, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                            if (!System.Text.RegularExpressions.Regex.IsMatch(line, serverPat) || !System.Text.RegularExpressions.Regex.IsMatch(line, portPat)) continue;
+                            var m = System.Text.RegularExpressions.Regex.Match(line, "(?<![-\\w])name:\\s*(?:'([^']+)'|\"([^\"]+)\"|([^,}]+))");
+                            if (m.Success)
+                            {
+                                string raw = !string.IsNullOrEmpty(m.Groups[1].Value) ? m.Groups[1].Value
+                                    : !string.IsNullOrEmpty(m.Groups[2].Value) ? m.Groups[2].Value
+                                    : m.Groups[3].Value;
+                                string trimmed = (raw ?? "").Trim();
+                                if (!string.IsNullOrEmpty(trimmed) && !trimmed.StartsWith("ANTIGRAVITY-", StringComparison.OrdinalIgnoreCase))
+                                    return trimmed;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            return "";
+        }
+
+        private static void TryResolveActiveNodeFromConfig(out string nodeName, out string regionLabel)
+        {
+            nodeName = "";
+            regionLabel = "";
+            try
+            {
+                string mihomoYaml = Path.Combine(Program.RuntimeDirectory, "mihomo-antigravity.yaml");
+                if (!File.Exists(mihomoYaml)) return;
+                string content = File.ReadAllText(mihomoYaml, Encoding.UTF8);
+                var mNode = System.Text.RegularExpressions.Regex.Match(content, @"(?m)^#\s*Antigravity-Target-Node:\s*(.+?)\s*$");
+                if (mNode.Success) nodeName = mNode.Groups[1].Value.Trim();
+                var mReg = System.Text.RegularExpressions.Regex.Match(content, @"(?m)^#\s*Antigravity-Target-Region:\s*(.+?)\s*$");
+                if (mReg.Success) regionLabel = FormatRegionLabel(mReg.Groups[1].Value);
+
+                if (string.IsNullOrEmpty(nodeName))
+                {
+                    var mServer = System.Text.RegularExpressions.Regex.Match(content, @"(?<![-\w])server:\s*['""]?([^,\s}'""]+)['""]?");
+                    var mPort = System.Text.RegularExpressions.Regex.Match(content, @"(?<![-\w])port:\s*['""]?(\d+)['""]?");
+                    if (mServer.Success && mPort.Success)
+                    {
+                        string srv = mServer.Groups[1].Value.Trim();
+                        string prt = mPort.Groups[1].Value.Trim();
+                        string matched = MatchClashNodeByServerPort(srv, prt);
+                        if (!string.IsNullOrEmpty(matched)) nodeName = matched;
+                        if (string.IsNullOrEmpty(regionLabel))
+                        {
+                            regionLabel = FormatRegionLabel(nodeName);
+                            if (string.IsNullOrEmpty(regionLabel))
+                            {
+                                if (srv.StartsWith("us", StringComparison.OrdinalIgnoreCase)) regionLabel = "美国";
+                                else if (srv.StartsWith("jp", StringComparison.OrdinalIgnoreCase)) regionLabel = "日本";
+                            }
+                        }
+                    }
+                }
+                else if (string.IsNullOrEmpty(regionLabel))
+                {
+                    regionLabel = FormatRegionLabel(nodeName);
+                }
+            }
+            catch { }
+        }
+
+        private static string FormatNetworkLine(string regionLabel, string nodeName, string liveTail)
+        {
+            if (string.IsNullOrEmpty(nodeName))
+            {
+                string regPart = string.IsNullOrEmpty(regionLabel) ? "" : (regionLabel + " · ");
+                return string.IsNullOrEmpty(liveTail)
+                    ? ("线路  " + regPart + "尚未同步专线节点（可点击“检查并切换线路”）")
+                    : ("线路  " + regPart + "本地专线运行中" + liveTail);
+            }
+            string prefix = string.IsNullOrEmpty(regionLabel) ? "" : (regionLabel + " · ");
+            return "线路  " + prefix + nodeName + (liveTail ?? "");
+        }
 
 
         private static string JsonValue(string json, string key)
@@ -1075,6 +1181,7 @@ namespace AntigravityLauncher
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             AutoScaleMode = AutoScaleMode.None;
+            DoubleBuffered = true;
             using (Graphics dpiGraphics = CreateGraphics()) { uiScale = Math.Max(1F, dpiGraphics.DpiX / 96F); }
             ClientSize = new Size(560, 256);
             BackColor = Color.FromArgb(248, 250, 252);
@@ -1091,11 +1198,20 @@ namespace AntigravityLauncher
                 string node = JsonValue(json, "target_node");
                 bool passed = JsonValue(json, "real_model_probe") == "passed" && JsonValue(json, "status") == "ready";
                 networkVerified = passed;
-                egressBadgeText = (country == "JP" ? "日本" : country == "US" ? "美国" : country) + (passed ? " · 已验证" : " · 待验证");
-                if (node == "CURRENT-VERIFIED-FAILOVER-CANDIDATE") node = "节点名称待同步";
-                networkText = "线路  " + (country == "JP" ? "日本" : country == "US" ? "美国" : country) + " · " + (string.IsNullOrEmpty(node) ? "节点名称待同步" : node);
-                if (File.Exists(Program.SupervisorStatePath))
-                    subtitleText = "网络验证记录 " + File.GetLastWriteTime(Program.SupervisorStatePath).ToString("MM-dd HH:mm") + "  ·  点击空白处暂停倒计时";
+                if (node == "CURRENT-VERIFIED-FAILOVER-CANDIDATE") node = "";
+                string regionLabel = FormatRegionLabel(country);
+                if (string.IsNullOrEmpty(node) || string.IsNullOrEmpty(regionLabel))
+                {
+                    string cfgNode, cfgRegion;
+                    TryResolveActiveNodeFromConfig(out cfgNode, out cfgRegion);
+                    if (string.IsNullOrEmpty(node) && !string.IsNullOrEmpty(cfgNode)) node = cfgNode;
+                    if (string.IsNullOrEmpty(regionLabel) && !string.IsNullOrEmpty(cfgRegion)) regionLabel = cfgRegion;
+                }
+                if (string.IsNullOrEmpty(regionLabel) && !string.IsNullOrEmpty(node)) regionLabel = FormatRegionLabel(node);
+                resolvedRegionLabel = regionLabel;
+                resolvedNodeLabel = node;
+                networkText = FormatNetworkLine(resolvedRegionLabel, resolvedNodeLabel, "（正在检测连通性…）");
+                subtitleText = "网络与算力大盘监控 · 点击空白处可暂停 5 秒倒计时";
                 string receipt = Path.Combine(Program.RuntimeDirectory, "launch-account-status.json");
                 if (File.Exists(receipt))
                 {
@@ -1110,32 +1226,19 @@ namespace AntigravityLauncher
                     bestTargetPlan = JsonValue(rJson, "best_target_plan");
                     double h5 = 0; double.TryParse(h5Str, out h5);
                     double w = 0; double.TryParse(wStr, out w);
-                    string planTag = isPro ? "PRO" : "FREE";
                     if (isExhausted || (h5 <= 5.0 && w <= 5.0))
                     {
                         isExhausted = true;
                         needSwitch = true;
-                        quotaBadgeText = "额度已耗尽 (0%)";
-                        quotaBadgeBg = Color.FromArgb(254, 242, 242);
-                        quotaBadgeBorder = Color.FromArgb(252, 165, 165);
-                        quotaBadgeFg = Color.FromArgb(220, 38, 38);
                         subtitleText = "当前账号算力已耗尽 · 倒计时或点击将自动切号接力";
                     }
                     else if (h5 <= 15.0)
                     {
-                        quotaBadgeText = planTag + " · 低额预警 " + Math.Round(h5) + "%";
-                        quotaBadgeBg = Color.FromArgb(255, 247, 237);
-                        quotaBadgeBorder = Color.FromArgb(253, 186, 116);
-                        quotaBadgeFg = Color.FromArgb(194, 65, 12);
-                        subtitleText = "当前账号配额较低 · 点击空白处可暂停倒计时";
+                        subtitleText = "当前账号配额较低 · 点击空白处可暂停 5 秒倒计时";
                     }
                     else
                     {
-                        quotaBadgeText = planTag + " · 额度充裕 " + Math.Round(h5) + "%";
-                        quotaBadgeBg = Color.FromArgb(236, 253, 245);
-                        quotaBadgeBorder = Color.FromArgb(167, 243, 208);
-                        quotaBadgeFg = Color.FromArgb(5, 150, 105);
-                        subtitleText = "网络与算力大盘监控 · 点击空白处可暂停倒计时";
+                        subtitleText = "网络与算力大盘监控 · 点击空白处可暂停 5 秒倒计时";
                     }
                 }
                 string selected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".antigravity_cockpit", "current_account.json");
@@ -1149,17 +1252,18 @@ namespace AntigravityLauncher
 
             accountMismatch = !string.IsNullOrEmpty(verifiedEmail) && !string.IsNullOrEmpty(selectedEmail) && !string.Equals(verifiedEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
             if (accountMismatch) needSwitch = true;
-            accountText = "正在读取软件内账号…";
+            accountText = "当前在用  正在读取软件内账号…";
             selectedText = (needSwitch || accountMismatch)
-                ? ("⚡ 优选接力  目标：" + (!string.IsNullOrEmpty(bestTargetEmail) ? bestTargetEmail : selectedEmail) + " · 倒计时或点击自动切号")
-                : "✅ 状态评估  当前在用账号配额充足健康，保持在用";
+                ? ("⚡ 状态评估  建议切号接力：" + (!string.IsNullOrEmpty(bestTargetEmail) ? bestTargetEmail : selectedEmail))
+                : "⏳ 状态评估  正在核验账号额度与运行状态…";
             AccessibleDescription = accountText + "; " + selectedText + "; " + networkText + "; " + subtitleText;
-            accountText = "正在读取软件内账号…";
-            selectedText = "从当前运行的反重力读取，不改变账号";
-            Shown += delegate { ReadRuntimeIdentity(); };
+            Shown += delegate {
+                if (spinnerTimer != null) spinnerTimer.Start();
+                ReadRuntimeIdentity();
+            };
             detailTip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 300, ReshowDelay = 100 };
-            detailTip.SetToolTip(this, accountText + "\n" + selectedText + "\n" + networkText + "\n" + subtitleText + "\n账号来源 Cockpit；独立代理端口 17897。验证记录不代表当前请求一定成功。");
-            FormClosed += delegate { detailTip.Dispose(); };
+            detailTip.SetToolTip(this, accountText + "\n" + selectedText + "\n" + networkText + "\n" + subtitleText + "\n账号来源 Cockpit；独立代理端口 17897。");
+            FormClosed += delegate { StopTimer(); detailTip.Dispose(); };
 
             closeButton = new CapsuleCloseButton
             {
@@ -1233,7 +1337,7 @@ namespace AntigravityLauncher
             MouseDown += delegate(object s, MouseEventArgs me)
             {
                 StopTimer();
-                btnActivate.ButtonText = accountMismatch ? "同步切号并进入" : "进入反重力";
+                btnActivate.ButtonText = (needSwitch || accountMismatch) ? "优选切号并进入" : "进入反重力";
                 if (me.Button == MouseButtons.Left)
                 {
                     Program.ReleaseCapture();
@@ -1265,9 +1369,22 @@ namespace AntigravityLauncher
                 try { Program.SetWindowPos(Handle, Program.HWND_NOTOPMOST, 0, 0, 0, 0, Program.SWP_NOMOVE | Program.SWP_NOSIZE | Program.SWP_NOACTIVATE); } catch { }
             };
 
+            spinnerTimer = new System.Windows.Forms.Timer { Interval = 75 };
+            spinnerTimer.Tick += delegate
+            {
+                if (!isLoadingIdentity)
+                {
+                    if (spinnerTimer != null) spinnerTimer.Stop();
+                    return;
+                }
+                spinnerAngle = (spinnerAngle + 28) % 360;
+                Invalidate(Px(16, 90, 32, 32));
+            };
+
             countdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             countdownTimer.Tick += delegate
             {
+                if (countdownPaused) return;
                 remainingSeconds--;
                 if (remainingSeconds <= 0)
                 {
@@ -1281,13 +1398,35 @@ namespace AntigravityLauncher
                 }
             };
             if (uiScale != 1F) Scale(new SizeF(uiScale, uiScale));
-            countdownTimer.Start();
+        }
+
+        private static int ProbeLiveProxyFast()
+        {
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create("http://www.gstatic.com/generate_204");
+                req.Method = "GET";
+                req.Proxy = new System.Net.WebProxy("http://127.0.0.1:17897");
+                req.Timeout = 1300;
+                req.ReadWriteTimeout = 1300;
+                req.KeepAlive = false;
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
+                {
+                    sw.Stop();
+                    if ((int)resp.StatusCode == 204 || (int)resp.StatusCode == 200)
+                        return Math.Max(1, (int)sw.ElapsedMilliseconds);
+                }
+            }
+            catch { }
+            return -1;
         }
 
         private void ReadRuntimeIdentity() {
             Task.Run(delegate {
                 string liveEmail = "";
                 string liveJson = "";
+                var proxyTask = Task.Run(delegate { return ProbeLiveProxyFast(); });
                 try {
                     string helper = Path.Combine(Program.AppDirectory, "antigravity_runtime_identity.py");
                     string pythonw = Program.ResolvePythonw();
@@ -1303,10 +1442,20 @@ namespace AntigravityLauncher
                         }
                     }
                 } catch { }
+                int liveRttMs = -1;
+                try { if (proxyTask.Wait(1500)) liveRttMs = proxyTask.Result; } catch { }
 
                 if (IsDisposed || Disposing || !IsHandleCreated) return;
                 try { BeginInvoke(new Action(delegate {
                     if (IsDisposed) return;
+                    isLoadingIdentity = false;
+                    if (spinnerTimer != null) spinnerTimer.Stop();
+                    if (liveRttMs > 0) networkVerified = true;
+                    string liveTail = liveRttMs > 0
+                        ? ("（在线 · " + liveRttMs + "ms）")
+                        : "（待恢复 · 可点右侧重连）";
+                    networkText = FormatNetworkLine(resolvedRegionLabel, resolvedNodeLabel, liveTail);
+
                     if (!string.IsNullOrEmpty(liveJson)) {
                         string liveEm = JsonValue(liveJson, "email");
                         if (!string.IsNullOrEmpty(liveEm)) liveEmail = liveEm;
@@ -1320,44 +1469,45 @@ namespace AntigravityLauncher
                         string bTarget = JsonValue(liveJson, "best_target_email");
                         if (!string.IsNullOrEmpty(bTarget)) bestTargetEmail = bTarget;
 
-                        string planTag = isPro ? "PRO" : "FREE";
+                        string planTag = isPro ? "Pro" : "Free";
                         if (isExhausted || (h5 <= 5.0 && w <= 5.0)) {
                             isExhausted = true;
                             needSwitch = true;
-                            quotaBadgeText = "额度已耗尽 (0%)";
-                            quotaBadgeBg = Color.FromArgb(254, 242, 242);
-                            quotaBadgeBorder = Color.FromArgb(252, 165, 165);
-                            quotaBadgeFg = Color.FromArgb(220, 38, 38);
+                            subtitleText = "当前账号算力已耗尽 · 倒计时或点击将自动切号接力";
                         } else if (h5 <= 15.0) {
-                            quotaBadgeText = planTag + " · 低额预警 " + Math.Round(h5) + "%";
-                            quotaBadgeBg = Color.FromArgb(255, 247, 237);
-                            quotaBadgeBorder = Color.FromArgb(253, 186, 116);
-                            quotaBadgeFg = Color.FromArgb(194, 65, 12);
+                            subtitleText = "当前账号配额较低 · 点击空白处可暂停 5 秒倒计时";
                         } else {
-                            quotaBadgeText = planTag + " · 额度充裕 " + Math.Round(h5) + "%";
-                            quotaBadgeBg = Color.FromArgb(236, 253, 245);
-                            quotaBadgeBorder = Color.FromArgb(167, 243, 208);
-                            quotaBadgeFg = Color.FromArgb(5, 150, 105);
+                            subtitleText = "网络与算力大盘监控 · 点击空白处可暂停 5 秒倒计时";
                         }
 
-                        accountText = "当前在用  " + liveEmail + " (" + planTag + " · 5h: " + Math.Round(h5) + "% | 周: " + Math.Round(w) + "%)";
+                        accountText = "当前在用  " + liveEmail + " (" + planTag + " · 5 小时 " + Math.Round(h5) + "% | 周 " + Math.Round(w) + "%)";
                         accountMismatch = !string.IsNullOrEmpty(selectedEmail) && !string.Equals(liveEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
                         if (accountMismatch) needSwitch = true;
 
                         string targetShow = !string.IsNullOrEmpty(bestTargetEmail) ? bestTargetEmail : selectedEmail;
                         if (needSwitch || accountMismatch) {
-                            selectedText = "⚡ 优选接力  目标：" + targetShow + " · 倒计时或点击自动切号";
+                            selectedText = "✅ 状态评估  建议切号接力至 " + targetShow;
                             btnActivate.IsWarning = true;
-                            if (countdownTimer != null) btnActivate.ButtonText = "优选切号并进入 (" + remainingSeconds + "s)";
-                            else btnActivate.ButtonText = "优选切号并进入";
                         } else {
                             selectedText = "✅ 状态评估  当前在用账号配额充足健康，保持在用";
                             btnActivate.IsWarning = false;
-                            if (countdownTimer != null) btnActivate.ButtonText = "进入反重力 (" + remainingSeconds + "s)";
-                            else btnActivate.ButtonText = "进入反重力";
                         }
                     } else if (!string.IsNullOrEmpty(liveEmail)) {
                         accountText = "当前在用  " + liveEmail;
+                        selectedText = "✅ 状态评估  已连接当前正在运行的编辑器账号";
+                    } else {
+                        selectedText = "✅ 状态评估  当前编辑窗口运行中，可直接进入";
+                    }
+
+                    if (!countdownPaused && countdownTimer != null) {
+                        if (!countdownStarted) {
+                            remainingSeconds = 5;
+                            countdownStarted = true;
+                            countdownTimer.Start();
+                        }
+                        btnActivate.ButtonText = ((needSwitch || accountMismatch) ? "优选切号并进入 (" : "进入反重力 (") + remainingSeconds + "s)";
+                    } else {
+                        btnActivate.ButtonText = (needSwitch || accountMismatch) ? "优选切号并进入" : "进入反重力";
                     }
                     AccessibleDescription = accountText + "; " + selectedText + "; " + networkText;
                     detailTip.SetToolTip(this, accountText + "\n" + selectedText + "\n" + networkText + "\n" + subtitleText);
@@ -1368,16 +1518,23 @@ namespace AntigravityLauncher
 
         internal void PauseCountdown() {
             StopTimer();
-            btnActivate.ButtonText = accountMismatch ? "同步切号并进入" : "进入反重力";
+            btnActivate.ButtonText = (needSwitch || accountMismatch) ? "优选切号并进入" : "进入反重力";
         }
 
         private void StopTimer()
         {
+            countdownPaused = true;
             if (countdownTimer != null)
             {
                 countdownTimer.Stop();
                 countdownTimer.Dispose();
                 countdownTimer = null;
+            }
+            if (spinnerTimer != null)
+            {
+                spinnerTimer.Stop();
+                spinnerTimer.Dispose();
+                spinnerTimer = null;
             }
         }
 
@@ -1453,15 +1610,15 @@ namespace AntigravityLauncher
                 g.DrawString(text, font, brush, bounds, format);
         }
 
-        private int DrawStatusBadge(Graphics g, string text, int x, Color background, Color border, Color foreground) {
-            using (var font = new Font("微软雅黑", 9F, FontStyle.Regular, GraphicsUnit.Point, 134)) {
-                Size textSize = TextRenderer.MeasureText(g, text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-                var rect = new Rectangle(x, Px(0, 20, 0, 0).Y, textSize.Width + Px(0, 0, 20, 0).Width, Px(0, 0, 0, 24).Height);
-                using (var path = RoundedRectangle(rect, Math.Max(4, (int)(10 * uiScale))))
-                using (var fill = new SolidBrush(background))
-                using (var pen = new Pen(border)) { g.FillPath(fill, path); g.DrawPath(pen, path); }
-                DrawCardText(g, text, font, rect, foreground, true);
-                return rect.Right + (int)(8 * uiScale);
+        private void DrawSpinnerCircle(Graphics g, Rectangle rect, int angle)
+        {
+            using (var trackPen = new Pen(Color.FromArgb(219, 234, 254), Math.Max(1.6F, 2F * uiScale)))
+            using (var arcPen = new Pen(Color.FromArgb(37, 99, 235), Math.Max(1.6F, 2F * uiScale)))
+            {
+                arcPen.StartCap = LineCap.Round;
+                arcPen.EndCap = LineCap.Round;
+                g.DrawEllipse(trackPen, rect);
+                g.DrawArc(arcPen, rect, angle, 250);
             }
         }
 
@@ -1480,17 +1637,20 @@ namespace AntigravityLauncher
                 e.Graphics.DrawImage(appIcon, Px(20, 18, 34, 34));
             }
             using (var title = new Font("微软雅黑", 12F, FontStyle.Bold, GraphicsUnit.Point, 134))
-                DrawCardText(e.Graphics, "Antigravity", title, Px(64, 18, 110, 32), Color.FromArgb(20, 34, 54), false);
-            int badgeX = Px(178, 0, 0, 0).X;
-            badgeX = DrawStatusBadge(e.Graphics, egressBadgeText, badgeX, networkVerified ? Color.FromArgb(232, 247, 238) : Color.FromArgb(255, 247, 225), networkVerified ? Color.FromArgb(179, 221, 193) : Color.FromArgb(241, 211, 151), networkVerified ? Color.FromArgb(34, 115, 67) : Color.FromArgb(157, 99, 20));
-            if (!string.IsNullOrEmpty(quotaBadgeText)) {
-                badgeX = DrawStatusBadge(e.Graphics, quotaBadgeText, badgeX, quotaBadgeBg, quotaBadgeBorder, quotaBadgeFg);
-            }
-            DrawStatusBadge(e.Graphics, statusBadgeText, badgeX, Color.FromArgb(241, 245, 249), Color.FromArgb(219, 225, 233), Color.FromArgb(71, 85, 105));
+                DrawCardText(e.Graphics, "Antigravity", title, Px(64, 18, 160, 34), Color.FromArgb(20, 34, 54), false);
+
+            using (var sepPen = new Pen(Color.FromArgb(232, 238, 246)))
+                e.Graphics.DrawLine(sepPen, Px(20, 60, 0, 0).X, Px(0, 60, 0, 0).Y, Width - Px(20, 0, 0, 0).X, Px(0, 60, 0, 0).Y);
+
             using (var body = new Font("微软雅黑", 10F, FontStyle.Regular, GraphicsUnit.Point, 134))
             using (var small = new Font("微软雅黑", 9F, FontStyle.Regular, GraphicsUnit.Point, 134)) {
                 DrawCardText(e.Graphics, subtitleText, small, Px(20, 64, 520, 22), Color.FromArgb(85, 101, 123), false);
-                DrawCardText(e.Graphics, accountText, body, Px(20, 94, 520, 24), Color.FromArgb(23, 38, 59), false);
+                if (isLoadingIdentity) {
+                    DrawSpinnerCircle(e.Graphics, Px(20, 99, 14, 14), spinnerAngle);
+                    DrawCardText(e.Graphics, accountText, body, Px(41, 94, 499, 24), Color.FromArgb(23, 38, 59), false);
+                } else {
+                    DrawCardText(e.Graphics, accountText, body, Px(20, 94, 520, 24), Color.FromArgb(23, 38, 59), false);
+                }
                 DrawCardText(e.Graphics, selectedText, small, Px(20, 124, 520, 22), (needSwitch || accountMismatch) ? Color.FromArgb(194, 65, 12) : Color.FromArgb(22, 101, 52), false);
                 DrawCardText(e.Graphics, networkText, body, Px(20, 154, 520, 24), Color.FromArgb(23, 38, 59), false);
             }
@@ -1509,6 +1669,8 @@ namespace AntigravityLauncher
 
         private CapsuleProgress progressBar;
         private Image appIcon = null;
+        private System.Windows.Forms.Timer spinnerTimer = null;
+        private int spinnerAngle = 0;
 
         // 动态状态模型
         // Account-first launch state. A stage turns green only after a real logged gate passes.
@@ -1672,6 +1834,16 @@ namespace AntigravityLauncher
             var circle = new Rectangle(33, y + 13, 26, 26);
             using (var brush = new SolidBrush(dotFill)) g.FillEllipse(brush, circle);
             using (var ring = new Pen(dotRing, 1F)) g.DrawEllipse(ring, circle);
+            if (active && !passed)
+            {
+                var spinRect = Rectangle.Inflate(circle, 2, 2);
+                using (var spinPen = new Pen(Color.FromArgb(37, 99, 235), 2F))
+                {
+                    spinPen.StartCap = LineCap.Round;
+                    spinPen.EndCap = LineCap.Round;
+                    g.DrawArc(spinPen, spinRect, spinnerAngle, 240);
+                }
+            }
             using (var iconFont = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold))
             {
                 TextRenderer.DrawText(g, passed ? "✓" : number.ToString(), iconFont, circle,
@@ -1751,8 +1923,25 @@ namespace AntigravityLauncher
 
             Controls.AddRange(new Control[] { btnClose, btnMinimize, progressBar });
 
+            spinnerTimer = new System.Windows.Forms.Timer { Interval = 75 };
+            spinnerTimer.Tick += delegate
+            {
+                spinnerAngle = (spinnerAngle + 28) % 360;
+                Invalidate(new Rectangle(26, 86, 40, 300));
+            };
+            FormClosed += delegate
+            {
+                if (spinnerTimer != null)
+                {
+                    spinnerTimer.Stop();
+                    spinnerTimer.Dispose();
+                    spinnerTimer = null;
+                }
+            };
+
             Shown += delegate
             {
+                if (spinnerTimer != null) spinnerTimer.Start();
                 try
                 {
                     // 启动瞬间短暂置顶提醒（0.8秒），向用户明确反馈启动器已拉起运行
@@ -1792,6 +1981,7 @@ namespace AntigravityLauncher
         {
             BeginInvoke(new Action(delegate
             {
+                if (spinnerTimer != null) spinnerTimer.Stop();
                 // Preserve the measured RTT, HTTP statuses and model response time.
                 if (!linePassed) { lineStatusText = "专线已就绪"; linePassed = true; }
                 if (!googlePassed) { googleStatusText = "Google 服务已响应"; googlePassed = true; }
@@ -2143,11 +2333,13 @@ namespace AntigravityLauncher
                 }
                 else if (line.Contains("preflight_account_check_completed"))
                 {
-                    string plan = GetValue(line, "plan");
+                    string rawPlan = GetValue(line, "plan");
+                    string planUpper = (rawPlan ?? "").ToUpperInvariant();
+                    string plan = planUpper == "PRO" ? "Pro" : planUpper == "FREE" ? "Free" : rawPlan;
                     string h5 = GetValue(line, "gemini_5h");
                     string week = GetValue(line, "gemini_weekly");
                     state.AccountText = (string.IsNullOrEmpty(plan) ? "账号就绪" : plan) +
-                        " · 5h " + h5 + "% · 周 " + week + "%（本地缓存）";
+                        " · 5 小时 " + h5 + "% · 周 " + week + "%（本地缓存）";
                     state.AccountPassed = true;
                     state.ActiveStep = 1;
                     state.FooterText = "账号已就绪，正在选择专线…";
@@ -2362,70 +2554,79 @@ namespace AntigravityLauncher
     // ==========================================
     internal class LauncherSettingsForm : Form
     {
+        private float uiScale = 1F;
+
         public LauncherSettingsForm()
         {
-            Text = "⚙ 启动器设置";
+            Text = "启动器设置与工作台";
             FormBorderStyle = FormBorderStyle.None;
-            StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(380, 240);
+            StartPosition = FormStartPosition.CenterParent;
+            AutoScaleMode = AutoScaleMode.None;
+            DoubleBuffered = true;
+            using (Graphics dpiGraphics = CreateGraphics()) { uiScale = Math.Max(1F, dpiGraphics.DpiX / 96F); }
+            ClientSize = new Size(490, 304);
             BackColor = Color.FromArgb(248, 250, 252);
             ShowInTaskbar = false;
             TopMost = false;
 
             var lblTitle = new Label
             {
-                Text = "⚙  启动器设置与工作台",
-                Font = new Font("微软雅黑", 12f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(30, 30, 30),
-                Location = new Point(20, 16),
-                AutoSize = true
+                Text = "启动器设置与工作台",
+                Font = new Font("Microsoft YaHei UI", 11.5F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(23, 37, 61),
+                Location = new Point(22, 16),
+                Size = new Size(390, 28),
+                TextAlign = ContentAlignment.MiddleLeft
             };
             var sep = new Panel
             {
-                Location = new Point(20, 44),
-                Size = new Size(340, 1),
-                BackColor = Color.FromArgb(220, 224, 230)
+                Location = new Point(22, 54),
+                Size = new Size(446, 1),
+                BackColor = Color.FromArgb(226, 232, 240)
             };
             var settings = LauncherSettings.Load();
             var chkAutoResume = new CheckBox
             {
                 Text = "切号或网络重连后，自动恢复会话与任务上下文",
-                Font = new Font("微软雅黑", 10f),
-                ForeColor = Color.FromArgb(40, 40, 40),
-                Location = new Point(20, 56),
-                AutoSize = true,
+                Font = new Font("Microsoft YaHei UI", 10F),
+                ForeColor = Color.FromArgb(30, 41, 59),
+                Location = new Point(22, 68),
+                Size = new Size(446, 26),
+                AutoSize = false,
                 Checked = settings.AutoResumeEnabled
             };
             var lblHint = new Label
             {
-                Text = "账号切换或专线刷新后自动续接未完成任务；关闭则仅静默换号",
-                Font = new Font("微软雅黑", 9f),
-                ForeColor = Color.FromArgb(140, 140, 140),
-                Location = new Point(38, 78),
-                AutoSize = true
+                Text = "账号切换或专线刷新后自动发送“继续”接力任务；关闭则仅静默换号。",
+                Font = new Font("Microsoft YaHei UI", 8.8F),
+                ForeColor = Color.FromArgb(100, 116, 139),
+                Location = new Point(42, 98),
+                Size = new Size(426, 36),
+                AutoSize = false
             };
 
             var sep2 = new Panel
             {
-                Location = new Point(20, 106),
-                Size = new Size(340, 1),
-                BackColor = Color.FromArgb(220, 224, 230)
+                Location = new Point(22, 142),
+                Size = new Size(446, 1),
+                BackColor = Color.FromArgb(226, 232, 240)
             };
             var lblWorkbench = new Label
             {
-                Text = "🪟  多分屏工作台记忆与恢复",
-                Font = new Font("微软雅黑", 10f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(40, 40, 40),
-                Location = new Point(20, 116),
-                AutoSize = true
+                Text = "多分屏工作台记忆与恢复",
+                Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(30, 41, 59),
+                Location = new Point(22, 154),
+                Size = new Size(446, 24),
+                TextAlign = ContentAlignment.MiddleLeft
             };
 
             var btnRestorePanes = new Button
             {
-                Text = "🪟 恢复昨日6分屏",
-                Font = new Font("微软雅黑", 9.5f),
-                Location = new Point(20, 140),
-                Size = new Size(165, 32),
+                Text = "恢复昨日 6 分屏",
+                Font = new Font("Microsoft YaHei UI", 9.5F),
+                Location = new Point(22, 186),
+                Size = new Size(215, 36),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(241, 245, 249),
                 ForeColor = Color.FromArgb(30, 41, 59),
@@ -2435,10 +2636,10 @@ namespace AntigravityLauncher
 
             var btnSavePanes = new Button
             {
-                Text = "💾 记忆当前分屏",
-                Font = new Font("微软雅黑", 9.5f),
-                Location = new Point(195, 140),
-                Size = new Size(165, 32),
+                Text = "记忆当前分屏",
+                Font = new Font("Microsoft YaHei UI", 9.5F),
+                Location = new Point(253, 186),
+                Size = new Size(215, 36),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(241, 245, 249),
                 ForeColor = Color.FromArgb(30, 41, 59),
@@ -2449,10 +2650,10 @@ namespace AntigravityLauncher
             var lblPanesStatus = new Label
             {
                 Text = "",
-                Font = new Font("微软雅黑", 9f),
+                Font = new Font("Microsoft YaHei UI", 9F),
                 ForeColor = Color.FromArgb(22, 163, 74),
-                Location = new Point(20, 178),
-                Size = new Size(340, 18),
+                Location = new Point(22, 230),
+                Size = new Size(446, 22),
                 TextAlign = ContentAlignment.MiddleLeft
             };
 
@@ -2473,18 +2674,18 @@ namespace AntigravityLauncher
                             CreateNoWindow = true
                         });
                         lblPanesStatus.ForeColor = Color.FromArgb(22, 163, 74);
-                        lblPanesStatus.Text = "✅ 已发送恢复指令，1~2秒内呈现";
+                        lblPanesStatus.Text = "✓ 已发送恢复指令，1~2 秒内自动布局";
                     }
                     else
                     {
                         lblPanesStatus.ForeColor = Color.FromArgb(220, 38, 38);
-                        lblPanesStatus.Text = "❌ 脚本文件不存在: restore_workspace_panes.py";
+                        lblPanesStatus.Text = "× 脚本文件不存在: restore_workspace_panes.py";
                     }
                 }
                 catch (Exception ex)
                 {
                     lblPanesStatus.ForeColor = Color.FromArgb(220, 38, 38);
-                    lblPanesStatus.Text = "❌ " + ex.Message;
+                    lblPanesStatus.Text = "× " + ex.Message;
                 }
             };
 
@@ -2505,27 +2706,27 @@ namespace AntigravityLauncher
                             CreateNoWindow = true
                         });
                         lblPanesStatus.ForeColor = Color.FromArgb(22, 163, 74);
-                        lblPanesStatus.Text = "✅ 已成功记忆当前屏幕分屏布局！";
+                        lblPanesStatus.Text = "✓ 已保存当前多窗口分屏布局";
                     }
                     else
                     {
                         lblPanesStatus.ForeColor = Color.FromArgb(220, 38, 38);
-                        lblPanesStatus.Text = "❌ 脚本文件不存在: restore_workspace_panes.py";
+                        lblPanesStatus.Text = "× 脚本文件不存在: restore_workspace_panes.py";
                     }
                 }
                 catch (Exception ex)
                 {
                     lblPanesStatus.ForeColor = Color.FromArgb(220, 38, 38);
-                    lblPanesStatus.Text = "❌ " + ex.Message;
+                    lblPanesStatus.Text = "× " + ex.Message;
                 }
             };
 
             var btnOk = new Button
             {
                 Text = "确定",
-                Font = new Font("微软雅黑", 9.5f),
-                Location = new Point(ClientSize.Width - 95, ClientSize.Height - 38),
-                Size = new Size(75, 28),
+                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
+                Location = new Point(ClientSize.Width - 106, ClientSize.Height - 44),
+                Size = new Size(84, 32),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(37, 99, 235),
                 ForeColor = Color.White,
@@ -2540,7 +2741,7 @@ namespace AntigravityLauncher
             };
             var closeBtn = new CapsuleCloseButton
             {
-                Location = new Point(ClientSize.Width - 34, 11),
+                Location = new Point(ClientSize.Width - 36, 14),
                 Size = new Size(22, 22)
             };
             closeBtn.Click += delegate { Close(); };
@@ -2557,6 +2758,8 @@ namespace AntigravityLauncher
             Controls.Add(btnOk);
             Controls.Add(closeBtn);
 
+            if (uiScale != 1F) Scale(new SizeF(uiScale, uiScale));
+
             MouseDown += delegate(object s, MouseEventArgs me)
             {
                 if (me.Button == MouseButtons.Left)
@@ -2565,6 +2768,26 @@ namespace AntigravityLauncher
                     Program.SendMessage(Handle, 0xA1, 0x2, 0);
                 }
             };
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            try
+            {
+                int val = Program.DWMWCP_ROUND;
+                Program.DwmSetWindowAttribute(Handle, Program.DWMWA_WINDOW_CORNER_PREFERENCE, ref val, sizeof(int));
+            }
+            catch { }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            using (var pen = new Pen(Color.FromArgb(203, 213, 225), 1F))
+            {
+                e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+            }
         }
 
         protected override CreateParams CreateParams
