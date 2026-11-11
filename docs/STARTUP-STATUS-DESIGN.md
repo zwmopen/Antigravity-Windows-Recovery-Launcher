@@ -1,6 +1,6 @@
 # 启动检查体验与真实状态契约（2026-11-11）
 
-> 状态：源码已落地；Windows CI 与本机联网验收需要查看对应结果。此文档不表示实机检查已经通过。
+> 状态：源码已落地；2026-11-11 最后一次 Windows CI（提交 `546f278`）完整通过。仓库随后主动移除了自动云端 CI 工作流，此后只接受本地编译/验收；未宣称已在用户电脑完成实机验证。
 
 ## 目标
 
@@ -33,7 +33,7 @@
 - `src/antigravity_smart_switch.py`：给当前账号门禁回执补齐 PRO / FREE 套餐标记。
 - `src/Antigravity-Recovery-Launcher.cs`：原生 GDI 五步卡片、运行态、完成态、真实延迟及模型用时。
 - `tests/launcher-ui.test.ps1`：检查源码真实状态与账号检查顺序。
-- `tests/capsule-progress.test.ps1`：基于编译后程序集测试状态解释；CI 在 Windows 构建后运行。
+- `tests/capsule-progress.test.ps1`：基于编译后程序集测试状态解释；本地编译后运行（历史 CI 已停用）。
 
 **未改动**：多账号实时配额刷新策略、原有节点优选排序与地区优先级、Windows Credential Manager 凭据格式、代理全局设置、自动续接逻辑及打包版本号。国家中立与 RTT 优先的既有排序不一致问题留在后续单独修复，避免同一批 UI 更新修改高风险分流策略。
 
@@ -54,3 +54,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\capsule-progress.tes
 - 热启动和自愈仍能复用现有编辑器，不误杀进程。
 
 运行日志：`%LOCALAPPDATA%\Antigravity\private-proxy\supervisor.log`。
+
+## GitHub Actions 停用与本地交付约定（2026-11-11）
+
+- 已删除自动触发脚本 `.github/workflows/ci.yml`，配置保留在 `docs/archive/ci.workflow.disabled.yml.txt` 作为**非执行**档案。
+- 在仓库中提交、更新、修复源码不应触发任何 Actions 构建；如后续有人添加新工作流，必须先取得用户明确许可。
+- `git pull` 只同步源码，不会自动把新版 C# 编译为 EXE，也不会把新版脚本安装到用户现有启动器目录。
+- 本地 Codex 推荐顺序：保留未提交更改 → `git pull --ff-only origin main` → `powershell -NoProfile -ExecutionPolicy Bypass -File .\\tests\\launcher-ui.test.ps1` → `powershell -NoProfile -ExecutionPolicy Bypass -File .\\build.ps1` → `powershell -NoProfile -ExecutionPolicy Bypass -File .\\tests\\capsule-progress.test.ps1` → `powershell -NoProfile -ExecutionPolicy Bypass -File .\\install.ps1`。
+- 涉及升级运行中编辑器的安装，必须由本地操作员安排可中断的维护窗口，避免影响正在进行的 AI 编程任务；保留备份、旧版还原路径及版本比对。
+- 不要通过把一次失败的工作流通知邮件理解为整个代码版本失败；以失败步骤日志和对应提交 SHA 为准。
