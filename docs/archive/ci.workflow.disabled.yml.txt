@@ -1,0 +1,107 @@
+# INACTIVE ARCHIVE — NOT EXECUTED BY GITHUB ACTIONS
+# Archived 2026-11-11. Do not move this file back to .github/workflows
+# unless the repository owner explicitly wants to restore cloud CI.
+# Project policy: GitHub is source control only, all builds and tests run locally.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve build tag
+        id: tag
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $sha = $env:GITHUB_SHA.Substring(0, 7)
+          $name = "antigravity-windows-$version-$sha"
+          "name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $files = @(
+            'src/Antigravity-ProxySupervisor.ps1',
+            'install.ps1',
+            'uninstall.ps1',
+            'build.ps1',
+            'build-release.ps1',
+            'build-installer.ps1',
+            'tests/run-account-watcher-tests.ps1',
+            'tests/run-failover-policy-tests.ps1',
+            'tests/supervisor-state-contract.test.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { throw "PowerShell syntax failed: $file" }
+          }
+      - name: Account watcher policy tests
+        shell: powershell
+        run: |
+          .\tests\run-account-watcher-tests.ps1
+          .\tests\launcher-ui.test.ps1
+          .\tests\supervisor-state-contract.test.ps1
+          .\tests\candidate-cap-fairness.test.ps1
+          .\tests\installer-contract.test.ps1
+      - name: Localization tests
+        shell: pwsh
+        run: |
+          node .\tests\localization-extension.test.js
+          node .\tests\shareable-assistant.test.js
+      - name: Build Windows binaries
+        shell: powershell
+        run: .\build.ps1
+      - name: Compiled launch status regression
+        shell: powershell
+        run: .\tests\capsule-progress.test.ps1
+      # 产物必须在"有可能失败"的安装包构建之前落盘：
+      # 此前 CI 跑完二进制即被丢弃，本地永远拿不到新 exe。
+      - name: Upload launcher binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.tag.outputs.name }}
+          path: |
+            releases/current/Antigravity-Recovery-Launcher.exe
+            releases/current/Antigravity-AccountWatcher.exe
+            releases/current/Antigravity-NodeTray.exe
+            releases/current/Antigravity-CdpLocalizationLoader.exe
+            releases/current/Antigravity-ProxySupervisor.ps1
+            releases/current/manifest.json
+          if-no-files-found: error
+          retention-days: 30
+      # 安装包构建失败不应阻断主产物交付，标记为可容忍失败。
+      - name: Build Windows Setup.exe
+        id: setup
+        continue-on-error: true
+        shell: powershell
+        run: .\build-installer.ps1
+      - name: Upload setup installer
+        if: steps.setup.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.tag.outputs.name }}-setup
+          path: releases/public/Antigravity-Windows-Recovery-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 30
+      - name: Verify release boundary
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if (Test-Path releases/current/tools/agy/agy.exe) { throw 'agy must not be bundled' }
+          if (-not (Test-Path releases/current/Antigravity-Recovery-Launcher.exe)) { throw 'launcher missing' }
+          if (-not (Test-Path releases/current/Antigravity-AccountWatcher.exe)) { throw 'watcher missing' }
+          $setup = "releases/public/Antigravity-Windows-Recovery-Setup-" + $version + "-windows-x64.exe"
+          if ("${{ steps.setup.outcome }}" -eq "success" -and -not (Test-Path $setup)) { throw 'setup missing' }
