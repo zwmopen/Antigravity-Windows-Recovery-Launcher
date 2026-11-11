@@ -1522,15 +1522,19 @@ namespace AntigravityLauncher
         private Image appIcon = null;
 
         // 动态状态模型
-        private string lineStatusText = "正在检索可用专线…";
-        private bool linePassed = false;
-        private string googleStatusText = "等待网络握手…";
-        private bool googlePassed = false;
-        private string modelStatusText = "等待链路验证…";
-        private bool modelPassed = false;
-        private string accountStatusText = "正在核验账号与冷启动门禁…";
+        // Account-first launch state. A stage turns green only after a real logged gate passes.
+        private string accountStatusText = "正在读取 Cockpit 当前账号与缓存额度…";
         private bool accountPassed = false;
-        private string footerStatusText = "正在匹配最优专线通道…";
+        private string lineStatusText = "等待账号就绪…";
+        private bool linePassed = false;
+        private string googleStatusText = "等待专线就绪…";
+        private bool googlePassed = false;
+        private string modelStatusText = "等待 Google 链路验证…";
+        private bool modelPassed = false;
+        private string workspaceStatusText = "等待启动检查完成…";
+        private bool workspacePassed = false;
+        private int activeStep = 0;
+        private string footerStatusText = "正在确认账号与工作环境…";
 
         public AntigravityLaunchCapsuleForm(string reason)
         {
@@ -1610,76 +1614,83 @@ namespace AntigravityLauncher
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
 
-            // 1. 卡片磨砂与拟态背景
-            using (var path = RoundedRectangle(bounds, 16))
-            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(250, 252, 255), Color.FromArgb(236, 244, 252), 90F))
-            using (var border = new Pen(Color.FromArgb(205, 222, 238), 1.2F))
+            // A calm native card: five truthful stages, no synthetic percent or promotional badges.
+            using (var path = RoundedRectangle(bounds, 18))
+            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(253, 254, 255), Color.FromArgb(246, 249, 253), 90F))
+            using (var border = new Pen(Color.FromArgb(218, 229, 241), 1F))
             {
                 e.Graphics.FillPath(fill, path);
                 e.Graphics.DrawPath(border, path);
             }
 
-            using (var highlight = new Pen(Color.FromArgb(140, 255, 255, 255), 1.5F))
-            {
-                e.Graphics.DrawLine(highlight, 20, 2, Width - 20, 2);
-            }
-
-            // 2. 高清 Antigravity 图标
             if (appIcon != null)
             {
                 e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                e.Graphics.DrawImage(appIcon, new Rectangle(20, 16, 36, 36));
+                e.Graphics.DrawImage(appIcon, new Rectangle(24, 17, 38, 38));
+            }
+            using (var titleFont = new Font("Microsoft YaHei UI", 12.5F, FontStyle.Bold))
+            using (var subtitleFont = new Font("Microsoft YaHei UI", 8.5F))
+            {
+                TextRenderer.DrawText(e.Graphics, "Antigravity", titleFont, new Point(72, 17), Color.FromArgb(23, 37, 61));
+                TextRenderer.DrawText(e.Graphics, "正在准备工作环境 · 实时检测", subtitleFont, new Point(73, 45), Color.FromArgb(112, 125, 143));
+            }
+            using (var separator = new Pen(Color.FromArgb(232, 238, 246)))
+            {
+                e.Graphics.DrawLine(separator, 24, 76, Width - 24, 76);
+                e.Graphics.DrawLine(separator, 24, 381, Width - 24, 381);
             }
 
-            // 3. 标题
-            using (var fontTitle = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold))
-            {
-                TextRenderer.DrawText(e.Graphics, "Antigravity", fontTitle, new Point(64, 16), Color.FromArgb(16, 43, 69));
-            }
+            DrawStepRow(e.Graphics, 1, 88, "当前账号", accountStatusText, accountPassed, activeStep == 0);
+            DrawStepRow(e.Graphics, 2, 146, "本地专线", lineStatusText, linePassed, activeStep == 1);
+            DrawStepRow(e.Graphics, 3, 204, "Google 通路", googleStatusText, googlePassed, activeStep == 2);
+            DrawStepRow(e.Graphics, 4, 262, "AI 模型验证", modelStatusText, modelPassed, activeStep == 3);
+            DrawStepRow(e.Graphics, 5, 320, "启动工作区", workspaceStatusText, workspacePassed, activeStep == 4);
 
-            // 4. 拟态策略徽标 (直观体现底层：网速优先、同区低延、记忆好用)
-            DrawPillBadge(e.Graphics, "⚡ 网速优先", 170, 19, Color.FromArgb(219, 234, 254), Color.FromArgb(147, 197, 253), Color.FromArgb(29, 78, 216));
-            DrawPillBadge(e.Graphics, "🌐 同区低延", 260, 19, Color.FromArgb(224, 231, 255), Color.FromArgb(165, 180, 252), Color.FromArgb(67, 56, 202));
-            DrawPillBadge(e.Graphics, "⭐ 记忆好用", 348, 19, Color.FromArgb(220, 252, 231), Color.FromArgb(134, 239, 172), Color.FromArgb(21, 128, 61));
-
-            // 5. 四行直观、清晰的通路状态步骤 (无白边缝隙，融入背景)
-            using (var fontStep = new Font("Microsoft YaHei UI", 9F))
-            using (var fontDot = new Font("Segoe UI", 8.5F, FontStyle.Bold))
+            using (var footerFont = new Font("Microsoft YaHei UI", 8.5F))
             {
-                // 行 1：本地专线
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 58, "本地专线", lineStatusText, linePassed);
-                // 行 2：Google 通路
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 82, "Google 通路", googleStatusText, googlePassed);
-                // 行 3：AI 模型服务
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 106, "AI 模型服务", modelStatusText, modelPassed);
-                // 行 4：算力调度
-                DrawStepRow(e.Graphics, fontStep, fontDot, 22, 130, "算力调度", accountStatusText, accountPassed);
-            }
-
-            // 6. 底部柔和状态文字
-            using (var fontFooter = new Font("Microsoft YaHei UI", 8.5F))
-            {
-                TextRenderer.DrawText(e.Graphics, footerStatusText, fontFooter, new Point(22, 172), Color.FromArgb(100, 116, 139));
+                TextRenderer.DrawText(e.Graphics, footerStatusText, footerFont,
+                    new Rectangle(27, 391, Width - 54, 23), Color.FromArgb(104, 119, 139),
+                    TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             }
         }
 
-        private void DrawStepRow(Graphics g, Font fontText, Font fontDot, int x, int y, string label, string text, bool passed)
+        private void DrawStepRow(Graphics g, int number, int y, string label, string detail, bool passed, bool active)
         {
-            string symbol = passed ? "✔" : "●";
-            Color symbolColor = passed ? Color.FromArgb(22, 163, 74) : Color.FromArgb(59, 130, 246);
-            Color labelColor = Color.FromArgb(30, 41, 59);
-            Color contentColor = passed ? Color.FromArgb(21, 128, 61) : Color.FromArgb(71, 85, 105);
+            var rowRect = new Rectangle(20, y, Width - 40, 54);
+            if (active && !passed)
+            {
+                using (var path = RoundedRectangle(rowRect, 11))
+                using (var brush = new SolidBrush(Color.FromArgb(234, 242, 255)))
+                    g.FillPath(brush, path);
+            }
 
-            TextRenderer.DrawText(g, symbol, fontDot, new Point(x, y + 1), symbolColor);
-            TextRenderer.DrawText(g, label + "：", fontText, new Point(x + 18, y), labelColor);
-            int labelWidth = TextRenderer.MeasureText(label + "：", fontText).Width;
-            TextRenderer.DrawText(g, text, fontText, new Point(x + 18 + labelWidth - 2, y), contentColor);
+            Color dotFill = passed ? Color.FromArgb(220, 247, 231) :
+                active ? Color.FromArgb(216, 231, 255) : Color.FromArgb(241, 245, 249);
+            Color dotText = passed ? Color.FromArgb(21, 128, 61) :
+                active ? Color.FromArgb(39, 103, 220) : Color.FromArgb(157, 169, 183);
+            var circle = new Rectangle(33, y + 13, 26, 26);
+            using (var brush = new SolidBrush(dotFill)) g.FillEllipse(brush, circle);
+            using (var iconFont = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold))
+            {
+                TextRenderer.DrawText(g, passed ? "✓" : number.ToString(), iconFont, circle,
+                    dotText, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            }
+
+            using (var labelFont = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold))
+            using (var detailFont = new Font("Microsoft YaHei UI", 8.5F))
+            {
+                TextRenderer.DrawText(g, label, labelFont, new Rectangle(74, y + 5, Width - 112, 23),
+                    Color.FromArgb(36, 53, 77), TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, detail ?? "", detailFont, new Rectangle(74, y + 28, Width - 115, 22),
+                    passed ? Color.FromArgb(29, 120, 81) : active ? Color.FromArgb(57, 101, 164) : Color.FromArgb(121, 135, 153),
+                    TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            }
         }
 
         private void InitializeComponent()
         {
             Text = "Antigravity";
-            ClientSize = new Size(520, 212);
+            ClientSize = new Size(580, 428);
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             ShowInTaskbar = true;
@@ -1687,26 +1698,7 @@ namespace AntigravityLauncher
             BackColor = Color.FromArgb(236, 244, 252);
             DoubleBuffered = true;
 
-            try
-            {
-                string statusFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity", "private-proxy", "launch-account-status.json");
-                if (File.Exists(statusFile))
-                {
-                    string json = File.ReadAllText(statusFile);
-                    int idx = json.IndexOf("\"email\"");
-                    if (idx >= 0)
-                    {
-                        int start = json.IndexOf('"', idx + 7);
-                        int end = json.IndexOf('"', start + 1);
-                        if (start >= 0 && end > start)
-                        {
-                            string email = json.Substring(start + 1, end - start - 1);
-                            accountStatusText = email + " · 正在核验健康度与冷启动门禁…";
-                        }
-                    }
-                }
-            }
-            catch { }
+            // Do not show yesterday's email as if the current account were already verified.
 
             appIcon = Program.LoadIconOrPng(Program.IconPath);
             if (File.Exists(Program.IconPath))
@@ -1745,11 +1737,14 @@ namespace AntigravityLauncher
                 WindowState = FormWindowState.Minimized;
             };
 
+            // Keep the legacy animation object for compatibility with existing observers,
+            // but never display percentages unrelated to actual completion.
             progressBar = new CapsuleProgress
             {
-                Location = new Point(22, 154),
-                Size = new Size(476, 7),
-                ProgressValue = 3
+                Location = new Point(22, 417),
+                Size = new Size(536, 4),
+                ProgressValue = 3,
+                Visible = false
             };
 
             Controls.AddRange(new Control[] { btnClose, btnMinimize, progressBar });
@@ -1795,18 +1790,15 @@ namespace AntigravityLauncher
         {
             BeginInvoke(new Action(delegate
             {
-                lineStatusText = "已锁定高速专线 [美日低延迟]";
-                linePassed = true;
-                googleStatusText = "连通正常 · 授权畅通";
-                googlePassed = true;
-                modelStatusText = "Gemini 编程模型验证通过";
-                modelPassed = true;
-                accountPassed = true;
-                if (!accountStatusText.Contains("就绪") && !accountStatusText.Contains("满血"))
-                {
-                    accountStatusText += " · 算力已连接";
-                }
-                footerStatusText = Program.IsAntigravityRunning() ? "🚀 最优专线已就绪，正在切回代码窗口…" : "🚀 通路与算力已全部就绪，正在打开 Antigravity…";
+                // Preserve the measured RTT, HTTP statuses and model response time.
+                if (!linePassed) { lineStatusText = "专线已就绪"; linePassed = true; }
+                if (!googlePassed) { googleStatusText = "Google 服务已响应"; googlePassed = true; }
+                if (!modelPassed) { modelStatusText = "真实模型验证通过"; modelPassed = true; }
+                if (!accountPassed) { accountStatusText = "当前账号门禁已通过"; accountPassed = true; }
+                workspaceStatusText = "编辑器与语言服务已就绪";
+                workspacePassed = true;
+                activeStep = 5;
+                footerStatusText = "工作环境已就绪，正在进入 Antigravity…";
                 progressBar.ProgressValue = 100;
                 Invalidate();
             }));
@@ -1871,13 +1863,19 @@ namespace AntigravityLauncher
                         accountStatusText = state.AccountText;
                         accountPassed = state.AccountPassed;
                     }
+                    if (!string.IsNullOrEmpty(state.WorkspaceText))
+                    {
+                        workspaceStatusText = state.WorkspaceText;
+                        workspacePassed = state.WorkspacePassed;
+                    }
+                    activeStep = state.ActiveStep;
                     if (!string.IsNullOrEmpty(state.FooterText)) footerStatusText = state.FooterText;
                     progressBar.ProgressValue = prog;
                     Invalidate();
                 }));
 
                 // 检查是否有新鲜就绪标记
-                if (logChunk.Contains("antigravity_live_seamless_attached") || logChunk.Contains("antigravity_ready") || logChunk.Contains("fast_startup_reused"))
+                if (logChunk.Contains("antigravity_live_seamless_attached") || logChunk.Contains("antigravity_ready"))
                 {
                     OnLaunchSuccess();
                     return true;
@@ -1906,7 +1904,7 @@ namespace AntigravityLauncher
                 {
                     Thread.Sleep(500);
                     string finalChunk = ReadLogSince(logStartOffset);
-                    if (finalChunk.Contains("antigravity_live_seamless_attached") || finalChunk.Contains("antigravity_ready") || finalChunk.Contains("fast_startup_reused"))
+                    if (finalChunk.Contains("antigravity_live_seamless_attached") || finalChunk.Contains("antigravity_ready"))
                     {
                         OnLaunchSuccess();
                         return true;
@@ -2036,6 +2034,12 @@ namespace AntigravityLauncher
                             accountStatusText = state.AccountText;
                             accountPassed = state.AccountPassed;
                         }
+                    if (!string.IsNullOrEmpty(state.WorkspaceText))
+                    {
+                        workspaceStatusText = state.WorkspaceText;
+                        workspacePassed = state.WorkspacePassed;
+                    }
+                    activeStep = state.ActiveStep;
                         if (!string.IsNullOrEmpty(state.FooterText)) footerStatusText = state.FooterText;
                         progressBar.ProgressValue = prog;
                         Invalidate();
@@ -2115,134 +2119,159 @@ namespace AntigravityLauncher
             var state = new CapsuleState();
             state.TargetProgress = 10;
             state.Ceiling = 25;
-            state.FooterText = "正在匹配最优专线通道…";
+            state.ActiveStep = 0;
+            state.FooterText = "正在确认账号与工作环境…";
+            state.WorkspaceText = "等待前置检测完成…";
 
-            int discoveredTotal = 0;
-            int candidateIndex = 0;
-            int candidateTotal = 0;
             string egressCountry = "";
-            string rttStr = "";
-
             foreach (string line in logText.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                if (line.Contains("candidate_discovery_completed"))
+                if (line.Contains("preflight_account_check_started"))
                 {
-                    string countStr = GetValue(line, "candidate_count");
-                    int parsed;
-                    if (int.TryParse(countStr, out parsed) && parsed > 0)
-                    {
-                        discoveredTotal = parsed;
-                        candidateTotal = parsed;
-                    }
+                    state.ActiveStep = 0;
+                    state.AccountPassed = false;
+                    state.AccountText = "正在读取 Cockpit 账号与缓存额度…";
+                    state.FooterText = "正在验证本地账号状态";
+                }
+                else if (line.Contains("preflight_account_check_completed"))
+                {
+                    string plan = GetValue(line, "plan");
+                    string h5 = GetValue(line, "gemini_5h");
+                    string week = GetValue(line, "gemini_weekly");
+                    state.AccountText = (string.IsNullOrEmpty(plan) ? "账号就绪" : plan) +
+                        " · 5h " + h5 + "% · 周 " + week + "%（本地缓存）";
+                    state.AccountPassed = true;
+                    state.ActiveStep = 1;
+                    state.FooterText = "账号已就绪，正在选择专线…";
+                    state.TargetProgress = Math.Max(state.TargetProgress, 22);
+                }
+                else if (line.Contains("candidate_discovery_completed"))
+                {
+                    string total = GetValue(line, "candidate_count");
+                    state.LineText = "发现 " + total + " 条候选 · 正在准备测速";
+                    state.ActiveStep = 1;
                     state.TargetProgress = Math.Max(state.TargetProgress, 25);
-                    state.Ceiling = Math.Max(state.Ceiling, 35);
+                }
+                else if (line.Contains("latency_probe_started"))
+                {
+                    state.ActiveStep = 1;
+                    state.LineText = "测速 " + GetValue(line, "candidate_index") + "/" +
+                        GetValue(line, "candidate_total") + " · " + GetValue(line, "region") + " 出口";
+                }
+                else if (line.Contains("latency_probe_passed"))
+                {
+                    state.LineText = "已测速 " + GetValue(line, "candidate_index") + "/" +
+                        GetValue(line, "candidate_total") + " · " + GetValue(line, "region") +
+                        " · 请求延迟 " + GetValue(line, "rtt_ms") + "ms";
+                }
+                else if (line.Contains("isolated_latency_failed"))
+                {
+                    state.LineText = "测速 " + GetValue(line, "candidate_index") + "/" +
+                        GetValue(line, "candidate_total") + " 未响应，继续检查其他节点";
                 }
                 else if (line.Contains("candidate_preflight_started"))
                 {
-                    int pIndex, pTotal;
-                    if (int.TryParse(GetValue(line, "candidate_index"), out pIndex) && pIndex > 0) candidateIndex = pIndex;
-                    else candidateIndex++;
-                    if (int.TryParse(GetValue(line, "candidate_total"), out pTotal) && pTotal > 0) candidateTotal = pTotal;
+                    state.ActiveStep = 1;
                     state.LinePassed = false;
+                    state.LineText = "正式验证候选 " + GetValue(line, "candidate_index") + "/" +
+                        GetValue(line, "candidate_total") + " · " + GetValue(line, "region");
                     state.GooglePassed = false;
-                    state.GoogleText = "正在验证新线路…";
+                    state.GoogleText = "等待当前候选网络检查…";
                     state.ModelPassed = false;
-                    state.ModelText = "等待当前线路 AI 验证…";
-                    state.FooterText = "正在检查候选 " + candidateIndex + "/" + candidateTotal + "（找到可用线路即停止）";
+                    state.ModelText = "等待当前候选模型验证…";
+                    state.FooterText = "找到可用专线后即停止检测";
                     state.TargetProgress = Math.Max(state.TargetProgress, 35);
-                    state.Ceiling = Math.Max(state.Ceiling, 45);
                 }
                 else if (line.Contains("candidate_preflight_passed"))
                 {
                     state.LinePassed = true;
+                    state.LineText = "专线已就绪 · " + GetValue(line, "region") +
+                        " · 请求延迟 " + GetValue(line, "rtt_ms") + "ms";
                 }
                 else if (line.Contains("fast_startup_reused"))
                 {
                     state.LinePassed = true;
-                    state.LineText = "已复用就绪专线 [秒级极速唤醒]";
+                    state.LineText = "复用已验证专线 · 上次延迟 " + GetValue(line, "rtt_ms") + "ms";
                     state.GooglePassed = true;
-                    state.GoogleText = "连通正常 · 授权畅通";
+                    state.GoogleText = "Google 网络本轮探活成功";
                     state.ModelPassed = true;
-                    state.ModelText = "Gemini 编程模型就绪";
-                    state.AccountPassed = true;
-                    state.TargetProgress = 95;
-                    state.Ceiling = 100;
+                    state.ModelText = "本轮真实模型验证通过";
+                    state.ActiveStep = 4;
+                    state.TargetProgress = Math.Max(state.TargetProgress, 90);
                 }
-                else if (line.Contains("proxy_started") || line.Contains("proxy_reused"))
+                else if (line.Contains("google_connectivity_started"))
                 {
-                    state.GoogleText = "专属通道 17897 已连通，正在测速…";
-                    state.TargetProgress = Math.Max(state.TargetProgress, 50);
-                    state.Ceiling = Math.Max(state.Ceiling, 60);
+                    state.ActiveStep = 2;
+                    state.GooglePassed = false;
+                    state.GoogleText = "正在连接 Google 服务…";
+                    state.FooterText = "检查 Google、模型 API 与 OAuth 网络可达性";
+                }
+                else if (line.Contains("google_probe_started"))
+                {
+                    state.ActiveStep = 2;
+                    state.GoogleText = "正在请求 " + GetValue(line, "service") + "…";
+                }
+                else if (line.Contains("google_probe_completed"))
+                {
+                    string status = GetValue(line, "status");
+                    state.GoogleText = GetValue(line, "service") + (status == "0" ?
+                        " · 连接超时或失败" : " · HTTP " + status + " · " + GetValue(line, "rtt_ms") + "ms");
                 }
                 else if (line.Contains("google_connectivity_passed"))
                 {
-                    rttStr = GetValue(line, "rtt_ms");
-                    string suffix = string.IsNullOrEmpty(rttStr) ? "" : (" · 延迟 " + rttStr + "ms");
-                    state.GoogleText = "连通正常" + suffix;
                     state.GooglePassed = true;
+                    state.GoogleText = "端点已响应 · Google " + GetValue(line, "google") +
+                        " / API " + GetValue(line, "api") + " / OAuth " + GetValue(line, "oauth");
                     state.TargetProgress = Math.Max(state.TargetProgress, 68);
-                    state.Ceiling = Math.Max(state.Ceiling, 78);
                 }
                 else if (line.Contains("proxy_egress_country_passed"))
                 {
-                    string c = GetValue(line, "country");
-                    if (!string.IsNullOrEmpty(c)) egressCountry = c;
-                    state.TargetProgress = Math.Max(state.TargetProgress, 75);
-                    state.Ceiling = Math.Max(state.Ceiling, 82);
+                    egressCountry = GetValue(line, "country");
+                    state.GoogleText = (state.GoogleText ?? "端点已响应") + " · 出口 " + egressCountry;
                 }
                 else if (line.Contains("formal_model_gate_started") || line.Contains("model_probe_waiting"))
                 {
-                    string elapsed = GetValue(line, "elapsed_seconds");
+                    state.ActiveStep = 3;
                     state.ModelPassed = false;
-                    state.ModelText = "正在请求真实 AI 回复" + (string.IsNullOrEmpty(elapsed) ? "…" : " · 已等待 " + elapsed + " 秒 / 上限 40 秒");
-                    state.FooterText = "AI 验证中 · 地区受限即换线，单次请求上限 40 秒";
+                    string elapsed = GetValue(line, "elapsed_seconds");
+                    state.ModelText = "正在请求真实 AI 回复" +
+                        (string.IsNullOrEmpty(elapsed) ? "…" : " · 已等待 " + elapsed + " 秒 / 上限 40 秒");
+                    state.FooterText = "正在使用 agy 验证真实模型生成";
                 }
                 else if (line.Contains("model_probe_aborted") || line.Contains("model_generation_probe_failed"))
                 {
                     bool location = line.Contains("model_location");
                     state.ModelPassed = false;
-                    state.ModelText = location ? "当前线路受地区限制 · 正在换线…" : "当前线路 AI 验证失败或超时 · 正在换线…";
-                    state.FooterText = state.ModelText;
-                }
-                else if (line.Contains("preflight_account_check_started"))
-                {
-                    state.AccountText = "正在检查账号健康与缓存额度…";
-                    state.AccountPassed = false;
+                    state.ModelText = location ? "当前线路受地区限制 · 正在换线…" : "AI 验证失败或超时 · 正在换线…";
+                    state.FooterText = location ? "地区限制，正在换线…" : "模型请求失败，正在尝试其他候选…";
                 }
                 else if (line.Contains("model_generation_probe_passed"))
                 {
-                    string countryDesc = egressCountry == "JP" ? "日本 JP" : (egressCountry == "US" ? "美国 US" : (!string.IsNullOrEmpty(egressCountry) ? egressCountry : "高速专线"));
-                    state.ModelText = "Gemini 编程模型验证通过 [出口 " + countryDesc + "]";
+                    state.ModelText = "真实生成通过 · " + GetValue(line, "duration_ms") + "ms" +
+                        (string.IsNullOrEmpty(egressCountry) ? "" : " · " + egressCountry + " 出口");
                     state.ModelPassed = true;
-                    state.FooterText = "🚀 通路已全部通过，正在拉起 Antigravity…";
+                    state.ActiveStep = 4;
+                    state.FooterText = "模型验证通过，正在完成工作区启动…";
                     state.TargetProgress = Math.Max(state.TargetProgress, 88);
-                    state.Ceiling = Math.Max(state.Ceiling, 94);
                 }
-                else if (line.Contains("preflight_account_check_completed"))
+                else if (line.Contains("antigravity_prelaunched_before_model_gate"))
                 {
-                    state.AccountText = "账号门禁通过 · 额度来源：Cockpit 本地缓存";
-                    state.AccountPassed = true;
+                    state.WorkspaceText = "编辑器已预启动，等待模型检查…";
                 }
                 else if (line.Contains("antigravity_started"))
                 {
-                    state.FooterText = "正在启动 Antigravity 代码编辑器…";
+                    state.ActiveStep = 4;
+                    state.WorkspaceText = "正在启动 Antigravity 客户端…";
                     state.TargetProgress = Math.Max(state.TargetProgress, 95);
-                    state.Ceiling = Math.Max(state.Ceiling, 98);
                 }
-                else if (line.Contains("antigravity_ready") || line.Contains("localization_loader_succeeded"))
+                else if (line.Contains("antigravity_ready") || line.Contains("antigravity_live_seamless_attached"))
                 {
-                    state.FooterText = "已就绪，正在打开工作区…";
+                    state.ActiveStep = 5;
+                    state.WorkspacePassed = true;
+                    state.WorkspaceText = "客户端与语言服务已就绪";
+                    state.FooterText = "工作环境已就绪，正在打开工作区…";
                     state.TargetProgress = 100;
-                    state.Ceiling = 100;
                 }
-            }
-
-            // 组合专线状态文本
-            if (discoveredTotal > 0 || candidateTotal > 0)
-            {
-                int total = candidateTotal > 0 ? candidateTotal : discoveredTotal;
-                int current = candidateIndex > 0 ? candidateIndex : 1;
-                state.LineText = "发现 " + total + " 条候选 · 正在验证 " + current + "/" + total;
             }
 
             return state;
@@ -2276,6 +2305,9 @@ namespace AntigravityLauncher
             internal bool ModelPassed = false;
             internal string AccountText;
             internal bool AccountPassed = false;
+            internal string WorkspaceText;
+            internal bool WorkspacePassed = false;
+            internal int ActiveStep = 0;
             internal string FooterText;
             internal int TargetProgress;
             internal int Ceiling;
