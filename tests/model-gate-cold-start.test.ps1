@@ -11,7 +11,7 @@ if ($modelFunction -match 'language_server_wait_started|language_server_wait_tim
     throw 'cold_start_must_not_wait_for_existing_language_server'
 }
 $skipLog = $modelFunction.IndexOf("language_server_wait_skipped")
-$agyInvoke = $modelFunction.IndexOf('$probeOutput = @(& $AgyPath')
+$agyInvoke = $modelFunction.IndexOf('Invoke-BoundedModelProcess -FilePath $AgyPath')
 if ($skipLog -lt 0 -or $agyInvoke -lt 0 -or $skipLog -gt $agyInvoke) {
     throw 'agy_bootstrap_path_missing'
 }

@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.16.0")]
-[assembly: AssemblyFileVersion("2.9.16.0")]
-[assembly: AssemblyInformationalVersion("2.9.16")]
+[assembly: AssemblyVersion("2.9.28.0")]
+[assembly: AssemblyFileVersion("2.9.28.0")]
+[assembly: AssemblyInformationalVersion("2.9.28")]
 
 namespace AntigravityLauncher
 {
@@ -1287,6 +1287,7 @@ namespace AntigravityLauncher
         private void ReadRuntimeIdentity() {
             Task.Run(delegate {
                 string liveEmail = "";
+                string liveJson = "";
                 try {
                     string helper = Path.Combine(Program.AppDirectory, "antigravity_runtime_identity.py");
                     string pythonw = Program.ResolvePythonw();
@@ -1297,21 +1298,9 @@ namespace AntigravityLauncher
                         var error = process.StandardError.ReadToEndAsync();
                         if (!process.WaitForExit(3500)) { try { process.Kill(); } catch { } }
                         else if (process.ExitCode == 0 && output.Wait(300)) {
-                            string json = output.Result;
-                            if (JsonValue(json, "status") == "live") liveEmail = JsonValue(json, "email");
+                            liveJson = output.Result;
+                            if (JsonValue(liveJson, "status") == "live") liveEmail = JsonValue(liveJson, "email");
                         }
-                    }
-                } catch { }
-                if (IsDisposed || Disposing || !IsHandleCreated) return;
-                string liveJson = "";
-                try {
-                    string helper = Path.Combine(Program.AppDirectory, "antigravity_runtime_identity.py");
-                    string pythonw = Program.ResolvePythonw();
-                    string python = Path.Combine(Path.GetDirectoryName(pythonw) ?? "", "python.exe");
-                    var info = new ProcessStartInfo(python, "\"" + helper + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-                    using (var process = Process.Start(info)) {
-                        var output = process.StandardOutput.ReadToEndAsync();
-                        if (process.WaitForExit(3500) && output.Wait(300)) liveJson = output.Result;
                     }
                 } catch { }
 
@@ -1612,12 +1601,13 @@ namespace AntigravityLauncher
         {
             base.OnPaint(e);
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
 
             // A calm native card: five truthful stages, no synthetic percent or promotional badges.
             using (var path = RoundedRectangle(bounds, 18))
-            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(253, 254, 255), Color.FromArgb(246, 249, 253), 90F))
-            using (var border = new Pen(Color.FromArgb(218, 229, 241), 1F))
+            using (var fill = new LinearGradientBrush(bounds, Color.FromArgb(253, 254, 255), Color.FromArgb(245, 248, 253), 90F))
+            using (var border = new Pen(Color.FromArgb(215, 227, 240), 1F))
             {
                 e.Graphics.FillPath(fill, path);
                 e.Graphics.DrawPath(border, path);
@@ -1660,16 +1650,28 @@ namespace AntigravityLauncher
             if (active && !passed)
             {
                 using (var path = RoundedRectangle(rowRect, 11))
-                using (var brush = new SolidBrush(Color.FromArgb(234, 242, 255)))
+                using (var brush = new SolidBrush(Color.FromArgb(234, 243, 255)))
+                using (var rowBorder = new Pen(Color.FromArgb(191, 219, 254), 1F))
+                {
                     g.FillPath(brush, path);
+                    g.DrawPath(rowBorder, path);
+                }
+                using (var accentRect = new SolidBrush(Color.FromArgb(37, 99, 235)))
+                using (var accentPath = RoundedRectangle(new Rectangle(21, y + 11, 3, 32), 2))
+                {
+                    g.FillPath(accentRect, accentPath);
+                }
             }
 
             Color dotFill = passed ? Color.FromArgb(220, 247, 231) :
                 active ? Color.FromArgb(216, 231, 255) : Color.FromArgb(241, 245, 249);
+            Color dotRing = passed ? Color.FromArgb(134, 239, 172) :
+                active ? Color.FromArgb(147, 197, 253) : Color.FromArgb(226, 232, 240);
             Color dotText = passed ? Color.FromArgb(21, 128, 61) :
                 active ? Color.FromArgb(39, 103, 220) : Color.FromArgb(157, 169, 183);
             var circle = new Rectangle(33, y + 13, 26, 26);
             using (var brush = new SolidBrush(dotFill)) g.FillEllipse(brush, circle);
+            using (var ring = new Pen(dotRing, 1F)) g.DrawEllipse(ring, circle);
             using (var iconFont = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold))
             {
                 TextRenderer.DrawText(g, passed ? "✓" : number.ToString(), iconFont, circle,
@@ -1995,57 +1997,63 @@ namespace AntigravityLauncher
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
 
+                string lastRenderedChunk = "";
                 while (!process.HasExited)
                 {
                     if (userCancelled) { ExitCode = 0; return; }
                     string logChunk = ReadLogSince(logStartOffset);
-                    CapsuleState state = ParseLogState(logChunk);
+                    bool logChanged = (logChunk.Length != lastRenderedChunk.Length);
+                    if (logChanged)
+                    {
+                        lastRenderedChunk = logChunk;
+                        CapsuleState state = ParseLogState(logChunk);
 
-                    animationTick++;
-                    if (displayedProgress < state.TargetProgress)
-                    {
-                        displayedProgress += Math.Max(1, (state.TargetProgress - displayedProgress + 2) / 3);
-                    }
-                    else if (displayedProgress < state.Ceiling && animationTick % 2 == 0)
-                    {
-                        displayedProgress++;
+                        animationTick++;
+                        if (displayedProgress < state.TargetProgress)
+                        {
+                            displayedProgress += Math.Max(1, (state.TargetProgress - displayedProgress + 2) / 3);
+                        }
+                        else if (displayedProgress < state.Ceiling && animationTick % 2 == 0)
+                        {
+                            displayedProgress++;
+                        }
+
+                        int prog = displayedProgress;
+                        BeginInvoke(new Action(delegate
+                        {
+                            if (!string.IsNullOrEmpty(state.LineText))
+                            {
+                                lineStatusText = state.LineText;
+                                linePassed = state.LinePassed;
+                            }
+                            if (!string.IsNullOrEmpty(state.GoogleText))
+                            {
+                                googleStatusText = state.GoogleText;
+                                googlePassed = state.GooglePassed;
+                            }
+                            if (!string.IsNullOrEmpty(state.ModelText))
+                            {
+                                modelStatusText = state.ModelText;
+                                modelPassed = state.ModelPassed;
+                            }
+                            if (!string.IsNullOrEmpty(state.AccountText))
+                            {
+                                accountStatusText = state.AccountText;
+                                accountPassed = state.AccountPassed;
+                            }
+                            if (!string.IsNullOrEmpty(state.WorkspaceText))
+                            {
+                                workspaceStatusText = state.WorkspaceText;
+                                workspacePassed = state.WorkspacePassed;
+                            }
+                            activeStep = state.ActiveStep;
+                            if (!string.IsNullOrEmpty(state.FooterText)) footerStatusText = state.FooterText;
+                            progressBar.ProgressValue = prog;
+                            Invalidate();
+                        }));
                     }
 
-                    int prog = displayedProgress;
-                    BeginInvoke(new Action(delegate
-                    {
-                        if (!string.IsNullOrEmpty(state.LineText))
-                        {
-                            lineStatusText = state.LineText;
-                            linePassed = state.LinePassed;
-                        }
-                        if (!string.IsNullOrEmpty(state.GoogleText))
-                        {
-                            googleStatusText = state.GoogleText;
-                            googlePassed = state.GooglePassed;
-                        }
-                        if (!string.IsNullOrEmpty(state.ModelText))
-                        {
-                            modelStatusText = state.ModelText;
-                            modelPassed = state.ModelPassed;
-                        }
-                        if (!string.IsNullOrEmpty(state.AccountText))
-                        {
-                            accountStatusText = state.AccountText;
-                            accountPassed = state.AccountPassed;
-                        }
-                    if (!string.IsNullOrEmpty(state.WorkspaceText))
-                    {
-                        workspaceStatusText = state.WorkspaceText;
-                        workspacePassed = state.WorkspacePassed;
-                    }
-                    activeStep = state.ActiveStep;
-                        if (!string.IsNullOrEmpty(state.FooterText)) footerStatusText = state.FooterText;
-                        progressBar.ProgressValue = prog;
-                        Invalidate();
-                    }));
-
-                    Thread.Sleep(200);
+                    Thread.Sleep(100);
                 }
 
                 if (userCancelled) { ExitCode = 0; return; }
@@ -2152,22 +2160,57 @@ namespace AntigravityLauncher
                     state.ActiveStep = 1;
                     state.TargetProgress = Math.Max(state.TargetProgress, 25);
                 }
+                else if (line.Contains("pool_probe_started"))
+                {
+                    state.ActiveStep = 1;
+                    state.LinePassed = false;
+                    state.LineText = "多核并发探活中 · 同时竞速 " + GetValue(line, "pool_size") + " 条专线…";
+                    state.FooterText = "多路并发校验 Google 204 / CloudCode / OAuth 与出口国家";
+                    state.TargetProgress = Math.Max(state.TargetProgress, 30);
+                }
+                else if (line.Contains("pool_probe_completed"))
+                {
+                    state.ActiveStep = 1;
+                    state.LineText = "并发竞速完成 · 耗时 " + GetValue(line, "elapsed_ms") + "ms · 优选可用 " + GetValue(line, "winners") + " 条";
+                    state.TargetProgress = Math.Max(state.TargetProgress, 42);
+                }
                 else if (line.Contains("latency_probe_started"))
                 {
                     state.ActiveStep = 1;
-                    state.LineText = "测速 " + GetValue(line, "candidate_index") + "/" +
+                    bool isPool = line.Contains("concurrent_pool");
+                    state.LineText = (isPool ? "并发测速 " : "测速 ") + GetValue(line, "candidate_index") + "/" +
                         GetValue(line, "candidate_total") + " · " + GetValue(line, "region") + " 出口";
                 }
                 else if (line.Contains("latency_probe_passed"))
                 {
-                    state.LineText = "已测速 " + GetValue(line, "candidate_index") + "/" +
+                    bool isPool = line.Contains("concurrent_pool");
+                    state.LineText = (isPool ? "并发优选 " : "已测速 ") + GetValue(line, "candidate_index") + "/" +
                         GetValue(line, "candidate_total") + " · " + GetValue(line, "region") +
                         " · 请求延迟 " + GetValue(line, "rtt_ms") + "ms";
                 }
                 else if (line.Contains("isolated_latency_failed"))
                 {
-                    state.LineText = "测速 " + GetValue(line, "candidate_index") + "/" +
-                        GetValue(line, "candidate_total") + " 未响应，继续检查其他节点";
+                    bool isPool = line.Contains("concurrent_pool");
+                    state.LineText = isPool
+                        ? ("并发过滤 " + GetValue(line, "candidate_index") + "/" + GetValue(line, "candidate_total") + " · " + GetValue(line, "region") + " 未通，其他专线继续竞速")
+                        : ("测速 " + GetValue(line, "candidate_index") + "/" + GetValue(line, "candidate_total") + " 未响应，继续检查其他节点");
+                }
+                else if (line.Contains("proxy_reused") && line.Contains("warm_fast_path"))
+                {
+                    state.ActiveStep = 1;
+                    state.LinePassed = true;
+                    state.LineText = "已复用本地专线 · 127.0.0.1:" + GetValue(line, "port");
+                    state.FooterText = "正在秒级复检 Google 通路与真实 AI 生成…";
+                    state.TargetProgress = Math.Max(state.TargetProgress, 35);
+                }
+                else if (line.Contains("warm_proxy_api_unhealthy"))
+                {
+                    state.ActiveStep = 1;
+                    state.LinePassed = false;
+                    state.LineText = "旧专线端点已失效 · 秒级切入多核重选…";
+                    state.GooglePassed = false;
+                    state.GoogleText = "等待新专线重新检验…";
+                    state.FooterText = "检测到模型 API 不可达，自动切入多核并发重选";
                 }
                 else if (line.Contains("candidate_preflight_started"))
                 {
@@ -2191,7 +2234,7 @@ namespace AntigravityLauncher
                 else if (line.Contains("fast_startup_reused"))
                 {
                     state.LinePassed = true;
-                    state.LineText = "复用已验证专线 · 上次延迟 " + GetValue(line, "rtt_ms") + "ms";
+                    state.LineText = "复用已验证专线 · 本轮延迟 " + GetValue(line, "rtt_ms") + "ms";
                     state.GooglePassed = true;
                     state.GoogleText = "Google 网络本轮探活成功";
                     state.ModelPassed = true;

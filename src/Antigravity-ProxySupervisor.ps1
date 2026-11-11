@@ -259,7 +259,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.9.27-core'
+            version = '2.9.28-core'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -573,13 +573,13 @@ function Invoke-AccountAdmissionGate {
 }
 
 function Test-LocalPort {
-    param([int]$TestPort)
+    param([int]$TestPort, [int]$TimeoutMs = 350)
 
     $client = New-Object System.Net.Sockets.TcpClient
     $async = $null
     try {
         $async = $client.BeginConnect('127.0.0.1', $TestPort, $null, $null)
-        if (-not $async.AsyncWaitHandle.WaitOne(1500)) {
+        if (-not $async.AsyncWaitHandle.WaitOne($TimeoutMs)) {
             return $false
         }
         $client.EndConnect($async)
@@ -733,6 +733,37 @@ function Get-FailoverState {
             }
             $state | Add-Member -NotePropertyName policy_version -NotePropertyValue 2 -Force
             Write-SafeLog -Event 'failover_state_migrated_to_policy_v2' -Values @{ rehabilitated_location_nodes = $locationEntries.Count }
+        }
+        if (-not $PolicyTest -and $null -eq $state.PSObject.Properties['timeout_retirement_fix_v2928']) {
+            $cutoffUtc = [datetime]::Parse('2026-11-12T00:00:00Z').ToUniversalTime()
+            $keptRetirements = @()
+            $rehabilitatedTimeoutCount = 0
+            foreach ($entry in @($state.retired_nodes)) {
+                $isLegacyNonOk = ([string]$entry.reason -eq 'model_non_ok')
+                $retiredOlderThanFix = $false
+                if ($isLegacyNonOk -and -not [string]::IsNullOrWhiteSpace([string]$entry.retired_at)) {
+                    try {
+                        $retiredUtc = [datetime]::Parse([string]$entry.retired_at).ToUniversalTime()
+                        $retiredOlderThanFix = ($retiredUtc -lt $cutoffUtc)
+                    } catch {
+                        $retiredOlderThanFix = $false
+                    }
+                }
+                if ($isLegacyNonOk -and $retiredOlderThanFix) {
+                    $rehabilitatedTimeoutCount++
+                } else {
+                    $keptRetirements += $entry
+                }
+            }
+            if ($rehabilitatedTimeoutCount -gt 0) {
+                try {
+                    $stamp = Get-Date -Format 'yyyyMMdd-HHmmssfff'
+                    Copy-Item -LiteralPath $FailoverStatePath -Destination ($FailoverStatePath + '.before-timeout-fix-' + $stamp + '.json') -Force
+                } catch { }
+                $state.retired_nodes = @($keptRetirements)
+                Write-SafeLog -Event 'failover_legacy_timeout_retirements_rehabilitated' -Values @{ count = $rehabilitatedTimeoutCount }
+            }
+            $state | Add-Member -NotePropertyName timeout_retirement_fix_v2928 -NotePropertyValue $true -Force
         }
         return $state
     } catch {
@@ -1879,8 +1910,8 @@ function Start-OrReuseMihomo {
     if ($null -ne $owned -and ($shouldForceRestartProxy -or $loadedHash -ne $ExpectedConfigHash)) {
         Stop-OwnedMihomo
         $owned = $null
-        for ($i = 0; $i -lt 20 -and (Test-LocalPort -TestPort $Port); $i++) {
-            Start-Sleep -Milliseconds 250
+        for ($i = 0; $i -lt 40 -and (Test-LocalPort -TestPort $Port -TimeoutMs 150); $i++) {
+            Start-Sleep -Milliseconds 80
         }
     }
     if ($null -ne $owned -and -not $shouldForceRestartProxy -and (Test-LocalPort -TestPort $Port)) {
@@ -1892,15 +1923,15 @@ function Start-OrReuseMihomo {
     if (-not $reuse) {
         $started = Start-Process -FilePath $MihomoPath -ArgumentList @('-d', $ProxyRoot, '-f', $ConfigPath) -WorkingDirectory $ProxyRoot -WindowStyle Hidden -PassThru
         Set-Content -LiteralPath $PidPath -Value ([string]$started.Id) -Encoding ASCII
-        for ($i = 0; $i -lt 60; $i++) {
-            Start-Sleep -Milliseconds 500
+        for ($i = 0; $i -lt 150; $i++) {
             if ($started.HasExited) {
                 Write-SafeLog -Event 'proxy_process_exited' -Values @{ code = $started.ExitCode }
                 Stop-WithMessage -Event 'proxy_process_exited'
             }
-            if (Test-LocalPort -TestPort $Port) {
+            if (Test-LocalPort -TestPort $Port -TimeoutMs 180) {
                 break
             }
+            Start-Sleep -Milliseconds 60
         }
         if (-not (Test-LocalPort -TestPort $Port)) {
             Stop-WithMessage -Event 'proxy_port_timeout'
@@ -1969,56 +2000,528 @@ function Get-TextThroughProxy {
     }
 }
 
+function Get-FreeTcpPorts {
+    param(
+        [int]$Count = 1,
+        [int]$StartPort = 43120
+    )
+
+    $ports = New-Object System.Collections.Generic.List[int]
+    $heldListeners = New-Object System.Collections.Generic.List[System.Net.Sockets.TcpListener]
+    try {
+        $candidatePort = $StartPort
+        while ($ports.Count -lt $Count -and $candidatePort -lt 64000) {
+            $listener = $null
+            try {
+                $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $candidatePort)
+                $listener.Start()
+                $heldListeners.Add($listener)
+                $ports.Add($candidatePort)
+            } catch {
+                if ($null -ne $listener) { try { $listener.Stop() } catch { } }
+            }
+            $candidatePort++
+        }
+        while ($ports.Count -lt $Count) {
+            $fallback = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+            $fallback.Start()
+            $heldListeners.Add($fallback)
+            $ports.Add([int]$fallback.LocalEndpoint.Port)
+        }
+        return @($ports.ToArray())
+    } finally {
+        foreach ($l in $heldListeners) {
+            try { $l.Stop() } catch { }
+        }
+    }
+}
+
+function Invoke-ParallelEndpointProbes {
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetProxyUrl,
+        [Parameter(Mandatory = $true)][array]$Endpoints,
+        [int]$TimeoutMs = 3800
+    )
+
+    try {
+        [System.Net.ServicePointManager]::DefaultConnectionLimit = [Math]::Max([System.Net.ServicePointManager]::DefaultConnectionLimit, 128)
+        [System.Net.ServicePointManager]::Expect100Continue = $false
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+    } catch { }
+
+    $proxyObj = New-Object System.Net.WebProxy($TargetProxyUrl)
+    $swAll = [Diagnostics.Stopwatch]::StartNew()
+    $entries = @()
+    foreach ($ep in $Endpoints) {
+        $req = [System.Net.HttpWebRequest]::Create([string]$ep.Uri)
+        $req.Method = 'GET'
+        $req.Proxy = $proxyObj
+        $req.Timeout = $TimeoutMs
+        $req.ReadWriteTimeout = $TimeoutMs
+        $req.KeepAlive = $true
+        $req.UserAgent = 'Antigravity-Recovery-Probe/1.0'
+        $async = $null
+        try {
+            $async = $req.BeginGetResponse($null, $null)
+        } catch {
+            $async = $null
+        }
+        $entries += [pscustomobject]@{
+            Name = [string]$ep.Name
+            Uri = [string]$ep.Uri
+            ReadBody = [bool]($ep.ReadBody)
+            Request = $req
+            Async = $async
+            StartMs = [int]$swAll.ElapsedMilliseconds
+            Status = 0
+            RttMs = 0
+            Body = ''
+            Done = ($null -eq $async)
+        }
+    }
+
+    while ($swAll.ElapsedMilliseconds -lt $TimeoutMs) {
+        $pending = $null
+        foreach ($e in $entries) {
+            if (-not $e.Done) {
+                if ($e.Async.IsCompleted) {
+                    $e.RttMs = [Math]::Max(1, [int]$swAll.ElapsedMilliseconds - $e.StartMs)
+                    $e.Done = $true
+                } else {
+                    $pending = $e
+                }
+            }
+        }
+        if ($null -eq $pending) { break }
+        $remaining = [int]($TimeoutMs - $swAll.ElapsedMilliseconds)
+        if ($remaining -le 0) { break }
+        try {
+            $null = $pending.Async.AsyncWaitHandle.WaitOne([Math]::Min(25, $remaining))
+        } catch {
+            Start-Sleep -Milliseconds 15
+        }
+    }
+
+    $results = @{}
+    foreach ($e in $entries) {
+        if ($null -ne $e.Async -and $e.Async.IsCompleted) {
+            $resp = $null
+            $reader = $null
+            try {
+                $resp = $e.Request.EndGetResponse($e.Async)
+                $e.Status = [int]$resp.StatusCode
+                if ($e.ReadBody) {
+                    $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+                    $e.Body = $reader.ReadToEnd()
+                }
+                if ($e.RttMs -le 0) { $e.RttMs = [Math]::Max(1, [int]$swAll.ElapsedMilliseconds - $e.StartMs) }
+            } catch [System.Net.WebException] {
+                if ($null -ne $_.Exception.Response) {
+                    try { $e.Status = [int]$_.Exception.Response.StatusCode } catch { $e.Status = 0 }
+                    try { $_.Exception.Response.Close() } catch { }
+                } else {
+                    $e.Status = 0
+                }
+                if ($e.RttMs -le 0) { $e.RttMs = [Math]::Max(1, [int]$swAll.ElapsedMilliseconds - $e.StartMs) }
+            } catch {
+                $e.Status = 0
+                if ($e.RttMs -le 0) { $e.RttMs = [Math]::Max(1, [int]$swAll.ElapsedMilliseconds - $e.StartMs) }
+            } finally {
+                if ($null -ne $reader) { try { $reader.Dispose() } catch { } }
+                if ($null -ne $resp) { try { $resp.Close() } catch { } }
+            }
+        } else {
+            try { $e.Request.Abort() } catch { }
+            $e.Status = 0
+            $e.RttMs = [int]$swAll.ElapsedMilliseconds
+        }
+        $results[$e.Name] = [pscustomobject]@{
+            Name = $e.Name
+            Status = [int]$e.Status
+            RttMs = [int]$e.RttMs
+            Body = [string]$e.Body
+        }
+    }
+    return $results
+}
+
+function Invoke-ConcurrentNodePoolProbe {
+    param(
+        [Parameter(Mandatory = $true)][array]$Candidates,
+        [int]$MaxPoolSize = 20,
+        [int]$WarmupTimeoutMs = 2600,
+        [int]$EndpointTimeoutMs = 3200,
+        [int]$PoolWallBudgetMs = 5200,
+        [int]$TargetWinnerCount = 6
+    )
+
+    $poolCandidates = @($Candidates | Select-Object -First $MaxPoolSize)
+    if ($poolCandidates.Count -le 1) { return $null }
+    foreach ($c in $poolCandidates) {
+        if ($null -eq $c -or [string]::IsNullOrWhiteSpace([string]$c.Definition)) {
+            return $null
+        }
+    }
+
+    $poolWatch = [Diagnostics.Stopwatch]::StartNew()
+    $poolRoot = Join-Path $env:TEMP ('ag-pool-' + [guid]::NewGuid().ToString('N'))
+    $poolCfgPath = Join-Path $poolRoot 'pool.yaml'
+    $poolProcess = $null
+    $rsp = $null
+    $jobs = @()
+
+    try {
+        New-Item -ItemType Directory -Path $poolRoot -Force | Out-Null
+        $ports = @(Get-FreeTcpPorts -Count $poolCandidates.Count -StartPort 43120)
+        $lines = @(
+            'allow-lan: false',
+            'bind-address: 127.0.0.1',
+            'mode: direct',
+            'log-level: silent',
+            'ipv6: true',
+            'proxies:'
+        )
+        $listenerLines = @('listeners:')
+        $bindings = @()
+        $fixed = $script:FixedUpstream
+        for ($i = 0; $i -lt $poolCandidates.Count; $i++) {
+            $cand = $poolCandidates[$i]
+            $pName = 'POOL_C_' + $i
+            $def = ([string]$cand.Definition) -replace [regex]::Escape($TargetAlias), $pName
+            $lines += ('  - ' + $def)
+            $routeName = $pName
+            if ($null -ne $fixed) {
+                $fxName = 'POOL_FX_' + $i
+                $lines += @(
+                    ('  - name: ' + $fxName),
+                    ('    type: ' + [string]$fixed.Type),
+                    ('    server: ' + (ConvertTo-YamlSingleQuoted -Value ([string]$fixed.Server))),
+                    ('    port: ' + [string]$fixed.Port),
+                    ('    username: ' + (ConvertTo-YamlSingleQuoted -Value ([string]$fixed.Username))),
+                    ('    pass' + 'word: ' + (ConvertTo-YamlSingleQuoted -Value ([string]$fixed.Password))),
+                    ('    dialer-proxy: ' + $pName)
+                )
+                $routeName = $fxName
+            }
+            $listenPort = [int]$ports[$i]
+            $listenerLines += @(
+                ('  - name: POOL_L_' + $i),
+                '    type: mixed',
+                '    listen: 127.0.0.1',
+                ('    port: ' + $listenPort),
+                ('    proxy: ' + $routeName)
+            )
+            $bindings += [pscustomobject]@{ Index = $i; Port = $listenPort; Candidate = $cand }
+        }
+        $lines += $listenerLines
+        [System.IO.File]::WriteAllLines($poolCfgPath, $lines, (New-Object System.Text.UTF8Encoding($false)))
+
+        & $MihomoPath -t -d $poolRoot -f $poolCfgPath | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-SafeLog -Event 'pool_probe_fallback_serial' -Values @{ reason = 'config_test_failed'; exit_code = $LASTEXITCODE }
+            return $null
+        }
+
+        $poolProcess = Start-Process -FilePath $MihomoPath -ArgumentList @('-d', ('"' + $poolRoot + '"'), '-f', ('"' + $poolCfgPath + '"')) -WorkingDirectory $poolRoot -WindowStyle Hidden -PassThru
+        $firstPort = [int]$ports[0]
+        $lastPort = [int]$ports[$ports.Count - 1]
+        $portsReady = $false
+        for ($w = 0; $w -lt 90; $w++) {
+            if ($poolProcess.HasExited) {
+                Write-SafeLog -Event 'pool_probe_fallback_serial' -Values @{ reason = 'process_exited'; exit_code = $poolProcess.ExitCode }
+                return $null
+            }
+            if ((Test-LocalPort -TestPort $firstPort -TimeoutMs 120) -and (Test-LocalPort -TestPort $lastPort -TimeoutMs 120)) {
+                $portsReady = $true
+                break
+            }
+            Start-Sleep -Milliseconds 40
+        }
+        if (-not $portsReady) {
+            Write-SafeLog -Event 'pool_probe_fallback_serial' -Values @{ reason = 'ports_timeout' }
+            return $null
+        }
+
+        $poolCount = $bindings.Count
+        Write-SafeLog -Event 'pool_probe_started' -Values @{ pool_size = $poolCount; mihomo_ready_ms = [int]$poolWatch.ElapsedMilliseconds; mode = 'concurrent_pool' }
+        Write-SafeLog -Event 'latency_probe_started' -Values @{ candidate_index = 1; candidate_total = $poolCount; region = [string]$poolCandidates[0].Region; mode = 'concurrent_pool' }
+
+        $rsp = [runspacefactory]::CreateRunspacePool(1, [Math]::Min(20, $poolCount))
+        $rsp.Open()
+
+        $workerScript = {
+            param($PortNum, $Idx, $ExpectedRegion, $ExpectedCountry, $WarmMs, $EndMs)
+            try {
+                [System.Net.ServicePointManager]::DefaultConnectionLimit = 128
+                [System.Net.ServicePointManager]::Expect100Continue = $false
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+            } catch { }
+            $proxy = New-Object System.Net.WebProxy('http://127.0.0.1:' + $PortNum)
+            function Invoke-Single([System.Net.WebProxy]$P, [string]$Uri, [int]$Ms) {
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                $resp = $null
+                try {
+                    $r = [System.Net.HttpWebRequest]::Create($Uri)
+                    $r.Proxy = $P
+                    $r.Timeout = $Ms
+                    $r.ReadWriteTimeout = $Ms
+                    $r.Method = 'GET'
+                    $r.KeepAlive = $true
+                    $resp = $r.GetResponse()
+                    $code = [int]$resp.StatusCode
+                    $sw.Stop()
+                    return @{ Status = $code; RttMs = [Math]::Max(1, [int]$sw.ElapsedMilliseconds) }
+                } catch [System.Net.WebException] {
+                    $sw.Stop()
+                    $code = 0
+                    if ($null -ne $_.Exception.Response) {
+                        try { $code = [int]$_.Exception.Response.StatusCode } catch { $code = 0 }
+                        try { $_.Exception.Response.Close() } catch { }
+                    }
+                    return @{ Status = $code; RttMs = [Math]::Max(1, [int]$sw.ElapsedMilliseconds) }
+                } catch {
+                    $sw.Stop()
+                    return @{ Status = 0; RttMs = [Math]::Max(1, [int]$sw.ElapsedMilliseconds) }
+                } finally {
+                    if ($null -ne $resp) { try { $resp.Close() } catch { } }
+                }
+            }
+
+            $null = Invoke-Single $proxy 'https://www.google.com/generate_204' ([Math]::Min(2200, $WarmMs))
+            $g = Invoke-Single $proxy 'https://www.google.com/generate_204' $WarmMs
+            if ($g.Status -ne 204) {
+                return [pscustomobject]@{
+                    Index = $Idx; Region = $ExpectedRegion; Google = [int]$g.Status; RttMs = [int]$g.RttMs
+                    Api = 0; CloudCode = 0; OAuth = 0; Country = ''; ApiRttMs = 0
+                    FullPass = $false; FailReason = ('google_status_' + $g.Status)
+                }
+            }
+
+            $specs = @(
+                @{ Name = 'Api'; Uri = 'https://generativelanguage.googleapis.com/'; Body = $false },
+                @{ Name = 'CC'; Uri = 'https://daily-cloudcode-pa.googleapis.com/'; Body = $false },
+                @{ Name = 'OA'; Uri = 'https://oauth2.googleapis.com/'; Body = $false },
+                @{ Name = 'CF'; Uri = 'https://www.cloudflare.com/cdn-cgi/trace'; Body = $true }
+            )
+            $swMulti = [Diagnostics.Stopwatch]::StartNew()
+            $reqs = @()
+            foreach ($sp in $specs) {
+                $r = [System.Net.HttpWebRequest]::Create([string]$sp.Uri)
+                $r.Proxy = $proxy; $r.Timeout = $EndMs; $r.ReadWriteTimeout = $EndMs; $r.Method = 'GET'; $r.KeepAlive = $true
+                $as = $null
+                try { $as = $r.BeginGetResponse($null, $null) } catch { $as = $null }
+                $reqs += [pscustomobject]@{ Name = $sp.Name; Body = $sp.Body; Req = $r; As = $as; Rtt = 0; Done = ($null -eq $as) }
+            }
+            while ($swMulti.ElapsedMilliseconds -lt $EndMs) {
+                $pending = $null
+                foreach ($rq in $reqs) {
+                    if (-not $rq.Done) {
+                        if ($rq.As.IsCompleted) { $rq.Rtt = [Math]::Max(1, [int]$swMulti.ElapsedMilliseconds); $rq.Done = $true }
+                        else { $pending = $rq }
+                    }
+                }
+                if ($null -eq $pending) { break }
+                $rem = [int]($EndMs - $swMulti.ElapsedMilliseconds)
+                if ($rem -le 0) { break }
+                try { $null = $pending.As.AsyncWaitHandle.WaitOne([Math]::Min(25, $rem)) } catch { Start-Sleep -Milliseconds 15 }
+            }
+            $vals = @{}
+            foreach ($rq in $reqs) {
+                $code = 0; $txt = ''
+                if ($null -ne $rq.As -and $rq.As.IsCompleted) {
+                    $resp = $null; $sr = $null
+                    try {
+                        $resp = $rq.Req.EndGetResponse($rq.As)
+                        $code = [int]$resp.StatusCode
+                        if ($rq.Body) { $sr = New-Object System.IO.StreamReader($resp.GetResponseStream()); $txt = $sr.ReadToEnd() }
+                    } catch [System.Net.WebException] {
+                        if ($null -ne $_.Exception.Response) {
+                            try { $code = [int]$_.Exception.Response.StatusCode } catch { $code = 0 }
+                            try { $_.Exception.Response.Close() } catch { }
+                        }
+                    } catch { } finally {
+                        if ($null -ne $sr) { try { $sr.Dispose() } catch { } }
+                        if ($null -ne $resp) { try { $resp.Close() } catch { } }
+                    }
+                } else {
+                    try { $rq.Req.Abort() } catch { }
+                }
+                $vals[$rq.Name] = @{ Status = $code; Rtt = $rq.Rtt; Body = $txt }
+            }
+            $country = ''
+            if ($vals['CF'].Body -match '(?m)^loc=([A-Za-z]{2})\s*$') { $country = $Matches[1].ToUpperInvariant() }
+            $countryOk = [string]::IsNullOrWhiteSpace($ExpectedCountry) -or ($country -eq $ExpectedCountry.ToUpperInvariant())
+            $apiSt = [int]$vals['Api'].Status
+            $ccSt = [int]$vals['CC'].Status
+            $oaSt = [int]$vals['OA'].Status
+            $full = ($apiSt -gt 0 -and $ccSt -gt 0 -and $oaSt -gt 0 -and $countryOk)
+            $reason = ''
+            if (-not $full) {
+                if (-not $countryOk) { $reason = 'country_mismatch_' + $country }
+                elseif ($ccSt -le 0) { $reason = 'cloudcode_unreachable' }
+                elseif ($apiSt -le 0) { $reason = 'modelapi_unreachable' }
+                else { $reason = 'oauth_unreachable' }
+            }
+            return [pscustomobject]@{
+                Index = $Idx; Region = $ExpectedRegion; Google = [int]$g.Status; RttMs = [int]$g.RttMs
+                Api = $apiSt; CloudCode = $ccSt; OAuth = $oaSt; Country = $country; ApiRttMs = [int]$vals['CC'].Rtt
+                FullPass = $full; FailReason = $reason
+            }
+        }
+
+        $fixedCountry = if ($null -ne $fixed) { [string]$fixed.ExpectedCountry } else { '' }
+        foreach ($b in $bindings) {
+            $expCountry = if (-not [string]::IsNullOrWhiteSpace($fixedCountry)) { $fixedCountry } else { [string]$b.Candidate.ExpectedEgressCountry }
+            $ps = [powershell]::Create()
+            $ps.RunspacePool = $rsp
+            $null = $ps.AddScript($workerScript).AddArgument([int]$b.Port).AddArgument([int]$b.Index).AddArgument([string]$b.Candidate.Region).AddArgument($expCountry).AddArgument($WarmupTimeoutMs).AddArgument($EndpointTimeoutMs)
+            $jobs += [pscustomobject]@{ Binding = $b; PS = $ps; Handle = $ps.BeginInvoke(); Collected = $false }
+        }
+
+        $probePhaseWatch = [Diagnostics.Stopwatch]::StartNew()
+        $collectedCount = 0
+        $resultsByIndex = @{}
+        $winnerRegions = @{}
+        $fullWinnersCount = 0
+        $hasBothRegionsInPool = ((@($bindings | Where-Object { [string]$_.Candidate.Region -eq 'JP' }).Count -gt 0) -and (@($bindings | Where-Object { [string]$_.Candidate.Region -eq 'US' }).Count -gt 0))
+
+        while ($collectedCount -lt $jobs.Count) {
+            foreach ($j in $jobs) {
+                if (-not $j.Collected -and $j.Handle.IsCompleted) {
+                    $j.Collected = $true
+                    $collectedCount++
+                    try {
+                        $resOut = @($j.PS.EndInvoke($j.Handle))
+                        $r = if ($resOut.Count -gt 0) { $resOut[0] } else { $null }
+                        if ($null -ne $r) {
+                            $resultsByIndex[[int]$j.Binding.Index] = [pscustomobject]@{
+                                Candidate = $j.Binding.Candidate
+                                Google = [int]$r.Google
+                                RttMs = [int]$r.RttMs
+                                Api = [int]$r.Api
+                                CloudCode = [int]$r.CloudCode
+                                OAuth = [int]$r.OAuth
+                                Country = [string]$r.Country
+                                ApiRttMs = [int]$r.ApiRttMs
+                                FullPass = [bool]$r.FullPass
+                                FailReason = [string]$r.FailReason
+                            }
+                            if ($collectedCount -gt 1) {
+                                Write-SafeLog -Event 'latency_probe_started' -Values @{ candidate_index = $collectedCount; candidate_total = $poolCount; region = [string]$j.Binding.Candidate.Region; mode = 'concurrent_pool' }
+                            }
+                            if ([bool]$r.FullPass) {
+                                $fullWinnersCount++
+                                $winnerRegions[[string]$j.Binding.Candidate.Region] = $true
+                                Write-SafeLog -Event 'latency_probe_passed' -Values @{
+                                    candidate_index = $collectedCount; candidate_total = $poolCount; region = [string]$j.Binding.Candidate.Region
+                                    rtt_ms = [int]$r.RttMs; api = [int]$r.Api; cloudcode = [int]$r.CloudCode; oauth = [int]$r.OAuth; country = [string]$r.Country; mode = 'concurrent_pool'
+                                }
+                            } else {
+                                Write-SafeLog -Event 'isolated_latency_failed' -Values @{
+                                    node_id = [string]$j.Binding.Candidate.Id; candidate_index = $collectedCount; candidate_total = $poolCount
+                                    region = [string]$j.Binding.Candidate.Region; google = [int]$r.Google; api = [int]$r.Api; cloudcode = [int]$r.CloudCode; oauth = [int]$r.OAuth; error_type = [string]$r.FailReason; mode = 'concurrent_pool'
+                                }
+                            }
+                        }
+                    } catch { }
+                }
+            }
+            if ($collectedCount -ge $jobs.Count) { break }
+            $enoughRegions = (-not $hasBothRegionsInPool) -or ($winnerRegions.ContainsKey('JP') -and $winnerRegions.ContainsKey('US'))
+            if ($fullWinnersCount -ge $TargetWinnerCount -and $enoughRegions -and $probePhaseWatch.ElapsedMilliseconds -ge 1800) {
+                break
+            }
+            if ($probePhaseWatch.ElapsedMilliseconds -ge $PoolWallBudgetMs) {
+                break
+            }
+            Start-Sleep -Milliseconds 60
+        }
+
+        $poolWatch.Stop()
+        Write-SafeLog -Event 'pool_probe_completed' -Values @{
+            pool_size = $poolCount; collected = $collectedCount; winners = $fullWinnersCount; elapsed_ms = [int]$poolWatch.ElapsedMilliseconds; mode = 'concurrent_pool'
+        }
+        return [pscustomobject]@{
+            Results = @($resultsByIndex.Values)
+            PoolCount = $poolCount
+            WinnerCount = $fullWinnersCount
+            ElapsedMs = [int]$poolWatch.ElapsedMilliseconds
+        }
+    } catch {
+        Write-SafeLog -Event 'pool_probe_fallback_serial' -Values @{ reason = 'exception'; error = $_.Exception.Message }
+        return $null
+    } finally {
+        foreach ($j in $jobs) {
+            if (-not $j.Collected) {
+                try { $null = $j.PS.BeginStop($null, $null) } catch { }
+            }
+            try { $j.PS.Dispose() } catch { }
+        }
+        if ($null -ne $rsp) { try { $rsp.Close(); $rsp.Dispose() } catch { } }
+        if ($null -ne $poolProcess -and -not $poolProcess.HasExited) {
+            try { $poolProcess.Kill() } catch { }
+            try { $null = $poolProcess.WaitForExit(3000) } catch { }
+        }
+        if (Test-Path -LiteralPath $poolRoot) {
+            try { Remove-Item -LiteralPath $poolRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    }
+}
+
 function Test-GoogleConnectivity {
     Write-SafeLog -Event 'google_connectivity_started'
     $googleStatus = 0
     $apiStatus = 0
+    $cloudCodeStatus = 0
     $oauthStatus = 0
     $probeRttMs = 0
     # Warmup: prime the proxy TLS connection pool to avoid cold-start timeout.
-    $null = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204'
+    $null = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204' -TimeoutMs 2500
     for ($attempt = 1; $attempt -le $ConnectivityAttemptCount; $attempt++) {
         Write-SafeLog -Event 'google_probe_started' -Values @{service='Google204'; attempt=$attempt}
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $googleStatus = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204'
+        $googleStatus = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204' -TimeoutMs 3500
         $sw.Stop()
         $probeRttMs = [int]$sw.ElapsedMilliseconds
         Write-SafeLog -Event 'google_probe_completed' -Values @{service='Google204'; attempt=$attempt; status=$googleStatus; rtt_ms=$probeRttMs}
         if ($googleStatus -le 0) {
             if ($attempt -lt $ConnectivityAttemptCount) {
-                Start-Sleep -Milliseconds 600
+                Start-Sleep -Milliseconds 150
             }
             continue
         }
         Write-SafeLog -Event 'google_probe_started' -Values @{service='ModelAPI'; attempt=$attempt}
-        $apiWatch = [Diagnostics.Stopwatch]::StartNew()
-        $apiStatus = Get-HttpStatusThroughProxy -Uri 'https://generativelanguage.googleapis.com/'
-        $apiWatch.Stop()
-        Write-SafeLog -Event 'google_probe_completed' -Values @{service='ModelAPI'; attempt=$attempt; status=$apiStatus; rtt_ms=[int]$apiWatch.ElapsedMilliseconds}
         Write-SafeLog -Event 'google_probe_started' -Values @{service='OAuth'; attempt=$attempt}
-        $oauthWatch = [Diagnostics.Stopwatch]::StartNew()
-        $oauthStatus = Get-HttpStatusThroughProxy -Uri 'https://oauth2.googleapis.com/'
-        $oauthWatch.Stop()
-        Write-SafeLog -Event 'google_probe_completed' -Values @{service='OAuth'; attempt=$attempt; status=$oauthStatus; rtt_ms=[int]$oauthWatch.ElapsedMilliseconds}
-        if ($googleStatus -gt 0 -and $apiStatus -gt 0 -and $oauthStatus -gt 0) {
+        $epResults = Invoke-ParallelEndpointProbes -TargetProxyUrl $ProxyUrl -TimeoutMs 3800 -Endpoints @(
+            @{ Name = 'ModelAPI'; Uri = 'https://generativelanguage.googleapis.com/'; ReadBody = $false },
+            @{ Name = 'CloudCode'; Uri = 'https://daily-cloudcode-pa.googleapis.com/'; ReadBody = $false },
+            @{ Name = 'OAuth'; Uri = 'https://oauth2.googleapis.com/'; ReadBody = $false }
+        )
+        $apiStatus = [int]$epResults['ModelAPI'].Status
+        $cloudCodeStatus = [int]$epResults['CloudCode'].Status
+        $oauthStatus = [int]$epResults['OAuth'].Status
+        Write-SafeLog -Event 'google_probe_completed' -Values @{service='ModelAPI'; attempt=$attempt; status=$apiStatus; rtt_ms=[int]$epResults['ModelAPI'].RttMs}
+        Write-SafeLog -Event 'google_probe_completed' -Values @{service='OAuth'; attempt=$attempt; status=$oauthStatus; rtt_ms=[int]$epResults['OAuth'].RttMs}
+        if ($googleStatus -gt 0 -and $apiStatus -gt 0 -and $cloudCodeStatus -gt 0 -and $oauthStatus -gt 0) {
             break
         }
         if ($attempt -lt $ConnectivityAttemptCount) {
-            Start-Sleep -Milliseconds 800
+            Start-Sleep -Milliseconds 150
         }
     }
     $script:LastGoogleStatus = $googleStatus
     $script:LastApiStatus = $apiStatus
     $script:LastOAuthStatus = $oauthStatus
     $script:LastProbeRttMs = $probeRttMs
-    if ($googleStatus -le 0 -or $apiStatus -le 0 -or $oauthStatus -le 0) {
-        Write-SafeLog -Event 'google_connectivity_failed' -Values @{ google = $googleStatus; api = $apiStatus; oauth = $oauthStatus; attempts = $ConnectivityAttemptCount; rtt_ms = $probeRttMs }
+    if ($googleStatus -le 0 -or $apiStatus -le 0 -or $cloudCodeStatus -le 0 -or $oauthStatus -le 0) {
+        Write-SafeLog -Event 'google_connectivity_failed' -Values @{ google = $googleStatus; api = $apiStatus; cloudcode = $cloudCodeStatus; oauth = $oauthStatus; attempts = $ConnectivityAttemptCount; rtt_ms = $probeRttMs }
         Stop-WithMessage -Event 'google_connectivity_failed'
     }
-    Write-SafeLog -Event 'google_connectivity_passed' -Values @{ google = $googleStatus; api = $apiStatus; oauth = $oauthStatus; attempts = $attempt; rtt_ms = $probeRttMs }
+    Write-SafeLog -Event 'google_connectivity_passed' -Values @{ google = $googleStatus; api = $apiStatus; cloudcode = $cloudCodeStatus; oauth = $oauthStatus; attempts = $attempt; rtt_ms = $probeRttMs }
     return @{
         GoogleStatus = $googleStatus
         ApiStatus = $apiStatus
+        CloudCodeStatus = $cloudCodeStatus
         OAuthStatus = $oauthStatus
         RttMs = $probeRttMs
     }
@@ -2249,7 +2752,8 @@ function Test-RealModelGeneration {
         $status = 'INVALID_OUTPUT'
     }
 
-    $locationFailure = $bounded.AbortReason -eq 'model_location'
+    $probeRawJoined = (($probeOutput | ForEach-Object { [string]$_ }) -join ' ')
+    $locationFailure = ([string]$bounded.AbortReason -eq 'model_location') -or [regex]::IsMatch($probeRawJoined, '(?i)User location is not supported|UNSUPPORTED_LOCATION|FAILED_PRECONDITION.*400')
     if (Test-Path -LiteralPath $probeLog) {
         try {
             $probeDiagnosticText = Get-Content -LiteralPath $probeLog -Raw -ErrorAction SilentlyContinue
@@ -2258,22 +2762,25 @@ function Test-RealModelGeneration {
     }
     Remove-Item -LiteralPath $probeLog -Force -ErrorAction SilentlyContinue
 
+    $normalizedResponse = $responseText.Trim().Trim('.', '!', '`', '"', "'").ToUpperInvariant()
     $durationMs = [int][math]::Round(((Get-Date) - $startedAt).TotalMilliseconds)
-    if (-not $bounded.AbortReason -and -not $locationFailure -and $exitCode -eq 0 -and $status -eq 'SUCCESS' -and $responseText -ceq 'OK') {
+    if (-not $bounded.AbortReason -and -not $locationFailure -and $exitCode -eq 0 -and $status -eq 'SUCCESS' -and $normalizedResponse -eq 'OK') {
         $script:LastModelProbeState = 'passed'
         Write-SafeLog -Event 'model_generation_probe_passed' -Values @{ duration_ms = $durationMs }
         return $true
     }
 
-    $transportFailure = [regex]::IsMatch(($probeDiagnosticText + ' ' + (($probeOutput | ForEach-Object { [string]$_ }) -join ' ')), '(?i)timed?\s*out|timeout|connection\s+(?:reset|closed|refused)|network|temporarily\s+unavailable|unreachable|eof|deadline')
+    $timeoutFailure = ([string]$bounded.AbortReason -eq 'model_timeout')
+    $transportFailure = $timeoutFailure -or [regex]::IsMatch(($probeDiagnosticText + ' ' + $probeRawJoined), '(?i)timed?\s*out|timeout|connection\s+(?:reset|closed|refused)|network|temporarily\s+unavailable|unreachable|eof|deadline|resource_exhausted|rate.?limit|quota|\b429\b')
     $failureKind = 'model_transport'
     if ($locationFailure) {
         $failureKind = 'model_location'
+    } elseif ($transportFailure -or $exitCode -lt 0) {
+        # Aborted timeouts, transport disconnects, and account-level 429 quota
+        # errors are transient for the node; never permanently retire a candidate.
+        $failureKind = 'model_transport'
     } elseif ($status -eq 'SUCCESS' -or $status -eq 'ERROR' -or -not [string]::IsNullOrWhiteSpace($responseText)) {
-        # A structured model result that is not exactly OK is a candidate
-        # eligibility/quality failure. Retire it instead of trying it again.
-        # Only an explicitly transport-shaped failure remains temporary.
-        $failureKind = if ($transportFailure -and $status -ne 'SUCCESS') { 'model_transport' } else { 'model_non_ok' }
+        $failureKind = 'model_non_ok'
     }
 
     $errSnippet = ''
@@ -2839,10 +3346,48 @@ $lastSavedState = $null
 $fastStartupPassed = $false
 if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and (Test-Path -LiteralPath $StatePath)) {
     try {
-        if (Test-LocalPort -TestPort $Port) {
+        if (Test-LocalPort -TestPort $Port -TimeoutMs 250) {
             $lastSavedState = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ([string]$lastSavedState.status -eq 'ready' -and -not [string]::IsNullOrWhiteSpace([string]$lastSavedState.active_node_id)) {
-                $status204 = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204' -TimeoutMs 3000
+                $warmWatch = [Diagnostics.Stopwatch]::StartNew()
+                $status204 = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204' -TimeoutMs 2800
+                $warmWatch.Stop()
+                $warmGoogleRtt = [int]$warmWatch.ElapsedMilliseconds
+                $warmApiStatus = [int]$lastSavedState.generativelanguage_status
+                $warmOAuthStatus = [int]$lastSavedState.oauth_status
+                $warmCloudCodeStatus = 0
+                if ($status204 -eq 204) {
+                    $ownedWarm = Get-OwnedMihomoProcess
+                    $warmPid = if ($null -ne $ownedWarm) { [int]$ownedWarm.ProcessId } elseif ($null -ne $lastSavedState.mihomo_pid) { [int]$lastSavedState.mihomo_pid } else { 0 }
+                    Write-SafeLog -Event 'proxy_reused' -Values @{ pid = $warmPid; port = $Port; mode = 'warm_fast_path' }
+                    Write-SafeLog -Event 'google_connectivity_started'
+                    Write-SafeLog -Event 'google_probe_started' -Values @{ service = 'Google204'; attempt = 1 }
+                    Write-SafeLog -Event 'google_probe_completed' -Values @{ service = 'Google204'; attempt = 1; status = 204; rtt_ms = $warmGoogleRtt }
+                    Write-SafeLog -Event 'google_probe_started' -Values @{ service = 'ModelAPI'; attempt = 1 }
+                    Write-SafeLog -Event 'google_probe_started' -Values @{ service = 'OAuth'; attempt = 1 }
+                    $warmEp = Invoke-ParallelEndpointProbes -TargetProxyUrl $ProxyUrl -TimeoutMs 3200 -Endpoints @(
+                        @{ Name = 'ModelAPI'; Uri = 'https://generativelanguage.googleapis.com/'; ReadBody = $false },
+                        @{ Name = 'CloudCode'; Uri = 'https://daily-cloudcode-pa.googleapis.com/'; ReadBody = $false },
+                        @{ Name = 'OAuth'; Uri = 'https://oauth2.googleapis.com/'; ReadBody = $false }
+                    )
+                    $warmApiStatus = [int]$warmEp['ModelAPI'].Status
+                    $warmCloudCodeStatus = [int]$warmEp['CloudCode'].Status
+                    $warmOAuthStatus = [int]$warmEp['OAuth'].Status
+                    Write-SafeLog -Event 'google_probe_completed' -Values @{ service = 'ModelAPI'; attempt = 1; status = $warmApiStatus; rtt_ms = [int]$warmEp['ModelAPI'].RttMs }
+                    Write-SafeLog -Event 'google_probe_completed' -Values @{ service = 'OAuth'; attempt = 1; status = $warmOAuthStatus; rtt_ms = [int]$warmEp['OAuth'].RttMs }
+                    if ($warmApiStatus -le 0 -or $warmCloudCodeStatus -le 0 -or $warmOAuthStatus -le 0) {
+                        Write-SafeLog -Event 'warm_proxy_api_unhealthy' -Values @{ api = $warmApiStatus; cloudcode = $warmCloudCodeStatus; oauth = $warmOAuthStatus; rtt_ms = $warmGoogleRtt }
+                        $status204 = 0
+                    } else {
+                        $script:LastGoogleStatus = 204
+                        $script:LastApiStatus = $warmApiStatus
+                        $script:LastOAuthStatus = $warmOAuthStatus
+                        $script:LastProbeRttMs = $warmGoogleRtt
+                        Write-SafeLog -Event 'google_connectivity_passed' -Values @{ google = 204; api = $warmApiStatus; cloudcode = $warmCloudCodeStatus; oauth = $warmOAuthStatus; attempts = 1; rtt_ms = $warmGoogleRtt }
+                        $null = Start-AntigravityBeforeModelGate
+                        Write-SafeLog -Event 'formal_model_gate_started' -Values @{ node_id = [string]$lastSavedState.active_node_id; port = $Port; mode = 'warm_fast_path' }
+                    }
+                }
                 if ($status204 -eq 204) {
                     Invoke-AccountAdmissionGate
                     $null = Test-RealModelGeneration
@@ -2865,12 +3410,12 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
                         ConfigHash = [string]$lastSavedState.config_hash
                     }
                     $connectivity = [pscustomobject]@{
-                        GoogleStatus = [int]$lastSavedState.google_status
-                        ApiStatus = [int]$lastSavedState.generativelanguage_status
-                        OAuthStatus = [int]$lastSavedState.oauth_status
+                        GoogleStatus = 204
+                        ApiStatus = $warmApiStatus
+                        OAuthStatus = $warmOAuthStatus
                     }
                     $egressCountry = [string]$lastSavedState.egress_country
-                    $script:LastProbeRttMs = if ($null -ne $lastSavedState.active_node_rtt_ms) { [int]$lastSavedState.active_node_rtt_ms } else { 0 }
+                    $script:LastProbeRttMs = $warmGoogleRtt
                     $script:CurrentConfigHash = [string]$lastSavedState.config_hash
                     Write-SafeLog -Event 'fast_startup_reused' -Values @{ port = $Port; active_node_id = [string]$lastSavedState.active_node_id; rtt_ms = $script:LastProbeRttMs }
                 }
@@ -2968,28 +3513,56 @@ if (-not $fastStartupPassed) {
     $candidateTotal = $orderedCandidates.Count
     $script:CandidateTotal = $candidateTotal
 
-    # Measure current top candidates without changing the production listener.
-    $maxLatencyProbes = 6
-    $latencyCandidates = @()
-    $unprobedCandidates = @()
-    for ($i = 0; $i -lt $orderedCandidates.Count; $i++) {
-        $probeCandidate = $orderedCandidates[$i]
-        if ($i -lt $maxLatencyProbes) {
-            $latencyProbeTotal = [Math]::Min($maxLatencyProbes, $orderedCandidates.Count)
-            Write-SafeLog -Event 'latency_probe_started' -Values @{ candidate_index=($i+1); candidate_total=$latencyProbeTotal; region=[string]$probeCandidate.Region }
-            try {
-                $measured = Invoke-IsolatedCandidateProbe -Candidate $probeCandidate -ConnectivityOnly
-                $latencyMs = [int]$measured.Connectivity.RttMs
-                $latencyCandidates += [pscustomobject]@{ Candidate=$probeCandidate; RttMs=$latencyMs }
-                Write-SafeLog -Event 'latency_probe_passed' -Values @{ candidate_index=($i+1); candidate_total=$latencyProbeTotal; region=[string]$probeCandidate.Region; rtt_ms=$latencyMs }
-            } catch {
-                Write-SafeLog -Event 'isolated_latency_failed' -Values @{node_id=$probeCandidate.Id; candidate_index=($i+1); candidate_total=$latencyProbeTotal; region=[string]$probeCandidate.Region; error_type=$_.Exception.GetType().Name}
-            }
-        } else {
-            $unprobedCandidates += $probeCandidate
+    # Race up to 20 candidates concurrently on one temporary multi-listener Mihomo instance
+    # screening Google204 + ModelAPI + CloudCode + OAuth + Country before promotion.
+    $poolProbe = Invoke-ConcurrentNodePoolProbe -Candidates $orderedCandidates -MaxPoolSize 20 -WarmupTimeoutMs 2600 -EndpointTimeoutMs 3200 -PoolWallBudgetMs 5200 -TargetWinnerCount 6
+    if ($null -ne $poolProbe) {
+        $resultById = @{}
+        foreach ($r in @($poolProbe.Results)) {
+            $resultById[[string]$r.Candidate.Id] = $r
         }
+        $winnerEntries = @()
+        $unprobedCandidates = @()
+        $failedPoolCandidates = @()
+        foreach ($cand in $orderedCandidates) {
+            $cid = [string]$cand.Id
+            if ($resultById.ContainsKey($cid)) {
+                $r = $resultById[$cid]
+                if ([bool]$r.FullPass) {
+                    $winnerEntries += $r
+                } else {
+                    $failedPoolCandidates += $cand
+                }
+            } else {
+                $unprobedCandidates += $cand
+            }
+        }
+        $sortedWinners = @($winnerEntries | Sort-Object @{Expression={if ($_.Candidate.Region -eq 'JP') {0} elseif ($_.Candidate.Region -eq 'US') {1} else {2}}}, RttMs, ApiRttMs | ForEach-Object { $_.Candidate })
+        $orderedCandidates = @($sortedWinners) + @($unprobedCandidates) + @($failedPoolCandidates)
+    } else {
+        # Fallback: measure top candidates serially if multi-listener pool cannot start.
+        $maxLatencyProbes = 6
+        $latencyCandidates = @()
+        $unprobedCandidates = @()
+        for ($i = 0; $i -lt $orderedCandidates.Count; $i++) {
+            $probeCandidate = $orderedCandidates[$i]
+            if ($i -lt $maxLatencyProbes) {
+                $latencyProbeTotal = [Math]::Min($maxLatencyProbes, $orderedCandidates.Count)
+                Write-SafeLog -Event 'latency_probe_started' -Values @{ candidate_index=($i+1); candidate_total=$latencyProbeTotal; region=[string]$probeCandidate.Region }
+                try {
+                    $measured = Invoke-IsolatedCandidateProbe -Candidate $probeCandidate -ConnectivityOnly
+                    $latencyMs = [int]$measured.Connectivity.RttMs
+                    $latencyCandidates += [pscustomobject]@{ Candidate=$probeCandidate; RttMs=$latencyMs }
+                    Write-SafeLog -Event 'latency_probe_passed' -Values @{ candidate_index=($i+1); candidate_total=$latencyProbeTotal; region=[string]$probeCandidate.Region; rtt_ms=$latencyMs }
+                } catch {
+                    Write-SafeLog -Event 'isolated_latency_failed' -Values @{node_id=$probeCandidate.Id; candidate_index=($i+1); candidate_total=$latencyProbeTotal; region=[string]$probeCandidate.Region; error_type=$_.Exception.GetType().Name}
+                }
+            } else {
+                $unprobedCandidates += $probeCandidate
+            }
+        }
+        $orderedCandidates = @($latencyCandidates | Sort-Object @{Expression={if ($_.Candidate.Region -eq 'JP') {0} elseif ($_.Candidate.Region -eq 'US') {1} else {2}}}, RttMs | ForEach-Object { $_.Candidate }) + @($unprobedCandidates)
     }
-    $orderedCandidates = @($latencyCandidates | Sort-Object @{Expression={if ($_.Candidate.Region -eq 'JP') {0} elseif ($_.Candidate.Region -eq 'US') {1} else {2}}}, RttMs | ForEach-Object { $_.Candidate }) + @($unprobedCandidates)
     $orderIndex=0
     $orderedCandidates = @($orderedCandidates | ForEach-Object { [pscustomobject]@{Candidate=$_; Index=($orderIndex++); Rank=$(if ($_.Region -eq 'JP') {0} elseif ($_.Region -eq 'US') {1} else {2})} } | Sort-Object Rank,Index | ForEach-Object {$_.Candidate})
     $orderedCandidates = @(Get-AdmissionRoundOrder -Candidates $orderedCandidates)
@@ -3206,7 +3779,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.9.27-core'
+    version = '2.9.28-core'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId

@@ -1,3 +1,12 @@
+## v2.9.28 多核并发竞速探活 + 策略一热复用提速 + 云端五步状态卡合流（2026-11-12）
+
+- **20 路单实例多核并发竞速（`Invoke-ConcurrentNodePoolProbe`）**：在 1 个临时沙盒 `antigravity-mihomo` 进程上通过原生 `listeners:` 绑定最多 20 个独立本地端口，先热身并测 `Google 204` 真实毫秒 RTT，再并发探测 `generativelanguage`、`daily-cloudcode-pa`（CloudCode）、`oauth2` 与 Cloudflare 出口国家；凑够双区可用优选专线且最短竞速窗口满足后立即“竞速早退”，不可用时自动无缝回落到原有单条探针。
+- **策略一热复用提速 & 并发端点复检（`Invoke-ParallelEndpointProbes`）**：冷启动重用现有 `17897` 代理时，先用不到 1 秒并发校验 `ModelAPI + CloudCode + OAuth`：若模型端点已死立刻退回多核重选，不再傻等 `agy` 超时 40 秒；若 endpoints 存活则立即在 5 步卡片高亮复用并并行预启动编辑器与真实模型门禁，显著缩短体感等待。
+- **修复 `Test-RealModelGeneration` 误永久退役健康节点**：将 `model_timeout` 中断及账户 `429 RESOURCE_EXHAUSTED` 明确归入短暂冷却 `model_transport`（不再因超时边缘刷新了 `SUCCESS` 或账户限流而把可用节点永久写入 `retired_nodes`）；升级时自动对老版本遗留的 `model_non_ok` 历史误杀做一次安全“平反”（保留备份与地区误配隔离）。
+- **端口等待与测试响应双提速**：`Test-LocalPort` 本机回环探测收敛至 350ms，`Start-OrReuseMihomo` 从盲等 500ms 起步改为 60ms 紧凑轮询。
+- **合并云端 2026-11-11 五步真实状态契约 & 桌面界面丝滑微调**：保留「当前账号 → 本地专线 → Google 通路 → AI 模型验证 → 启动工作区」无伪进度条五步界面，热启动卡片去掉重复 2 次调用 `antigravity_runtime_identity.py`，启动胶囊采用 100ms 按需增量重绘、`ClearTypeGridFit` 清晰字体与当前行左侧激活高亮。
+- **本地契约与编译回归同步校准**：修复既有 `model-gate-cold-start.test.ps1` 适配 `Invoke-BoundedModelProcess`，新增 `pool-probe-and-failure-kind.test.ps1` 覆盖并发池函数、超时/429 分类与新事件 UI 解释。
+
 ## 维护规则变更 · 关闭云端 CI，改为本地构建（2026-11-11）
 
 - 根据用户要求，删除唯一的自动触发 GitHub Actions 工作流 `.github/workflows/ci.yml`，所有后续源码推送不再触发云端构建或相关 CI 成败通知。
@@ -6,7 +15,7 @@
 - 最后一次云端 CI 对提交 `546f278` 验证通过（包括 Windows 编译、可执行文件状态回归与安装包构建）。后续改动仅涉及 CI 停用与文档，未再进行云端构建。
 - 本地升级需要显式执行拉取、编译、测试和安装；`git pull` 仅更新源代码，不会自动替换现有 EXE。后续未经用户同意禁止重新开启自动云构建。
 
-## 未发布 · 启动器真实状态与五步界面更新（2026-11-11）
+## v2.9.28（前期云端合入归档）· 启动器真实状态与五步界面更新（2026-11-11）
 
 - 启动顺序改为「本地 Cockpit 账号门禁 → 专线发现与验证 → Google 通路 → agy 真实模型生成 → 工作区就绪」；先读取本地缓存额度，不误写成 Google 实时额度。
 - 独立记录候选预测速的第几条、Google 204 / 模型 API / OAuth 各端点请求与响应 HTTP 状态、请求耗时、正式模型生成耗时。候选发现不再被前台伪装成已开始 1/N 验证。

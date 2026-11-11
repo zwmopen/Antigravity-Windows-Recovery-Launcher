@@ -5,14 +5,15 @@
 </p>
 
 <p align="center">
-  <strong>专为 Google Antigravity 开发者打造的 Windows 智能底座</strong><br>
-  0 杀进程无感秒切号 · 安全须知弹窗全自动穿透 · 原生级深度全中文汉化 · 独立专线隔离 · 智能省额度调度
+  <strong>专为 Google Antigravity 开发者打造的 Windows 智能启动与自愈底座</strong><br>
+  20 路并发极速择优 · 策略一秒级复检并行拉起 · 0 杀进程无感秒切号 · 弹窗全自动穿透 · 原生级深度汉化 · 独立专线隔离
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/最新版本-v2.9.27-blue.svg" alt="版本 v2.9.27" />
+  <img src="https://img.shields.io/badge/最新版本-v2.9.28-blue.svg" alt="版本 v2.9.28" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/独立专线-127.0.0.1:17897-teal.svg" alt="独立专线" />
+  <img src="https://img.shields.io/badge/并发择优-20路单实例竞速-indigo.svg" alt="20路并发" />
   <img src="https://img.shields.io/badge/深度汉化-全界面%2B技能%2B用量浮窗-blueviolet.svg" alt="界面汉化" />
   <img src="https://img.shields.io/badge/切号体验-0杀进程%20·%20秒级无感-orange.svg" alt="切号体验" />
   <img src="https://img.shields.io/badge/开源协议-MIT-green.svg" alt="开源协议" />
@@ -20,7 +21,7 @@
 
 ---
 
-> **源码优先 / 本地构建（2026-11-11）**：`main` 已加入「账号优先 → 专线 → Google → agy → 工作区」五步实时启动状态卡，尚未提升 Release 版本号。仓库已停用全部自动云端 CI 构建，不再在推送代码后触发 GitHub Actions；请本地拉取、测试、编译和安装。详见 [启动状态契约与本机验收](docs/STARTUP-STATUS-DESIGN.md)。
+> **v2.9.28 极速并发 + 五步真实状态卡现已合流发布（2026-11-12）**：已整合云端「当前账号 → 本地专线 → Google 通路 → AI 模型验证 → 启动工作区」五步实时透明面板，并实装本地 **20 路单实例并发探活、CloudCode 轻端点先筛、策略一热复用并发复检、超时/429 误杀节点自动平反与热卡单次毫秒身份读取**。仓库遵守本地交付约定，已关闭云端自动 GitHub Actions 构建，全部编译与回归测试均在 Windows 本地完成验证。详见 [v2.9.28 发行说明](docs/RELEASE-NOTES-2.9.28.md) 与 [启动状态契约](docs/STARTUP-STATUS-DESIGN.md)。
 
 ## 💡 为什么需要它？你肯定遇到过这些抓狂瞬间
 
@@ -75,10 +76,10 @@
 
 ## 📸 界面形态一览
 
-| 桌面卡片（编辑器运行时：5秒自动进入 / 一键秒切） | 启动自检卡片（冷启动时：专线与账号四维自检） |
+| 桌面卡片（编辑器运行时：5秒自动进入 / 一键秒切） | 启动自检卡片（冷启动时：五步真实状态自检） |
 | :---: | :---: |
 | ![热启动胶囊](showcase/hot_launch_choice.png) | ![冷启动胶囊](showcase/cold_launch_capsule.png) |
-| *检测到编辑器运行时：显示当前账号与额度，5秒无操作自动进入，或点击切号* | *冷启动时呼出：专线沙盒 / Google链路 / 模型探针 / 算力账号四维透明检测* |
+| *检测到编辑器运行时：显示当前账号与额度，5秒无操作自动进入，或点击切号* | *冷启动时呼出：当前账号 → 本地专线 → Google 通路 → AI 模型验证 → 启动工作区 五步透明检测* |
 
 ---
 
@@ -86,13 +87,20 @@
 
 ### 选项 1：一键安装包（推荐，新手首选）
 1. 前往 [最新发行版页面 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest)；
-2. 下载 **`Antigravity-Windows-Recovery-Setup-2.9.27-windows-x64.exe`**；
+2. 下载 **`Antigravity-Windows-Recovery-Setup-2.9.28-windows-x64.exe`**；
 3. 双击运行，按照向导一路点击“下一步”，自动安装并生成桌面图标。
 
 ### 选项 2：绿色免安装便携版（解压即用）
 1. 前往 [最新发行版页面 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest)；
-2. 下载 **`Antigravity-Windows-Recovery-Launcher-2.9.27-windows-x64.zip`**；
+2. 下载 **`Antigravity-Windows-Recovery-Launcher-2.9.28-windows-x64.zip`**；
 3. 解压到任意目录（例如 `D:\Tools\Antigravity`），双击 `Antigravity-Recovery-Launcher.exe` 即可启动。
+
+### 选项 3：源码本地构建与覆盖安装（开发者）
+```powershell
+git pull --ff-only origin main
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
 
 > 💡 **跨电脑迁移超省心**：  
 > 只要新电脑上安装了 Clash Verge Rev 或 Mihomo Party 并且导入过订阅，解压本工具后双击就能直接使用，自动搜寻节点，完全不需要手动配置代理！
@@ -116,25 +124,31 @@
 
 ### Q2: 刚开软件弹出的那个“安全须知”弹窗，真的不用我点了吗？
 **真的不用点！**  
-最新 v2.9.27 版本实装了全自动穿透器。不管是冷启动还是切号后弹出的“安全须知与数据使用”或“服务条款”弹窗，启动器都会在后台毫秒级自动帮你勾选复选框并点击“确认并继续”，你只管专注写代码就行。
+启动器自 v2.9.27 起实装了全自动穿透器。不管是冷启动还是切号后弹出的“安全须知与数据使用”或“服务条款”弹窗，启动器都会在后台毫秒级自动帮你勾选复选框并点击“确认并继续”，你只管专注写代码就行。
 
-### Q3: 我用 Claude 模型额度用完了，为什么不会突然切号或黑屏？
+### Q3: 为什么之前有时候启动/自愈会卡半分钟以上？v2.9.28 快在哪？
+**三大“慢卡点”在 v2.9.28 已彻底拆掉：**
+1. 以前测速要串行反复起停代理进程，也不筛 `daily-cloudcode-pa` 模型服务端点；现在 **1 个临时 Mihomo 多端口同时起 20 路并发竞速**，几秒钟内直接筛出日本/美国最稳最低延迟专线；
+2. 以前暖启动复用 `17897` 如果遇到后端半死不活，要干等 `agy` 40 秒超时才换线；现在先做**毫秒级轻端点并发复检**，通了立刻复用并预拉起编辑器，不通立刻转多核换线；
+3. 以前 `agy` 超时边缘或账号遇到 `429` 限流会被误写成 `model_non_ok` 永久打入冷宫，v2.9.28 已修复并自动替历史误杀节点平反，健康节点池瞬间满血回归。
+
+### Q4: 我用 Claude 模型额度用完了，为什么不会突然切号或黑屏？
 **严格遵循用户铁律：Claude 额度不参与 5% 切号门禁！**  
 Claude 等模型属于单项高阶模型，而 Gemini 才是日常主力。只要你当前账号的 Gemini 核心额度充足（> 5% 且周额度 > 1%），就算 Claude 归零或遇到 429 限额，系统也坚决不切号、不关押账号、绝不热重启语言服务，彻底告别突发黑屏和会话被打断！你可以直接在模型菜单里切回 Gemini 极速继续工作。
 
-### Q3: 这个工具会影响我平时电脑上的微信、浏览器或打游戏吗？
+### Q5: 这个工具会影响我平时电脑上的微信、浏览器或打游戏吗？
 **完全不会。**  
 启动器给 Antigravity 分配的是专属的 `127.0.0.1:17897` 独立端口，不修改 Windows 系统的全局代理，也不动你平时用的 Clash（通常是 7897 端口）。你平时的日常上网、打游戏、看视频完全不受任何影响。
 
-### Q4: 我的 Clash 安装在 D 盘或者自定义文件夹，启动器能找到吗？
+### Q6: 我的 Clash 安装在 D 盘或者自定义文件夹，启动器能找到吗？
 **完全能找到。**  
 启动器需要的是你订阅里的可用节点数据，Windows 规范中这些缓存都在用户目录 `%APPDATA%` 下。启动器会自动识别，不管软件安装在 C 盘还是 D 盘，均可开箱即用。
 
-### Q5: 为什么要把“周额度快过期的账号”排在最前面用？
+### Q7: 为什么要把“周额度快过期的账号”排在最前面用？
 因为 Google Antigravity 的周额度到期是直接清零重置的，不会滚存累加。  
 如果一个账号还有 1 天就重置了，哪怕它只剩 30% 额度，也一定要优先把它用完；如果你放着它不用，反而去用还有 6 天才过期的满血账号，那 1 天后那个账号就白白浪费了 30% 的额度。启动器的调度算法会自动帮你做这道数学题，把算力价值最大化。
 
-### Q6: 如果我不想要了，如何彻底卸载？
+### Q8: 如果我不想要了，如何彻底卸载？
 - 安装包版：直接在 Windows“设置” -> “已安装的应用”里找到并点击卸载；
 - 绿色解压版：运行目录里的 `uninstall.ps1` 即可清理快捷方式与守护进程；
 - 卸载非常干净克制，绝不会删除你的项目源码文件或已有账号。
@@ -157,7 +171,8 @@ Claude 等模型属于单项高阶模型，而 Gemini 才是日常主力。只�
 
 ## 📚 延伸文档
 
-* 📋 [v2.9.27 正式版发布说明](docs/RELEASE-NOTES-2.9.27.md)
+* 🚀 [v2.9.28 极速并发 + 五步状态版发行说明](docs/RELEASE-NOTES-2.9.28.md)
+* 🧭 [五步启动状态契约与本机验收](docs/STARTUP-STATUS-DESIGN.md)
 * 📖 [完整版本演进历史](CHANGELOG.md)
 * 🛠️ [踩坑与排障参考](docs/TROUBLESHOOTING.md)
 

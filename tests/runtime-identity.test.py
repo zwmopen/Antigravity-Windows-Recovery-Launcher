@@ -26,7 +26,7 @@ class Process:
 class IdentityTests(unittest.TestCase):
     def read(self, processes, payloads):
         client = SimpleNamespace(open=lambda req, timeout: io.BytesIO(json.dumps(next(payloads)).encode()))
-        with patch.object(m, "psutil", SimpleNamespace(process_iter=lambda attrs: processes)), patch.object(m.urllib.request, "build_opener", return_value=client):
+        with patch.object(m, "STATUS_FILE", str(Path(__file__).parent / "__nonexistent_launch_account_status__.json")), patch.object(m, "psutil", SimpleNamespace(process_iter=lambda attrs: processes)), patch.object(m.urllib.request, "build_opener", return_value=client):
             return m.read_identity()
     def test_reads_live_service_not_cockpit(self):
         result=self.read([Process()], iter([{"userStatus":{"email":"live@example.com","accessToken":"never-output"}}]))
