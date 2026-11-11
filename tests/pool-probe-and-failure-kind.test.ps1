@@ -98,8 +98,13 @@ try {
     try {
         $hotType.GetMethod('StopTimer', $flags).Invoke($hotForm, @()) | Out-Null
         $subText = [string]$hotType.GetField('subtitleText', $flags).GetValue($hotForm)
+        $accText = [string]$hotType.GetField('accountText', $flags).GetValue($hotForm)
         $selText = [string]$hotType.GetField('selectedText', $flags).GetValue($hotForm)
         $remSec = [int]$hotType.GetField('remainingSeconds', $flags).GetValue($hotForm)
+        $isLoading = [bool]$hotType.GetField('isLoadingIdentity', $flags).GetValue($hotForm)
+        if (-not $isLoading) { throw 'hot_expected_initial_loading_spinner' }
+        if ($accText -ne '正在读取软件内账号…') { throw ('hot_loading_account_unexpected:' + $accText) }
+        if ($accText.Contains('当前在用')) { throw ('hot_loading_account_should_not_say_active:' + $accText) }
         if ($subText -notlike '*5 秒倒计时*') { throw ('hot_subtitle_missing_5s:' + $subText) }
         if ($selText -notlike '*状态评估*') { throw ('hot_selected_missing_eval:' + $selText) }
         if ($remSec -ne 5) { throw ('hot_countdown_not_5:' + $remSec) }

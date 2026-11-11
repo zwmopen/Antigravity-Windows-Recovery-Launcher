@@ -1,5 +1,5 @@
 ﻿#define MyAppName "Antigravity 智能启动器"
-#define MyAppVersion "2.9.29"
+#define MyAppVersion "2.9.30"
 #define MyAppPublisher "zwmopen"
 #define MyAppURL "https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher"
 #define MyAppExeName "Antigravity-Recovery-Launcher.exe"
@@ -32,7 +32,7 @@ CloseApplications=no
 RestartApplications=no
 LicenseFile=..\LICENSE
 InfoBeforeFile=..\docs\INSTALLER-README.txt
-VersionInfoVersion=2.9.29.0
+VersionInfoVersion=2.9.30.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Setup
 VersionInfoProductName={#MyAppName}

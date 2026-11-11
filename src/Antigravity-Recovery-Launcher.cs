@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.29.0")]
-[assembly: AssemblyFileVersion("2.9.29.0")]
-[assembly: AssemblyInformationalVersion("2.9.29")]
+[assembly: AssemblyVersion("2.9.30.0")]
+[assembly: AssemblyFileVersion("2.9.30.0")]
+[assembly: AssemblyInformationalVersion("2.9.30")]
 
 namespace AntigravityLauncher
 {
@@ -1043,7 +1043,7 @@ namespace AntigravityLauncher
         private Image appIcon = null;
         private string subtitleText = "网络与算力大盘监控 · 点击空白处可暂停 5 秒倒计时";
         private string networkText = "线路  正在同步当前节点…";
-        private string accountText = "当前在用  正在读取软件内账号…";
+        private string accountText = "正在读取软件内账号…";
         private string selectedText = "⏳ 状态评估  正在核验账号额度与运行状态…";
         private bool networkVerified;
         private bool accountMismatch;
@@ -1252,7 +1252,7 @@ namespace AntigravityLauncher
 
             accountMismatch = !string.IsNullOrEmpty(verifiedEmail) && !string.IsNullOrEmpty(selectedEmail) && !string.Equals(verifiedEmail, selectedEmail, StringComparison.OrdinalIgnoreCase);
             if (accountMismatch) needSwitch = true;
-            accountText = "当前在用  正在读取软件内账号…";
+            accountText = "正在读取软件内账号…";
             selectedText = (needSwitch || accountMismatch)
                 ? ("⚡ 状态评估  建议切号接力：" + (!string.IsNullOrEmpty(bestTargetEmail) ? bestTargetEmail : selectedEmail))
                 : "⏳ 状态评估  正在核验账号额度与运行状态…";
@@ -1496,6 +1496,10 @@ namespace AntigravityLauncher
                         accountText = "当前在用  " + liveEmail;
                         selectedText = "✅ 状态评估  已连接当前正在运行的编辑器账号";
                     } else {
+                        string fallbackEmail = !string.IsNullOrEmpty(verifiedEmail) ? verifiedEmail : selectedEmail;
+                        accountText = !string.IsNullOrEmpty(fallbackEmail)
+                            ? ("最近记录  " + fallbackEmail + "（编辑器窗口运行中）")
+                            : "当前编辑窗口运行中（暂未读取到实时账号）";
                         selectedText = "✅ 状态评估  当前编辑窗口运行中，可直接进入";
                     }
 
