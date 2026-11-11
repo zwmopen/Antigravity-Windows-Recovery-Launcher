@@ -560,7 +560,16 @@ function Invoke-AccountAdmissionGate {
         Stop-WithMessage -Event 'account_gate_status_invalid'
     }
     $script:AccountAdmissionPassed = $true
-    Write-SafeLog -Event 'preflight_account_check_completed' -Values @{ action=$status.action; exit_code=0; quota_source='account_cache' }
+    $planLabel = if ($null -ne $status.PSObject.Properties['plan']) { [string]$status.plan } else { 'UNKNOWN' }
+    Write-SafeLog -Event 'preflight_account_check_completed' -Values @{
+        action = [string]$status.action
+        exit_code = 0
+        quota_source = 'account_cache'
+        plan = $planLabel
+        gemini_5h = [math]::Round([double]$status.gemini_5h, 1)
+        gemini_weekly = [math]::Round([double]$status.gemini_weekly, 1)
+        duration_ms = [int]((Get-Date) - $started).TotalMilliseconds
+    }
 }
 
 function Test-LocalPort {
@@ -1961,6 +1970,7 @@ function Get-TextThroughProxy {
 }
 
 function Test-GoogleConnectivity {
+    Write-SafeLog -Event 'google_connectivity_started'
     $googleStatus = 0
     $apiStatus = 0
     $oauthStatus = 0
@@ -1968,18 +1978,28 @@ function Test-GoogleConnectivity {
     # Warmup: prime the proxy TLS connection pool to avoid cold-start timeout.
     $null = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204'
     for ($attempt = 1; $attempt -le $ConnectivityAttemptCount; $attempt++) {
+        Write-SafeLog -Event 'google_probe_started' -Values @{service='Google204'; attempt=$attempt}
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $googleStatus = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204'
         $sw.Stop()
         $probeRttMs = [int]$sw.ElapsedMilliseconds
+        Write-SafeLog -Event 'google_probe_completed' -Values @{service='Google204'; attempt=$attempt; status=$googleStatus; rtt_ms=$probeRttMs}
         if ($googleStatus -le 0) {
             if ($attempt -lt $ConnectivityAttemptCount) {
                 Start-Sleep -Milliseconds 600
             }
             continue
         }
+        Write-SafeLog -Event 'google_probe_started' -Values @{service='ModelAPI'; attempt=$attempt}
+        $apiWatch = [Diagnostics.Stopwatch]::StartNew()
         $apiStatus = Get-HttpStatusThroughProxy -Uri 'https://generativelanguage.googleapis.com/'
+        $apiWatch.Stop()
+        Write-SafeLog -Event 'google_probe_completed' -Values @{service='ModelAPI'; attempt=$attempt; status=$apiStatus; rtt_ms=[int]$apiWatch.ElapsedMilliseconds}
+        Write-SafeLog -Event 'google_probe_started' -Values @{service='OAuth'; attempt=$attempt}
+        $oauthWatch = [Diagnostics.Stopwatch]::StartNew()
         $oauthStatus = Get-HttpStatusThroughProxy -Uri 'https://oauth2.googleapis.com/'
+        $oauthWatch.Stop()
+        Write-SafeLog -Event 'google_probe_completed' -Values @{service='OAuth'; attempt=$attempt; status=$oauthStatus; rtt_ms=[int]$oauthWatch.ElapsedMilliseconds}
         if ($googleStatus -gt 0 -and $apiStatus -gt 0 -and $oauthStatus -gt 0) {
             break
         }
@@ -2800,6 +2820,11 @@ if ($null -ne $script:FixedUpstream) {
 }
 Repair-DesktopShortcut
 
+# Account-first cold start: choose the Cockpit identity before probing or promoting
+# a dedicated network path. The admission gate reads local quota snapshots and
+# does not need the temporary Mihomo probe to be active.
+Invoke-AccountAdmissionGate
+
 $selectedCandidate = $null
 $configState = $null
 $connectivity = $null
@@ -2950,11 +2975,15 @@ if (-not $fastStartupPassed) {
     for ($i = 0; $i -lt $orderedCandidates.Count; $i++) {
         $probeCandidate = $orderedCandidates[$i]
         if ($i -lt $maxLatencyProbes) {
+            $latencyProbeTotal = [Math]::Min($maxLatencyProbes, $orderedCandidates.Count)
+            Write-SafeLog -Event 'latency_probe_started' -Values @{ candidate_index=($i+1); candidate_total=$latencyProbeTotal; region=[string]$probeCandidate.Region }
             try {
                 $measured = Invoke-IsolatedCandidateProbe -Candidate $probeCandidate -ConnectivityOnly
-                $latencyCandidates += [pscustomobject]@{ Candidate=$probeCandidate; RttMs=[int]$measured.Connectivity.RttMs }
+                $latencyMs = [int]$measured.Connectivity.RttMs
+                $latencyCandidates += [pscustomobject]@{ Candidate=$probeCandidate; RttMs=$latencyMs }
+                Write-SafeLog -Event 'latency_probe_passed' -Values @{ candidate_index=($i+1); candidate_total=$latencyProbeTotal; region=[string]$probeCandidate.Region; rtt_ms=$latencyMs }
             } catch {
-                Write-SafeLog -Event 'isolated_latency_failed' -Values @{node_id=$probeCandidate.Id; error_type=$_.Exception.GetType().Name}
+                Write-SafeLog -Event 'isolated_latency_failed' -Values @{node_id=$probeCandidate.Id; candidate_index=($i+1); candidate_total=$latencyProbeTotal; region=[string]$probeCandidate.Region; error_type=$_.Exception.GetType().Name}
             }
         } else {
             $unprobedCandidates += $probeCandidate
@@ -2988,7 +3017,7 @@ if ($null -eq $selectedCandidate) {
         $sourceId = [string]$candidate.SourceId
         $script:AttemptedCandidateIds[[string]$candidate.Id] = $true
         try {
-            Write-SafeLog -Event 'candidate_preflight_started' -Values @{ node_id = [string]$candidate.Id; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
+            Write-SafeLog -Event 'candidate_preflight_started' -Values @{ node_id = [string]$candidate.Id; candidate_index = $candidateIndex; candidate_total = $candidateTotal; region = [string]$candidate.Region; recovery = $RecoveryReason }
             $verified = Invoke-IsolatedCandidateProbe -Candidate $candidate -SkipModelGeneration
             $candidateConnectivity = $verified.Connectivity
             $candidateCountry = $verified.Country
@@ -3032,7 +3061,7 @@ if ($null -eq $selectedCandidate) {
             $egressCountry = $candidateCountry
             $script:AttemptedCandidateFailureKinds[[string]$candidate.Id] = 'passed'
             Mark-NodeSuccess -State $failoverState -Candidate $candidate
-            Write-SafeLog -Event 'candidate_preflight_passed' -Values @{ node_id = [string]$candidate.Id; source_id = [string]$candidate.SourceId; candidate_index = $candidateIndex; candidate_total = $candidateTotal; recovery = $RecoveryReason }
+            Write-SafeLog -Event 'candidate_preflight_passed' -Values @{ node_id = [string]$candidate.Id; source_id = [string]$candidate.SourceId; candidate_index = $candidateIndex; candidate_total = $candidateTotal; region = [string]$candidate.Region; rtt_ms = [int]$script:LastProbeRttMs; recovery = $RecoveryReason }
             break
         } catch {
             if ($null -ne $selectedCandidate) { break }
