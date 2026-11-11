@@ -1,3 +1,11 @@
+## 维护规则变更 · 关闭云端 CI，改为本地构建（2026-11-11）
+
+- 根据用户要求，删除唯一的自动触发 GitHub Actions 工作流 `.github/workflows/ci.yml`，所有后续源码推送不再触发云端构建或相关 CI 成败通知。
+- 将原工作流归档于 `docs/archive/ci.workflow.disabled.yml.txt`，不再具有 GitHub Actions 执行资格。保留 `build.ps1`、`install.ps1` 与测试脚本供本地 Codex 使用。
+- 经核查，仓库为公开仓库，原 CI 使用标准 `windows-latest` runner；当日多次失败属于旧提交的 Windows PowerShell 测试脚本编码问题，非「云端额度耗尽」证据。
+- 最后一次云端 CI 对提交 `546f278` 验证通过（包括 Windows 编译、可执行文件状态回归与安装包构建）。后续改动仅涉及 CI 停用与文档，未再进行云端构建。
+- 本地升级需要显式执行拉取、编译、测试和安装；`git pull` 仅更新源代码，不会自动替换现有 EXE。后续未经用户同意禁止重新开启自动云构建。
+
 ## 未发布 · 启动器真实状态与五步界面更新（2026-11-11）
 
 - 启动顺序改为「本地 Cockpit 账号门禁 → 专线发现与验证 → Google 通路 → agy 真实模型生成 → 工作区就绪」；先读取本地缓存额度，不误写成 Google 实时额度。
