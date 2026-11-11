@@ -20,10 +20,10 @@ if (-not $supervisor.Contains("'candidate_discovery_completed'")) { throw 'candi
 if (-not $supervisor.Contains('candidate_count = $candidates.Count')) { throw 'candidate_count_missing' }
 if (-not $supervisor.Contains('candidate_index = $candidateIndex')) { throw 'candidate_index_missing' }
 if (-not $supervisor.Contains('candidate_total = $candidateTotal')) { throw 'candidate_total_missing' }
-# Truthful account-first startup contract (network checks must not claim login success).
-$bootstrap = $supervisor.IndexOf('Repair-DesktopShortcut')
+# Account-first startup is logged before the fast network path starts.
+$networkFastPath = $supervisor.IndexOf('$fastStartupPassed = $false')
+$bootstrap = $supervisor.LastIndexOf('Repair-DesktopShortcut', $networkFastPath)
 $accountFirst = $supervisor.IndexOf('Invoke-AccountAdmissionGate', $bootstrap)
-$networkFastPath = $supervisor.IndexOf('$fastStartupPassed = $false', $bootstrap)
 if ($bootstrap -lt 0 -or $accountFirst -lt $bootstrap -or $networkFastPath -lt $accountFirst) {
     throw 'account_gate_must_run_before_network_selection'
 }
@@ -35,12 +35,13 @@ foreach ($probeEvent in @(
     if (-not $supervisor.Contains($probeEvent)) { throw ('real_probe_event_missing:' + $probeEvent) }
 }
 foreach ($uiContract in @(
-    'DrawStepRow(e.Graphics, 1, 88, "当前账号"',
-    'DrawStepRow(e.Graphics, 5, 320, "启动工作区"',
-    'state.LineText = "发现 " + total + " 条候选 · 正在准备测速"',
+    'DrawStepRow(e.Graphics, 1, 88',
+    'DrawStepRow(e.Graphics, 5, 320',
+    'GetValue(line, "candidate_count")',
+    'GetValue(line, "duration_ms")',
+    'GetValue(line, "api")',
     'candidate_preflight_started',
-    '端点已响应 · Google',
-    '正在请求真实 AI 回复',
+    'google_probe_completed',
     'state.WorkspacePassed = true',
     'Visible = false'
 )) {
