@@ -4479,6 +4479,7 @@ def preflight_ensure_valid_account(threshold=5.0):
         status_info = {
             "email": curr_email,
             "name": curr_acc.get("name", "") if curr_acc else "",
+            "plan": "PRO" if curr_acc and curr_acc.get("is_pro") else "FREE",
             "gemini_5h": curr_5h,
             "gemini_weekly": curr_weekly,
             "days_to_w_reset": curr_acc.get("days_to_w_reset", 0.0) if curr_acc else 0.0,
@@ -4517,6 +4518,7 @@ def preflight_ensure_valid_account(threshold=5.0):
     status_info = {
         "email": best_acc["email"],
         "name": best_acc.get("name", ""),
+        "plan": "PRO" if best_acc.get("is_pro") else "FREE",
         "gemini_5h": best_acc["gemini_5h"],
         "gemini_weekly": best_acc["gemini_weekly"],
         "days_to_w_reset": best_acc.get("days_to_w_reset", 0.0),
