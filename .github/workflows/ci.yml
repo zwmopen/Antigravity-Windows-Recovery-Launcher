@@ -59,6 +59,9 @@ jobs:
       - name: Build Windows binaries
         shell: powershell
         run: .\build.ps1
+      - name: Compiled launch status regression
+        shell: powershell
+        run: .\tests\capsule-progress.test.ps1
       # 产物必须在"有可能失败"的安装包构建之前落盘：
       # 此前 CI 跑完二进制即被丢弃，本地永远拿不到新 exe。
       - name: Upload launcher binaries
