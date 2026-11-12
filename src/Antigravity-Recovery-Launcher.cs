@@ -69,6 +69,12 @@ namespace AntigravityLauncher
         private static int Main(string[] args)
         {
             EnsureInteractiveDesktop();
+            // Electron apps (Antigravity.exe) switch to plain Node mode when
+            // ELECTRON_RUN_AS_NODE is set, rejecting --proxy-server with
+            // "bad option" and exiting at once. The variable may be inherited
+            // from any upstream process, so strip it before spawning children.
+            try { Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", null); }
+            catch { }
             TraceLog("Main invoked: " + (args != null ? string.Join(" ", args) : "null"));
             bool backgroundMode = HasArgument(args, "--background");
             bool forceLaunch = HasArgument(args, "--force-launch");

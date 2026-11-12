@@ -15,6 +15,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Electron apps (including Antigravity.exe) switch to plain Node mode when
+# ELECTRON_RUN_AS_NODE is set. In that mode the IDE rejects Chromium switches
+# such as --proxy-server with "bad option" and exits immediately, which made
+# every launch look like a crash. The variable can be inherited from any
+# upstream process, so strip it before we spawn the IDE.
+if (Test-Path Env:ELECTRON_RUN_AS_NODE) {
+    Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+}
+
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RuntimeRoot = Join-Path $env:LOCALAPPDATA 'Antigravity'
 $LocalizationExtensionPath = Join-Path $ScriptRoot 'localization-extension'
