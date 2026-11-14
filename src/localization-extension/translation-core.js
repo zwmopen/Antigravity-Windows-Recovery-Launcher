@@ -1,7 +1,7 @@
 ﻿(function (root) {
   'use strict';
 
-  var VERSION = '0.4.8';
+  var VERSION = '0.4.9';
 
   // Full phrases are deliberately separate from exact UI labels. This
   // prevents words such as Settings, On, Model, and Rules from leaking
@@ -13,6 +13,17 @@
     ['Good response', '好评'],
     ['Bad response', '差评'],
 
+    ['Interface Layout', '界面布局'],
+    ['Knowledge Work', '知识工作'],
+    ['Software Engineering', '软件工程'],
+    ['Simplified interface for research, writing, and everyday tasks.', '面向研究、写作与日常任务的简化界面。'],
+    ['Full interface for coding, developer tools, and managing agents.', '面向编程、开发者工具与智能体管理的完整界面。'],
+    ['Choose how technical the interface should be.', '选择界面的专业程度。'],
+    ['Chat Layout', '对话布局'],
+    ['Fit to content', '适应内容'],
+    ['Fit to width', '适应宽度'],
+    ['Browser Subagent', '浏览器子智能体'],
+    ['Model Quota', '模型配额'],
     ['Agent said', '智能体回复'],
     ['You said', '您说'],
     ['Agent working', '智能体工作中'],
@@ -2014,6 +2025,70 @@
 ]);
 
   var UI_PAIRS = Object.freeze([
+    // === Antigravity v2.30 - v2.32 Interface Layout & General Settings ===
+    ["Interface Layout", "界面布局"],
+    ["Knowledge Work", "知识工作"],
+    ["Simplified interface for research, writing, and everyday tasks.", "面向研究、写作与日常任务的简化界面。"],
+    ["Software Engineering", "软件工程"],
+    ["Full interface for coding, developer tools, and managing agents.", "面向编程、开发者工具与智能体管理的完整界面。"],
+    ["Choose how technical the interface should be.", "选择界面的专业程度。"],
+    ["Simplified interface without developer tooling.", "不含开发者工具的精简界面。"],
+    ["Research, writing, and everyday tasks, without code.", "面向研究、写作与日常事务，无需编写代码。"],
+
+    // === Chat Layout & Display Options ===
+    ["Chat Layout", "对话布局"],
+    ["Fit to content", "适应内容"],
+    ["Fit to width", "适应宽度"],
+    ["Layout Controls", "布局控制"],
+    ["LAYOUT CONTROLS", "布局控制"],
+    ["Layout controls", "布局控制"],
+    ["No Layout", "无布局"],
+    ["Apply layout results", "应用布局结果"],
+    ["Try box layout first", "优先尝试盒式布局"],
+    ["Layout Position Preview", "布局位置预览"],
+
+    // === Browser Subagent & Settings ===
+    ["Browser Subagent", "浏览器子智能体"],
+    ["Browser Subagent Viewer", "浏览器子智能体查看器"],
+    ["Invoked browser subagent", "已调用浏览器子智能体"],
+    ["Configure built-in browser, link opening, and browser subagent preferences.", "配置内置浏览器、链接打开方式以及浏览器子智能体偏好。"],
+    ["Configure the browser subagent. It requires Google Chrome to be installed.", "配置浏览器子智能体。此功能要求本地已安装 Google Chrome 浏览器。"],
+    ["Configure allowed and denied URLs for the browser subagent (invoked with /browser). Requires Google Chrome.", "配置浏览器子智能体（通过 /browser 调用）允许和拒绝访问的 URL。需要 Google Chrome。"],
+    ["The browser subagent can be invoked by typing /browser in the conversation input box.", "可以在对话输入框中输入 /browser 调用浏览器子智能体。"],
+    ["The browser subagent has been disabled by your administrator. Contact your administrator to enable browser use.", "浏览器子智能体已被您的管理员停用。请联系管理员以启用浏览器功能。"],
+
+    // === Project Management & Voice ===
+    ["Manage project folders and settings.", "管理项目文件夹与设置。"],
+    ["Choose Antigravity's Voice", "选择 Antigravity 的声音"],
+    ["Concierge voice mode is active", "Concierge 语音模式已激活"],
+    ["Concierge voice mode stopped", "Concierge 语音模式已停止"],
+
+    // === Screen Reader & Accessibility ===
+    ["Screen Reader Mode", "屏幕阅读器模式"],
+    ["Screen Reader Optimized", "已为屏幕阅读器优化"],
+    ["Screen Reader Optimized Mode enabled.", "已启用屏幕阅读器优化模式。"],
+    ["Screen Reader Optimized Mode disabled.", "已禁用屏幕阅读器优化模式。"],
+    ["Optimize the interface and terminal output for screen readers.", "为屏幕阅读器优化界面和终端输出。"],
+    ["Toggle Screen Reader Accessibility Mode", "切换屏幕阅读器辅助功能模式"],
+
+    // === Model Quota & AI Credits ===
+    ["Model Quota", "模型配额"],
+    ["MODEL QUOTA", "模型配额"],
+    ["Model Quota Remaining", "模型剩余配额"],
+    ["Model quota reached", "模型配额已用尽"],
+    ["Baseline model quota reached", "已达到基础模型配额上限"],
+    ["Manage your model quota and credits", "管理您的模型配额与额度"],
+    ["Manage your model quota and credits.", "管理您的模型配额与额度。"],
+    ["Manage your model quota, plan, and credits.", "管理您的模型配额、套餐方案与额度。"],
+    ["When toggled on, Antigravity will use your AI credits to fulfill model requests once you're out of model quota.", "开启后，当模型配额用尽时，Antigravity 将使用您的 AI 点数继续响应请求。"],
+    ["Antigravity will always use your model quota first before using AI credits.", "Antigravity 始终会优先消耗模型配额，然后再使用 AI 点数。"],
+    ["View your available model quota. Quota refreshes periodically based on your plan.", "查看您可用的模型配额。配额将根据您的方案定期刷新。"],
+
+    // === Remote Development & SSH ===
+    ["Remote SSH", "远程 SSH"],
+    ["Connect to Host", "连接至主机"],
+    ["Open SSH Configuration File", "打开 SSH 配置文件"],
+
     // Independently translated from the current application UI.
     ["Give Feedback", "提供反馈"],
     ["Permission Settings", "权限设置"],
