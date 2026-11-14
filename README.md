@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/最新版本-v2.9.30-blue.svg" alt="版本 v2.9.30" />
+  <img src="https://img.shields.io/badge/最新版本-v2.9.31-blue.svg" alt="版本 v2.9.31" />
   <img src="https://img.shields.io/badge/平台-Windows%2010%20%2F%2011%20(64位)-brightgreen.svg" alt="平台" />
   <img src="https://img.shields.io/badge/独立专线-127.0.0.1:17897-teal.svg" alt="独立专线" />
   <img src="https://img.shields.io/badge/并发择优-20路单实例竞速-indigo.svg" alt="20路并发" />
@@ -21,7 +21,7 @@
 
 ---
 
-> **v2.9.30 开屏校准 + 极速并发版现已发布（2026-11-12）**：在 v2.9.28 ~ v2.9.29 **20 路单实例并发探活、策略一热复用并发复检、超时/429 防误杀平反、旋转加载圆环、顶部极简瘦身、150%/200% 高分屏设置面板重排、足额 5 秒倒计时、直觉中文格式（`Pro · 5 小时 · 周`）及 Clash 真实节点名称毫秒直显**基础上，校准热启动卡开屏转圈期间文案（还原原版 **`正在读取软件内账号…`**，不再误标“当前在用”）。仓库遵守本地交付约定，全部编译与回归测试均在 Windows 本地完成。详见 [v2.9.30 发行说明](docs/RELEASE-NOTES-2.9.30.md) 与 [启动状态契约](docs/STARTUP-STATUS-DESIGN.md)。
+> **v2.9.31 智能优选加权闭环 + 冷启动秒开版现已发布（2026-11-14）**：在前期 20 路并发探活、五步真实状态卡、高分屏排版基础上，全面落实**智能优选稳定性加权闭环（历史验证稳线永远打头阵，成功次数多优先，稳定性一致按延迟速度加权）**、**冷启动极速直通（2~3 秒秒开，告别大池盲测）**、**受限机房 IP 12 小时强隔离**、**取消激进预启动（高分稳线前置预热，未验证线等模型通过再点亮编辑器）**、**卡片绿勾优雅停留 1 秒**、**热启动文案解耦防误杀** 以及 **Antigravity 2.32 界面与核心会话深度汉化（v0.4.8）**。仓库遵守本地交付约定，全部编译与回归测试均在 Windows 本地完成。详见 [v2.9.31 发行说明](docs/RELEASE-NOTES-2.9.31.md) 与 [启动状态契约](docs/STARTUP-STATUS-DESIGN.md)。
 
 ## 💡 为什么需要它？你肯定遇到过这些抓狂瞬间
 
@@ -87,12 +87,12 @@
 
 ### 选项 1：一键安装包（推荐，新手首选）
 1. 前往 [最新发行版页面 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest)；
-2. 下载 **`Antigravity-Windows-Recovery-Setup-2.9.30-windows-x64.exe`**；
+2. 下载 **`Antigravity-Windows-Recovery-Setup-2.9.31-windows-x64.exe`**；
 3. 双击运行，按照向导一路点击“下一步”，自动安装并生成桌面图标。
 
 ### 选项 2：绿色免安装便携版（解压即用）
 1. 前往 [最新发行版页面 (Releases)](https://github.com/zwmopen/Antigravity-Windows-Recovery-Launcher/releases/latest)；
-2. 下载 **`Antigravity-Windows-Recovery-Launcher-2.9.30-windows-x64.zip`**；
+2. 下载 **`Antigravity-Windows-Recovery-Launcher-2.9.31-windows-x64.zip`**；
 3. 解压到任意目录（例如 `D:\Tools\Antigravity`），双击 `Antigravity-Recovery-Launcher.exe` 即可启动。
 
 ### 选项 3：源码本地构建与覆盖安装（开发者）
@@ -171,6 +171,7 @@ Claude 等模型属于单项高阶模型，而 Gemini 才是日常主力。只�
 
 ## 📚 延伸文档
 
+* 🚀 [v2.9.31 智能优选加权闭环 + 冷启动秒开发行说明](docs/RELEASE-NOTES-2.9.31.md)
 * 🚀 [v2.9.30 开屏校准 + 极速并发发行说明](docs/RELEASE-NOTES-2.9.30.md)
 * 🧭 [五步启动状态契约与本机验收](docs/STARTUP-STATUS-DESIGN.md)
 * 📖 [完整版本演进历史](CHANGELOG.md)

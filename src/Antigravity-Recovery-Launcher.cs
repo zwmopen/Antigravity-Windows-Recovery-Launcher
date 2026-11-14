@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.30.0")]
-[assembly: AssemblyFileVersion("2.9.30.0")]
-[assembly: AssemblyInformationalVersion("2.9.30")]
+[assembly: AssemblyVersion("2.9.31.0")]
+[assembly: AssemblyFileVersion("2.9.31.0")]
+[assembly: AssemblyInformationalVersion("2.9.31")]
 
 namespace AntigravityLauncher
 {
