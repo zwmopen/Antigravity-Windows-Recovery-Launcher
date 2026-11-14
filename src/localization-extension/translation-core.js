@@ -1,12 +1,47 @@
 ﻿(function (root) {
   'use strict';
 
-  var VERSION = '0.4.7';
+  var VERSION = '0.4.8';
 
   // Full phrases are deliberately separate from exact UI labels. This
   // prevents words such as Settings, On, Model, and Rules from leaking
   // into ordinary descriptions, skill text, or user-authored titles.
   var PHRASE_PAIRS = Object.freeze([
+    ['Error ID:', '错误代码：'],
+    ['Error ID', '错误代码'],
+    ['Copy', '复制'],
+    ['Good response', '好评'],
+    ['Bad response', '差评'],
+
+    ['Agent said', '智能体回复'],
+    ['You said', '您说'],
+    ['Agent working', '智能体工作中'],
+    ['Pinned Actions', '置顶操作'],
+    ['Conversation turns', '对话轮次'],
+    ['Undo to this point', '回退至此'],
+    ['Expand message', '展开消息'],
+    ['Collapse message', '折叠消息'],
+    ['At mention code block', '@引用代码块'],
+    ['Queued messages', '已排队消息'],
+    ['Start Voice mode', '开启语音模式'],
+    ['Search Conversations', '搜索历史对话'],
+    ['Agent execution terminated due to error.', '智能体执行由于错误已终止。'],
+    ['A new update is ready to install', '新更新已就绪，可安装'],
+    ['Passkeys', '通行密钥 (Passkeys)'],
+    ['Choose a Passkey', '选择通行密钥'],
+    ['Passkey QR code', '通行密钥二维码'],
+    ['Connect a device', '连接设备'],
+    ['Select Download Folder', '选择下载文件夹'],
+    ['WSL distro not found', '未找到 WSL 分发版'],
+    ['Connect to WSL', '连接到 WSL'],
+    ['Reopen Locally', '在本地重新打开'],
+    ['Choose an SSH config file', '选择 SSH 配置文件'],
+    ['SSH connection failed', 'SSH 连接失败'],
+    ['Stop SSH server', '停止 SSH 服务器'],
+    ['Connection info', '连接信息'],
+    ['Open workspace', '打开工作区'],
+    ['Open workspaces', '打开工作区'],
+
     ["Ask a quick question without interrupting the main conversation.", "提出一个简短问题，不中断当前主对话。"],
     ["Run until the specified goal is completely finished.", "持续执行，直到指定目标全部完成。"],
     ["Compact the conversation now (summarize history to free up the context window).", "立即压缩对话（总结历史，释放上下文空间）。"],
@@ -6000,6 +6035,14 @@
   }
 
   var DYNAMIC_PATTERNS = Object.freeze([
+    { pattern: /^(\d+)\s*([smhd])\s*ago$/i, replace: function (_m, n, unit) {
+        return n + ' ' + ({ s: '秒', m: '分钟', h: '小时', d: '天' }[unit.toLowerCase()] || unit) + '前';
+      } },
+    { pattern: /^Turn (\d+) of (\d+)$/i, replace: function (_m, cur, total) { return '第 ' + cur + ' / ' + total + ' 轮'; } },
+    { pattern: /^Agent permissions preset selector, current:\s*(.+)$/i, replace: function (_m, preset) { return '智能体权限预设选择器，当前：' + preset; } },
+    { pattern: /^Running (.+)$/i, replace: function (_m, task) { return '正在运行 ' + task; } },
+    { pattern: /^Error ID:\s*([a-f0-9\-]+)$/i, replace: function (_m, id) { return '错误代码：' + id; } },
+    { pattern: /^加载更早消息,\s*showing\s*(\d+)\s*of\s*(\d+)$/i, replace: function (_m, shown, total) { return '加载更早消息，显示 ' + shown + ' / ' + total; } },
     { pattern: /^(\d+(?:\.\d+)?%?)\s+left$/i, replace: function (_m, n) { return '剩余 ' + n; } },
     { pattern: /^(\d+)\s*(?:h|hour|hours?)\s+limit$/i, replace: function (_m, n) { return n + ' 小时额度'; } },
     { pattern: /^(\d+)\s*(?:d|day|days?)\s+limit$/i, replace: function (_m, n) { return n + ' 天额度'; } },

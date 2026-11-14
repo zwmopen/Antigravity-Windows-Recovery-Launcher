@@ -145,12 +145,6 @@ namespace AntigravityLauncher
                 if (choiceForm.Action == HotLaunchAction.Activate)
                 {
                     TraceLog("Hot launch: activating existing main window...");
-                    string targetToSwitch = !string.IsNullOrEmpty(choiceForm.BestTargetEmail) ? choiceForm.BestTargetEmail : choiceForm.SelectedEmail;
-                    if ((choiceForm.AccountMismatch || choiceForm.NeedSwitch) && !string.IsNullOrEmpty(targetToSwitch))
-                    {
-                        TraceLog("Hot launch: account switch required (mismatch=" + choiceForm.AccountMismatch + ", needSwitch=" + choiceForm.NeedSwitch + "); triggering smart switch to " + targetToSwitch);
-                        TriggerSmartSwitch(targetToSwitch);
-                    }
                     bool activated = ActivateExistingAntigravity();
                     TraceLog("Activate result: " + activated);
                     if (activated) return 0;
@@ -1308,10 +1302,9 @@ namespace AntigravityLauncher
                 }
             };
 
-            btnActivate = new HotLaunchButton((needSwitch || accountMismatch) ? "优选切号并进入 (5s)" : "进入反重力 (5s)")
+            btnActivate = new HotLaunchButton("进入反重力 (5s)")
             {
                 IsPrimary = true,
-                IsWarning = (needSwitch || accountMismatch),
                 Location = new Point(20, 194),
                 Size = new Size(252, 46)
             };
@@ -1343,7 +1336,7 @@ namespace AntigravityLauncher
             MouseDown += delegate(object s, MouseEventArgs me)
             {
                 StopTimer();
-                btnActivate.ButtonText = (needSwitch || accountMismatch) ? "优选切号并进入" : "进入反重力";
+                btnActivate.ButtonText = "进入反重力";
                 if (me.Button == MouseButtons.Left)
                 {
                     Program.ReleaseCapture();
@@ -2000,11 +1993,11 @@ namespace AntigravityLauncher
                 workspaceStatusText = "编辑器与语言服务已就绪";
                 workspacePassed = true;
                 activeStep = 5;
-                footerStatusText = "工作环境已就绪，正在进入 Antigravity…";
+                footerStatusText = "✔ 全部检测通过 · 工作环境已就绪";
                 progressBar.ProgressValue = 100;
                 Invalidate();
             }));
-            Thread.Sleep(380);
+            Thread.Sleep(1000);
             Invoke(new Action(delegate
             {
                 ExitCode = 0;

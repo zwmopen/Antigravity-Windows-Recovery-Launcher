@@ -877,13 +877,14 @@ function Add-NodeCooldown {
         return
     }
     $entries = @(Get-ActiveCooldownEntries -State $State | Where-Object { [string]$_.node_id -ne $NodeId })
+    $cooldownMinutes = if ($Reason -eq 'model_location') { 720 } else { $CandidateCooldownMinutes }
     $entries += [pscustomobject]@{
         node_id = $NodeId
-        until = (Get-Date).AddMinutes($CandidateCooldownMinutes).ToString('o')
+        until = (Get-Date).AddMinutes($cooldownMinutes).ToString('o')
         reason = $Reason
     }
     $State.failed_nodes = @($entries)
-    Write-SafeLog -Event 'candidate_quarantined' -Values @{ node_id = $NodeId; reason = $Reason; minutes = $CandidateCooldownMinutes }
+    Write-SafeLog -Event 'candidate_quarantined' -Values @{ node_id = $NodeId; reason = $Reason; minutes = $cooldownMinutes }
 }
 
 function Add-NodeRetirement {
@@ -983,6 +984,12 @@ function Get-OrderedCandidates {
     foreach ($entry in @(Get-SuccessfulNodeEntries -State $State)) {
         $historyById[[string]$entry.node_id] = $entry
     }
+    $failedById = @{}
+    if ($null -ne $State -and $State.PSObject.Properties['failed_nodes']) {
+        foreach ($f in @($State.failed_nodes)) {
+            $failedById[[string]$f.node_id] = $f
+        }
+    }
 
     $decorated = @()
     $discoveryIndex = 0
@@ -1015,22 +1022,32 @@ function Get-OrderedCandidates {
         $smartScore = 0
         if ($isVerified) { $smartScore += 500 }
         if ($isActive) { $smartScore += 200 }
-        # Valid supported regions (JP / US) receive equal baseline, allowing RTT speed to decide:
-        $smartScore += 120
-        $smartScore += [Math]::Min(150, ($successCount * 25))
+        # Valid supported regions (JP / US) receive equal baseline:
+        $smartScore += 100
+        # Success count weighting: every success adds 25 points, capped at 250 (up to 10+ successes):
+        $smartScore += [Math]::Min(250, ($successCount * 25))
         if ($lastPassedTicks -gt 0) {
             try {
                 $passedDt = [datetime]([int64]$lastPassedTicks)
                 $ageHours = ((Get-Date).ToUniversalTime() - $passedDt.ToUniversalTime()).TotalHours
-                if ($ageHours -le 24) { $smartScore += 100 }
-                elseif ($ageHours -le 168) { $smartScore += 50 }
+                if ($ageHours -le 24) { $smartScore += 120 }
+                elseif ($ageHours -le 168) { $smartScore += 60 }
             } catch { }
         }
+        # Latency weighting (速度加权：当稳定性一致时，按实测网络与模型延迟加权):
         if ($null -ne $history -and $history.PSObject.Properties['last_rtt_ms']) {
             $histRtt = [int]$history.last_rtt_ms
-            if ($histRtt -gt 0 -and $histRtt -le 150) { $smartScore += 100 }
-            elseif ($histRtt -gt 150 -and $histRtt -le 350) { $smartScore += 50 }
-            elseif ($histRtt -gt 1500) { $smartScore -= 50 }
+            if ($histRtt -gt 0 -and $histRtt -le 100) { $smartScore += 120 }
+            elseif ($histRtt -gt 100 -and $histRtt -le 200) { $smartScore += 80 }
+            elseif ($histRtt -gt 200 -and $histRtt -le 350) { $smartScore += 40 }
+            elseif ($histRtt -gt 1000) { $smartScore -= 50 }
+            elseif ($histRtt -gt 2000) { $smartScore -= 100 }
+        }
+        if ($null -ne $failedById -and $failedById.ContainsKey($nodeId)) {
+            $failReason = [string]$failedById[$nodeId].reason
+            if ($failReason -match 'location') {
+                $smartScore -= 500
+            }
         }
         $smartScore = [Math]::Max(0, [Math]::Min(1000, $smartScore))
         if ($null -eq $candidate.PSObject.Properties['SmartScore']) {
@@ -2837,7 +2854,14 @@ function Get-AntigravityMainProcess {
 }
 
 function Start-AntigravityBeforeModelGate {
+    param([object]$Candidate)
     if (-not $PrelaunchClient) { return 0 }
+    if ($null -ne $Candidate -and $Candidate.PSObject.Properties['SmartScore']) {
+        if ([int]$Candidate.SmartScore -lt 700) {
+            Write-SafeLog -Event 'prelaunch_skipped_untrusted_candidate' -Values @{ node_id = $Candidate.Id; smart_score = $Candidate.SmartScore }
+            return 0
+        }
+    }
 
     $existing = @(Get-AntigravityMainProcess)
     if ($existing.Count -gt 0) {
@@ -3357,9 +3381,16 @@ $lastSavedState = $null
 $fastStartupPassed = $false
 if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and (Test-Path -LiteralPath $StatePath)) {
     try {
-        if (Test-LocalPort -TestPort $Port -TimeoutMs 250) {
-            $lastSavedState = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ([string]$lastSavedState.status -eq 'ready' -and -not [string]::IsNullOrWhiteSpace([string]$lastSavedState.active_node_id)) {
+        $lastSavedState = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$lastSavedState.status -eq 'ready' -and -not [string]::IsNullOrWhiteSpace([string]$lastSavedState.active_node_id)) {
+            $portListening = Test-LocalPort -TestPort $Port -TimeoutMs 250
+            if (-not $portListening) {
+                # Fast-path cold revival: start Mihomo with existing verified active config
+                $configHash = Get-FileSha256 -LiteralPath $ConfigPath
+                Start-OrReuseMihomo -ExpectedConfigHash $configHash
+                $portListening = Test-LocalPort -TestPort $Port -TimeoutMs 2000
+            }
+            if ($portListening) {
                 $warmWatch = [Diagnostics.Stopwatch]::StartNew()
                 $status204 = Get-HttpStatusThroughProxy -Uri 'https://www.google.com/generate_204' -TimeoutMs 2800
                 $warmWatch.Stop()
@@ -3370,7 +3401,7 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
                 if ($status204 -eq 204) {
                     $ownedWarm = Get-OwnedMihomoProcess
                     $warmPid = if ($null -ne $ownedWarm) { [int]$ownedWarm.ProcessId } elseif ($null -ne $lastSavedState.mihomo_pid) { [int]$lastSavedState.mihomo_pid } else { 0 }
-                    Write-SafeLog -Event 'proxy_reused' -Values @{ pid = $warmPid; port = $Port; mode = 'warm_fast_path' }
+                    Write-SafeLog -Event 'proxy_reused' -Values @{ pid = $warmPid; port = $Port; mode = 'fast_startup' }
                     Write-SafeLog -Event 'google_connectivity_started'
                     Write-SafeLog -Event 'google_probe_started' -Values @{ service = 'Google204'; attempt = 1 }
                     Write-SafeLog -Event 'google_probe_completed' -Values @{ service = 'Google204'; attempt = 1; status = 204; rtt_ms = $warmGoogleRtt }
@@ -3416,6 +3447,8 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
                         SourceId = [string]$lastSavedState.active_source_id
                         SmartScore = if ($null -ne $lastSavedState.active_node_score) { [int]$lastSavedState.active_node_score } else { 0 }
                     }
+                    Mark-NodeSuccess -State $failoverState -Candidate $selectedCandidate
+                    Save-FailoverState -State $failoverState
                     $configState = @{
                         ProfileId = [string]$lastSavedState.profile_id
                         ConfigHash = [string]$lastSavedState.config_hash
@@ -3548,7 +3581,7 @@ if (-not $fastStartupPassed) {
                 $unprobedCandidates += $cand
             }
         }
-        $sortedWinners = @($winnerEntries | Sort-Object @{Expression={if ($_.Candidate.Region -eq 'JP') {0} elseif ($_.Candidate.Region -eq 'US') {1} else {2}}}, RttMs, ApiRttMs | ForEach-Object { $_.Candidate })
+        $sortedWinners = @($winnerEntries | Sort-Object @{Expression={$_.Candidate.SmartScore}; Descending=$true}, @{Expression={if ($_.Candidate.Region -eq 'JP') {0} elseif ($_.Candidate.Region -eq 'US') {1} else {2}}}, RttMs, ApiRttMs | ForEach-Object { $_.Candidate })
         $orderedCandidates = @($sortedWinners) + @($unprobedCandidates) + @($failedPoolCandidates)
     } else {
         # Fallback: measure top candidates serially if multi-listener pool cannot start.
@@ -3572,11 +3605,14 @@ if (-not $fastStartupPassed) {
                 $unprobedCandidates += $probeCandidate
             }
         }
-        $orderedCandidates = @($latencyCandidates | Sort-Object @{Expression={if ($_.Candidate.Region -eq 'JP') {0} elseif ($_.Candidate.Region -eq 'US') {1} else {2}}}, RttMs | ForEach-Object { $_.Candidate }) + @($unprobedCandidates)
+        $orderedCandidates = @($latencyCandidates | Sort-Object @{Expression={$_.Candidate.SmartScore}; Descending=$true}, @{Expression={if ($_.Candidate.Region -eq 'JP') {0} elseif ($_.Candidate.Region -eq 'US') {1} else {2}}}, RttMs | ForEach-Object { $_.Candidate }) + @($unprobedCandidates)
     }
     $orderIndex=0
     $orderedCandidates = @($orderedCandidates | ForEach-Object { [pscustomobject]@{Candidate=$_; Index=($orderIndex++); Rank=$(if ($_.Region -eq 'JP') {0} elseif ($_.Region -eq 'US') {1} else {2})} } | Sort-Object Rank,Index | ForEach-Object {$_.Candidate})
-    $orderedCandidates = @(Get-AdmissionRoundOrder -Candidates $orderedCandidates)
+    $verifiedTop = @($orderedCandidates | Where-Object { $null -ne $_.PSObject.Properties['SmartScore'] -and [int]$_.SmartScore -ge 700 })
+    $otherCandidates = @($orderedCandidates | Where-Object { $null -eq $_.PSObject.Properties['SmartScore'] -or [int]$_.SmartScore -lt 700 })
+    $roundOrdered = @(Get-AdmissionRoundOrder -Candidates $otherCandidates)
+    $orderedCandidates = @($verifiedTop) + @($roundOrdered)
     $candidateTotal = $orderedCandidates.Count
     $script:CandidateTotal = $candidateTotal
 }
@@ -3621,7 +3657,7 @@ if ($null -eq $selectedCandidate) {
                 Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
                 $null = Test-GoogleConnectivity
                 Invoke-AccountAdmissionGate
-                $null = Start-AntigravityBeforeModelGate
+                $null = Start-AntigravityBeforeModelGate -Candidate $candidate
                 Write-SafeLog -Event 'formal_model_gate_started' -Values @{node_id=$candidate.Id; port=$Port}
                 $formalGateStarted = $true
                 $formalModelAttempts++
