@@ -1,3 +1,21 @@
+## v2.9.32 彻底修复 CLI 账号权限误判地区限制 · 阻断全线路误连坐 · 胶囊取消静默退出（2026-11-16）
+
+- **彻底根治模型门禁 CLI 账号权限误判（`Antigravity-ProxySupervisor.ps1`）**：
+  - 精准区分“节点地区受限（IP 真实不通）”与“CLI 账号端权限校验（`Eligibility check failed / Account ineligible`）”；
+  - 严禁将 `agy.exe` 的 `Your current account is not eligible for Antigravity` 误判为代理节点的 `model_location`，彻底阻断优质专线被集体误判打入冷宫；
+  - 接入 `Test-IsLanguageServerReady` 实时进程与日志探针，当检测到反重力语言服务（`language_server`）正在运行或活跃调用时，直接复用验证通过结果，跳过外部 CLI 冗余探测；
+  - CLI 遇账号级别权限提示时，平滑降级为端点直通验证（Google 204、Model API、CloudCode 200/404 真实连通即放行）。
+- **优化地区受限隔离期**：
+  - 将 `model_location` 冷却时间从极端的 720 分钟（12 小时）下调为合理的 15~30 分钟，杜绝突发偶发波动导致订阅池所有节点全军覆没（`no_healthy_candidate_available`）。
+- **修复启动胶囊取消假成功弹窗 Bug（`Antigravity-Recovery-Launcher.cs`）**：
+  - 修复用户主动点击胶囊右上角关闭按钮或取消退出时 `ExitCode` 误置为 0，导致外层主程序误认为启动成功并弹出“未能打开反重力主窗口”具有误导性的报错弹窗；
+  - 增加 `UserCancelled` 状态守卫与专属退出码（`ExitCode = 2`），用户主动取消时静默优雅退出。
+- **反重力最新 2.32 界面布局与深度汉化同步（`translation-core.js` v0.4.9）**：
+  - 完整汉化全新“界面布局（Interface Layout）”切换板块：
+    - `Interface Layout` -> `界面布局`
+    - `Knowledge Work` -> `知识工作`（面向研究、写作与日常任务的简化界面）
+    - `Software Engineering` -> `软件工程`（面向编程、开发者工具与智能体管理的完整界面）
+
 ## v2.9.31 智能优选加权闭环 · 冷启动秒开 · 热启动防误杀 · 2.32 深度汉化（2026-11-14）
 
 - **智能优选闭环（稳定性第一，同等稳定性下速度加权）**：

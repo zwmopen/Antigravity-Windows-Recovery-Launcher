@@ -169,7 +169,7 @@ namespace AntigravityLauncher
             var capsule = new AntigravityLaunchCapsuleForm(resolvedReason);
             Application.Run(capsule);
 
-            if (capsule.ExitCode == 0)
+            if (capsule.ExitCode == 0 && !capsule.UserCancelled)
             {
                 bool activated = ActivateExistingAntigravity();
                 EnsureWatcherRunning();
@@ -1666,6 +1666,7 @@ namespace AntigravityLauncher
     internal class AntigravityLaunchCapsuleForm : Form
     {
         internal int ExitCode { get; private set; }
+        internal bool UserCancelled { get { return userCancelled; } }
         private string recoveryReason;
         private bool userCancelled = false;
         private Process supervisorProc = null;
@@ -1893,6 +1894,7 @@ namespace AntigravityLauncher
             btnClose.Click += delegate
             {
                 userCancelled = true;
+                ExitCode = 2;
                 try
                 {
                     if (supervisorProc != null && !supervisorProc.HasExited)
@@ -2193,7 +2195,7 @@ namespace AntigravityLauncher
                 string lastRenderedChunk = "";
                 while (!process.HasExited)
                 {
-                    if (userCancelled) { ExitCode = 0; return; }
+                    if (userCancelled) { ExitCode = 2; return; }
                     string logChunk = ReadLogSince(logStartOffset);
                     bool logChanged = (logChunk.Length != lastRenderedChunk.Length);
                     if (logChanged)
@@ -2249,7 +2251,7 @@ namespace AntigravityLauncher
                     Thread.Sleep(100);
                 }
 
-                if (userCancelled) { ExitCode = 0; return; }
+                if (userCancelled) { ExitCode = 2; return; }
                 process.WaitForExit();
                 int result = process.ExitCode;
                 string finalLog = ReadLogSince(logStartOffset);
