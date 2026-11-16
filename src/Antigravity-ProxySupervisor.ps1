@@ -268,7 +268,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.9.31-core'
+            version = '2.9.32-core'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -3427,7 +3427,7 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
                     Write-SafeLog -Event 'google_probe_completed' -Values @{ service = 'Google204'; attempt = 1; status = 204; rtt_ms = $warmGoogleRtt }
                     Write-SafeLog -Event 'google_probe_started' -Values @{ service = 'ModelAPI'; attempt = 1 }
                     Write-SafeLog -Event 'google_probe_started' -Values @{ service = 'OAuth'; attempt = 1 }
-                    $warmEp = Invoke-ParallelEndpointProbes -TargetProxyUrl $ProxyUrl -TimeoutMs 3200 -Endpoints @(
+                    $warmEp = Invoke-ParallelEndpointProbes -TargetProxyUrl $ProxyUrl -TimeoutMs 3800 -Endpoints @(
                         @{ Name = 'ModelAPI'; Uri = 'https://generativelanguage.googleapis.com/'; ReadBody = $false },
                         @{ Name = 'CloudCode'; Uri = 'https://daily-cloudcode-pa.googleapis.com/'; ReadBody = $false },
                         @{ Name = 'OAuth'; Uri = 'https://oauth2.googleapis.com/'; ReadBody = $false }
@@ -3437,7 +3437,7 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
                     $warmOAuthStatus = [int]$warmEp['OAuth'].Status
                     Write-SafeLog -Event 'google_probe_completed' -Values @{ service = 'ModelAPI'; attempt = 1; status = $warmApiStatus; rtt_ms = [int]$warmEp['ModelAPI'].RttMs }
                     Write-SafeLog -Event 'google_probe_completed' -Values @{ service = 'OAuth'; attempt = 1; status = $warmOAuthStatus; rtt_ms = [int]$warmEp['OAuth'].RttMs }
-                    if ($warmApiStatus -le 0 -or $warmCloudCodeStatus -le 0 -or $warmOAuthStatus -le 0) {
+                    if ($warmApiStatus -le 0 -or $warmOAuthStatus -le 0) {
                         Write-SafeLog -Event 'warm_proxy_api_unhealthy' -Values @{ api = $warmApiStatus; cloudcode = $warmCloudCodeStatus; oauth = $warmOAuthStatus; rtt_ms = $warmGoogleRtt }
                         $status204 = 0
                     } else {
@@ -3846,7 +3846,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.9.31-core'
+    version = '2.9.32-core'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId

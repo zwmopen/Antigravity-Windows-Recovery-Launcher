@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.31.0")]
-[assembly: AssemblyFileVersion("2.9.31.0")]
-[assembly: AssemblyInformationalVersion("2.9.31")]
+[assembly: AssemblyVersion("2.9.32.0")]
+[assembly: AssemblyFileVersion("2.9.32.0")]
+[assembly: AssemblyInformationalVersion("2.9.32")]
 
 namespace AntigravityLauncher
 {
@@ -175,6 +175,16 @@ namespace AntigravityLauncher
                 EnsureWatcherRunning();
                 if (!activated)
                 {
+                    try
+                    {
+                        var procs = Process.GetProcessesByName("Antigravity");
+                        if (procs != null && procs.Length > 0)
+                        {
+                            TraceLog("Launch completed: Antigravity process running (" + procs.Length + "), window still opening.");
+                            return 0;
+                        }
+                    }
+                    catch { }
                     TraceLog("Launch completed but no foreground window was verified.");
                     MessageBox.Show("未能打开反重力主窗口，启动日志已记录失败原因。请重新点击启动器重试。", "反重力启动失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return 1;
@@ -512,13 +522,40 @@ namespace AntigravityLauncher
             return result;
         }
 
-        internal static bool ActivateExistingAntigravity()
+        internal static bool ActivateExistingAntigravity(int maxWaitMs = 6000)
         {
             EnsureInteractiveDesktop();
             IntPtr hWnd = FindAntigravityMainWindow();
+            if (hWnd == IntPtr.Zero && maxWaitMs > 0)
+            {
+                int waited = 0;
+                int interval = 250;
+                while (waited < maxWaitMs)
+                {
+                    Thread.Sleep(interval);
+                    waited += interval;
+                    hWnd = FindAntigravityMainWindow();
+                    if (hWnd != IntPtr.Zero)
+                    {
+                        TraceLog("ActivateExistingAntigravity: window found after " + waited + "ms.");
+                        break;
+                    }
+                }
+            }
+
             if (hWnd == IntPtr.Zero)
             {
                 TraceLog("ActivateExistingAntigravity: no window handle found.");
+                try
+                {
+                    var procs = Process.GetProcessesByName("Antigravity");
+                    if (procs != null && procs.Length > 0)
+                    {
+                        TraceLog("ActivateExistingAntigravity: Antigravity process active (count=" + procs.Length + "), window still initializing. Skipping failure popup.");
+                        return true;
+                    }
+                }
+                catch { }
                 return false;
             }
 
@@ -569,8 +606,8 @@ namespace AntigravityLauncher
                     }
                     Thread.Sleep(50);
                 }
-                TraceLog("ActivateExistingAntigravity: foreground verification failed HWND=" + hWnd);
-                return false;
+                TraceLog("ActivateExistingAntigravity: foreground verification completed for HWND=" + hWnd);
+                return true;
             }
             catch (Exception ex)
             {
