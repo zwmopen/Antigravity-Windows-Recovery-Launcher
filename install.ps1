@@ -302,6 +302,13 @@ foreach ($legacyShortcut in @(
         Remove-Item -LiteralPath $legacyShortcut -Force
     }
 }
+# Enforce single outer desktop entry: clean duplicate launcher shortcuts inside Desktop subfolders (excluding backup dirs)
+Get-ChildItem -LiteralPath $desktop -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*备份*' } | ForEach-Object {
+    $subDup = Join-Path $_.FullName $actualDesktopShortcutName
+    if (Test-Path -LiteralPath $subDup) {
+        Remove-Item -LiteralPath $subDup -Force -ErrorAction SilentlyContinue
+    }
+}
 
 Set-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'AntigravityAccountWatcher' -Value ('"' + $watcher + '"')
 
