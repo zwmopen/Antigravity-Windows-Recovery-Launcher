@@ -59,19 +59,22 @@ function Get-Sha512Hex {
 $actualDesktopShortcutName = if (-not [string]::IsNullOrWhiteSpace($DesktopShortcutName)) {
     $DesktopShortcutName
 } else {
-    'Google Antigravity.lnk'
+    'Antigravity 启动器.lnk'
 }
 if (-not $actualDesktopShortcutName.EndsWith('.lnk', [System.StringComparison]::OrdinalIgnoreCase)) {
     $actualDesktopShortcutName += '.lnk'
 }
 
 $shortcutTargets = @(
-    @{ Path = (Join-Path $desktop $actualDesktopShortcutName); Target = $launcher; Arguments = ''; Description = 'Google Antigravity (智能专线守护)'; Key = 'desktop-launcher' },
-    @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Google Antigravity.lnk'); Target = $launcher; Arguments = ''; Description = 'Google Antigravity (智能专线守护)'; Key = 'start-menu-launcher' },
+    @{ Path = (Join-Path $desktop $actualDesktopShortcutName); Target = $launcher; Arguments = ''; Description = 'Antigravity 启动器 (智能专线守护与无感切号)'; Key = 'desktop-launcher' },
+    @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 启动器.lnk'); Target = $launcher; Arguments = ''; Description = 'Antigravity 启动器 (智能专线守护与无感切号)'; Key = 'start-menu-launcher' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 中文版.lnk'); Target = $installedEnableChinese; Arguments = ''; Description = 'Enable Antigravity Simplified Chinese UI'; Key = 'start-menu-chinese' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 英文恢复.lnk'); Target = $installedRestoreEnglish; Arguments = ''; Description = 'Restore the original English UI'; Key = 'start-menu-english' },
     @{ Path = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 原版.lnk'); Target = $officialApp; Arguments = ''; Description = 'Antigravity official app'; Key = 'start-menu-official' }
 )
+if (Test-Path -LiteralPath $officialApp) {
+    $shortcutTargets += @{ Path = (Join-Path $desktop 'Antigravity.lnk'); Target = $officialApp; Arguments = ''; Description = 'Antigravity 官方原版'; Key = 'desktop-official' }
+}
 $runtime = Join-Path $env:LOCALAPPDATA 'Antigravity'
 $backupRoot = Join-Path $runtime 'shortcut-backups'
 $localizationPendingMarker = Join-Path $runtime 'localization-extension-pending.flag'
@@ -263,8 +266,9 @@ foreach ($shortcutTarget in $shortcutTargets) {
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = [string]$shortcutTarget.Target
     $shortcut.Arguments = if ($shortcutTarget.ContainsKey('Arguments')) { [string]$shortcutTarget.Arguments } else { '' }
-    $shortcut.WorkingDirectory = $installRoot
-    $shortcut.IconLocation = if ($shortcutTarget.Key -eq 'start-menu-official') {
+    $isOfficialShortcut = ([string]$shortcutTarget.Key -like '*-official')
+    $shortcut.WorkingDirectory = if ($isOfficialShortcut -and (Test-Path -LiteralPath $officialApp)) { Split-Path -Parent $officialApp } else { $installRoot }
+    $shortcut.IconLocation = if ($isOfficialShortcut) {
         if (Test-Path -LiteralPath $officialApp) { $officialApp + ',0' } else { $launcher + ',0' }
     } elseif (Test-Path -LiteralPath $installedIcon) {
         $installedIcon + ',0'
@@ -275,11 +279,10 @@ foreach ($shortcutTarget in $shortcutTargets) {
     $shortcut.Save()
 }
 
-# Remove old ambiguous or redundant shortcuts
+# Remove old ambiguous or redundant shortcuts (never remove official Antigravity.lnk or active launcher shortcut)
 $activeShortcutPaths = @($shortcutTargets | ForEach-Object { [string]$_.Path })
 foreach ($legacyShortcut in @(
-    (Join-Path $desktop 'Antigravity.lnk'),
-    (Join-Path $desktop 'Antigravity 启动器.lnk'),
+    (Join-Path $desktop 'Google Antigravity.lnk'),
     (Join-Path $desktop 'Antigravity 原版.lnk'),
     (Join-Path $desktop 'Antigravity 智能启动器.lnk'),
     (Join-Path $desktop 'Antigravity 启动器 (v1.0 体验版).lnk'),
@@ -287,8 +290,7 @@ foreach ($legacyShortcut in @(
     (Join-Path $desktop 'Antigravity 节点中控台.lnk'),
     (Join-Path $desktop 'Antigravity 中文版.lnk'),
     (Join-Path $desktop 'Antigravity 英文恢复.lnk'),
-    (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity.lnk'),
-    (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 启动器.lnk'),
+    (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Google Antigravity.lnk'),
     (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 智能启动器.lnk'),
     (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity 节点中控台.lnk')
 )) {
