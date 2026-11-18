@@ -268,7 +268,7 @@ function Save-SupervisorFailureState {
 
         $localizationEnabled = -not (Test-Path -LiteralPath $LocalizationDisabledMarkerPath)
         $failureState = [ordered]@{
-            version = '2.9.32-core'
+            version = '2.9.33-core'
             status = 'failed'
             started_at = $script:RunStartedAt.ToString('o')
             finished_at = (Get-Date).ToString('o')
@@ -539,7 +539,8 @@ function Stop-WithMessage {
 }
 
 function Invoke-AccountAdmissionGate {
-    if ($script:AccountAdmissionPassed) { return }
+    param([switch]$ForceRefresh)
+    if ($script:AccountAdmissionPassed -and (-not $ForceRefresh -or $script:CredentialsRefreshedOnline)) { return }
     $helper = Join-Path $ScriptRoot 'antigravity_smart_switch.py'
     if (-not (Test-Path -LiteralPath $helper)) { Stop-WithMessage -Event 'account_gate_helper_missing' }
     $statusFile = Join-Path $ProxyRoot 'launch-account-status.json'
@@ -569,6 +570,7 @@ function Invoke-AccountAdmissionGate {
         Stop-WithMessage -Event 'account_gate_status_invalid'
     }
     $script:AccountAdmissionPassed = $true
+    if ($ForceRefresh) { $script:CredentialsRefreshedOnline = $true }
     $planLabel = if ($null -ne $status.PSObject.Properties['plan']) { [string]$status.plan } else { 'UNKNOWN' }
     Write-SafeLog -Event 'preflight_account_check_completed' -Values @{
         action = [string]$status.action
@@ -3446,6 +3448,7 @@ if ($RecoveryReason -eq 'Startup' -and (Test-Path -LiteralPath $ConfigPath) -and
                         $script:LastOAuthStatus = $warmOAuthStatus
                         $script:LastProbeRttMs = $warmGoogleRtt
                         Write-SafeLog -Event 'google_connectivity_passed' -Values @{ google = 204; api = $warmApiStatus; cloudcode = $warmCloudCodeStatus; oauth = $warmOAuthStatus; attempts = 1; rtt_ms = $warmGoogleRtt }
+                        Invoke-AccountAdmissionGate -ForceRefresh
                         $null = Start-AntigravityBeforeModelGate
                         Write-SafeLog -Event 'formal_model_gate_started' -Values @{ node_id = [string]$lastSavedState.active_node_id; port = $Port; mode = 'warm_fast_path' }
                     }
@@ -3676,7 +3679,7 @@ if ($null -eq $selectedCandidate) {
                 Test-PrivateConfig
                 Start-OrReuseMihomo -ExpectedConfigHash $candidateConfig.ConfigHash
                 $null = Test-GoogleConnectivity
-                Invoke-AccountAdmissionGate
+                Invoke-AccountAdmissionGate -ForceRefresh
                 $null = Start-AntigravityBeforeModelGate -Candidate $candidate
                 Write-SafeLog -Event 'formal_model_gate_started' -Values @{node_id=$candidate.Id; port=$Port}
                 $formalGateStarted = $true
@@ -3846,7 +3849,7 @@ if ($hasExistingAntigravity -and -not $forceRestartRequested) {
 }
 
 $state = [ordered]@{
-    version = '2.9.32-core'
+    version = '2.9.33-core'
     status = 'ready'
     started_at = (Get-Date).ToString('o')
     profile_id = $configState.ProfileId

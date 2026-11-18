@@ -14,9 +14,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Antigravity 启动器")]
 [assembly: AssemblyProduct("Antigravity 启动器")]
 [assembly: AssemblyCopyright("Copyright © 2026 zwmopen")]
-[assembly: AssemblyVersion("2.9.32.0")]
-[assembly: AssemblyFileVersion("2.9.32.0")]
-[assembly: AssemblyInformationalVersion("2.9.32")]
+[assembly: AssemblyVersion("2.9.33.0")]
+[assembly: AssemblyFileVersion("2.9.33.0")]
+[assembly: AssemblyInformationalVersion("2.9.33")]
 
 namespace AntigravityLauncher
 {
@@ -129,12 +129,32 @@ namespace AntigravityLauncher
             Application.SetCompatibleTextRenderingDefault(false);
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 
-            // 3. 检查 Antigravity 是否已经在运行中 (热启动场景：带 5 秒自动进入的双选卡片)
+            // 3. 检查 Antigravity 是否已经在运行中 (热启动场景)
             bool antigravityRunning = IsAntigravityRunning();
             TraceLog("antigravityRunning=" + antigravityRunning + ", forceLaunch=" + forceLaunch);
 
             if (antigravityRunning && !forceLaunch)
             {
+                bool explicitPanel = HasArgument(args, "--inspect-card") ||
+                                     HasArgument(args, "--show-panel") ||
+                                     HasArgument(args, "--panel") ||
+                                     HasArgument(args, "--settings") ||
+                                     HasArgument(args, "--switch");
+
+                // 如果未显式要求看面板/切号，先直接秒级激活已有反重力窗口（0弹窗、0等待、原生无感聚焦）
+                if (!explicitPanel)
+                {
+                    TraceLog("Hot launch: attempting instant activation of existing main window without popup...");
+                    bool activated = ActivateExistingAntigravity(1200);
+                    TraceLog("Instant activate result: " + activated);
+                    if (activated)
+                    {
+                        TraceLog("Antigravity is already running and activated smoothly. Exiting immediately with 0 popups.");
+                        EnsureWatcherRunning();
+                        return 0;
+                    }
+                }
+
                 TraceLog("Displaying AntigravityHotLaunchChoiceForm...");
                 IntPtr previousDpiContext = EnterSharpCardDpiContext();
                 var choiceForm = new AntigravityHotLaunchChoiceForm();
@@ -2398,36 +2418,36 @@ namespace AntigravityLauncher
                 {
                     state.ActiveStep = 1;
                     state.LinePassed = false;
-                    state.LineText = "多核并发探活中 · 同时竞速 " + GetValue(line, "pool_size") + " 条专线…";
-                    state.FooterText = "多路并发校验 Google 204 / CloudCode / OAuth 与出口国家";
+                    state.LineText = "正在智能优选最快专线…";
+                    state.FooterText = "正在连通 Google 官方专线网络与多重出口";
                     state.TargetProgress = Math.Max(state.TargetProgress, 30);
                 }
                 else if (line.Contains("pool_probe_completed"))
                 {
                     state.ActiveStep = 1;
-                    state.LineText = "并发竞速完成 · 耗时 " + GetValue(line, "elapsed_ms") + "ms · 优选可用 " + GetValue(line, "winners") + " 条";
+                    state.LineText = "专线优选就绪 · 锁定最优可用通道 (" + GetValue(line, "winners") + " 条备选)";
                     state.TargetProgress = Math.Max(state.TargetProgress, 42);
                 }
                 else if (line.Contains("latency_probe_started"))
                 {
                     state.ActiveStep = 1;
-                    bool isPool = line.Contains("concurrent_pool");
-                    state.LineText = (isPool ? "并发测速 " : "测速 ") + GetValue(line, "candidate_index") + "/" +
-                        GetValue(line, "candidate_total") + " · " + GetValue(line, "region") + " 出口";
+                    string reg = GetValue(line, "region");
+                    string regName = reg == "JP" ? "日本专线" : (reg == "US" ? "美国专线" : (reg + " 专线"));
+                    state.LineText = "正在优选专属专线 " + GetValue(line, "candidate_index") + "/" +
+                        GetValue(line, "candidate_total") + " · " + regName;
                 }
                 else if (line.Contains("latency_probe_passed"))
                 {
-                    bool isPool = line.Contains("concurrent_pool");
-                    state.LineText = (isPool ? "并发优选 " : "已测速 ") + GetValue(line, "candidate_index") + "/" +
-                        GetValue(line, "candidate_total") + " · " + GetValue(line, "region") +
-                        " · 请求延迟 " + GetValue(line, "rtt_ms") + "ms";
+                    state.ActiveStep = 1;
+                    string reg = GetValue(line, "region");
+                    string regName = reg == "JP" ? "日本专线" : (reg == "US" ? "美国专线" : (reg + " 专线"));
+                    state.LineText = "专线已就绪 · " + regName + " · 请求延迟 " + GetValue(line, "rtt_ms") + "ms";
                 }
                 else if (line.Contains("isolated_latency_failed"))
                 {
-                    bool isPool = line.Contains("concurrent_pool");
-                    state.LineText = isPool
-                        ? ("并发过滤 " + GetValue(line, "candidate_index") + "/" + GetValue(line, "candidate_total") + " · " + GetValue(line, "region") + " 未通，其他专线继续竞速")
-                        : ("测速 " + GetValue(line, "candidate_index") + "/" + GetValue(line, "candidate_total") + " 未响应，继续检查其他节点");
+                    state.ActiveStep = 1;
+                    state.LineText = "专线优选推进 " + GetValue(line, "candidate_index") + "/" +
+                        GetValue(line, "candidate_total") + " · 自动锁定可用线路…";
                 }
                 else if (line.Contains("proxy_reused") && line.Contains("warm_fast_path"))
                 {

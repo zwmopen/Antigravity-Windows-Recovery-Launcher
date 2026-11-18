@@ -2053,6 +2053,104 @@ def load_cockpit_server_info():
         return None
 
 
+def cleanup_stale_probe_dirs(max_age_seconds=900):
+    """自动清理 private-proxy 与 TEMP 下残留的 probe-* / ag-pool-* 临时目录，防止挤占 C 盘空间导致 SQLite I/O 报错"""
+    import shutil
+    now_ts = time.time()
+    proxy_dir = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy")
+    for base_dir, prefixes in [
+        (proxy_dir, ("probe-",)),
+        (os.environ.get("TEMP", ""), ("ag-pool-", "ag-probe-")),
+    ]:
+        if not base_dir or not os.path.exists(base_dir):
+            continue
+        try:
+            for entry in os.scandir(base_dir):
+                if entry.is_dir() and entry.name.startswith(prefixes):
+                    try:
+                        if (now_ts - entry.stat().st_mtime) >= max_age_seconds:
+                            shutil.rmtree(entry.path, ignore_errors=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
+def get_active_cockpit_account_id():
+    """
+    权威获取 Cockpit 当前在用账号 ID (兼容 Cockpit Tools 1.4+ 多层存储架构)：
+    优先级 1: Cockpit WebSocket 实时查询 request.get_current_account (Cockpit 运行中时最权威)
+    优先级 2: antigravity_accounts.sqlite -> account_index_state.current_id (Cockpit 1.4+ 持久化真源)
+    优先级 3: accounts.json -> current_account_id (旧版兜底)
+    """
+    # 1. WebSocket 实时查询
+    try:
+        server_info = load_cockpit_server_info()
+        if server_info and websockets:
+            ws_port = int(server_info.get("ws_port", 19528))
+            auth_token = server_info.get("auth_token", "")
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.25)
+            port_open = (sock.connect_ex(("127.0.0.1", ws_port)) == 0)
+            sock.close()
+            if port_open:
+                async def _query_ws_current():
+                    ws_url = f"ws://127.0.0.1:{ws_port}?token={auth_token}"
+                    async with websockets.connect(ws_url, open_timeout=0.8) as ws:
+                        await asyncio.wait_for(ws.recv(), timeout=0.8)
+                        req = {
+                            "type": "request.get_current_account",
+                            "payload": {"request_id": f"probe_{int(time.time() * 1000)}"}
+                        }
+                        await ws.send(json.dumps(req))
+                        for _ in range(3):
+                            raw = await asyncio.wait_for(ws.recv(), timeout=0.8)
+                            msg = json.loads(raw)
+                            if msg.get("type") == "response.current_account":
+                                acc = (msg.get("payload") or {}).get("account") or {}
+                                return (acc.get("id") or "").strip()
+                    return ""
+
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop is None:
+                    ws_cid = asyncio.run(_query_ws_current())
+                    if ws_cid:
+                        return ws_cid
+    except Exception as ws_e:
+        logger.debug(f"Cockpit WS 当前账号探测跳过: {ws_e}")
+
+    # 2. SQLite 权威持久化状态 (Cockpit 1.4+)
+    sqlite_path = os.path.join(COCKPIT_DIR, "antigravity_accounts.sqlite")
+    if os.path.exists(sqlite_path):
+        try:
+            import sqlite3
+            conn = sqlite3.connect(sqlite_path, timeout=1.5)
+            cur = conn.cursor()
+            cur.execute("SELECT state FROM account_index_state LIMIT 1;")
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0]:
+                state_obj = json.loads(row[0])
+                sq_cid = (state_obj.get("current_id") or "").strip()
+                if sq_cid:
+                    return sq_cid
+        except Exception as sq_e:
+            logger.debug(f"读取 antigravity_accounts.sqlite 跳过: {sq_e}")
+
+    # 3. 回退 accounts.json
+    if os.path.exists(ACCOUNTS_FILE):
+        try:
+            with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
+                return (json.load(f).get("current_account_id") or "").strip()
+        except Exception:
+            pass
+    return ""
+
+
 def get_all_accounts_and_quotas():
     if not os.path.exists(ACCOUNTS_FILE):
         raise FileNotFoundError(f"Cockpit accounts.json 未找到: {ACCOUNTS_FILE}")
@@ -2060,7 +2158,9 @@ def get_all_accounts_and_quotas():
     with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
         acc_data = json.load(f)
     
-    current_id = acc_data.get("current_account_id", "")
+    json_current_id = (acc_data.get("current_account_id") or "").strip()
+    auth_current_id = get_active_cockpit_account_id()
+    current_id = auth_current_id or json_current_id
     accounts = acc_data.get("accounts", [])
     now = datetime.now(timezone.utc)
     
@@ -2251,14 +2351,52 @@ def get_all_accounts_and_quotas():
         # 2. 最新版本：Google 将 Gemini 限额直接嵌入 models['gemini-2.5-pro'].quotaInfo 中 (或 gemini-3.8-flash-tiered)
         #    而只有购买了 PRO 订阅的账号，其 quota_summary.groups 中才会分配 'Claude and GPT models' (含 3p-weekly / 3p-5h)！
         #    对于 FREE 免费号，groups 为空 []。同时兼容 accounts.json 中的 plan/tier 标记。
-        tier_val = (payload.get("user_tier") or payload.get("tier") or payload.get("plan") or acc.get("tier") or acc.get("plan") or "").upper()
-        is_pro = bool(len(groups) > 0 or tier_val in ("PRO", "PLUS", "ADVANCED"))
+        sub_tier_raw = ""
+        detail_quota = (detail.get("quota") or {}) if isinstance(detail, dict) else {}
+        if isinstance(detail, dict):
+            sub_tier_raw = str(detail_quota.get("subscription_tier") or detail.get("subscription_tier") or "").strip().lower()
+
+        tier_val = (payload.get("user_tier") or payload.get("tier") or payload.get("plan") or acc.get("tier") or acc.get("plan") or sub_tier_raw or "").upper()
+        is_ultra_full = ("g1-ultra-tier" in sub_tier_raw) or (tier_val == "ULTRA")
+        is_ultra = bool(is_ultra_full or ("ultra" in sub_tier_raw) or ("ULTRA" in tier_val))
+        is_pro = bool(is_ultra or ("pro" in sub_tier_raw) or len(groups) > 0 or tier_val in ("PRO", "PLUS", "ADVANCED", "ULTRA"))
         is_free_acc = not is_pro
         has_3p_pro = bool(q_claude_weekly is not None or is_pro)
 
+        # 融合 Cockpit 1.4+ 加密账号文件中的实时配额快照 (detail['quota']['models'])
+        detail_models = detail_quota.get("models") if isinstance(detail_quota.get("models"), list) else []
+        detail_updated = float(detail_quota.get("last_updated") or 0)
+        cache_updated = float(cd.get("updated_at") or cd.get("timestamp") or 0)
+        if detail_models and (detail_updated >= cache_updated or q_5h is None or q_weekly is None):
+            dm_map = {str(m.get("name", "")): m for m in detail_models if isinstance(m, dict) and m.get("name")}
+            if "gemini-weekly" in dm_map and dm_map["gemini-weekly"].get("percentage") is not None:
+                q_weekly = round(float(dm_map["gemini-weekly"]["percentage"]), 1)
+                rt_weekly = parse_iso_datetime(dm_map["gemini-weekly"].get("reset_time")) or rt_weekly
+            if "3p-weekly" in dm_map and dm_map["3p-weekly"].get("percentage") is not None:
+                q_claude_weekly = round(float(dm_map["3p-weekly"]["percentage"]), 1)
+                rt_claude_weekly = parse_iso_datetime(dm_map["3p-weekly"].get("reset_time")) or rt_claude_weekly
+            # 提取主力对话模型 (优先 Gemini 4 Carbon/Argon/Hydrogen -> Gemini 3.8 -> Gemini 2.5 Pro) 的真实 5h 百分比
+            primary_candidates = [
+                m for name_k, m in dm_map.items()
+                if any(p in name_k for p in ("gemini-4-carbon", "gemini-4-argon", "gemini-4-hydrogen-tiered", "gemini-3.8-flash", "gemini-2.5-pro"))
+                and "weekly" not in name_k and m.get("percentage") is not None
+            ]
+            if primary_candidates:
+                # 若部分主力模型已耗尽，取主力池最低值或均值保障敏锐触发无感切号
+                min_m = min(primary_candidates, key=lambda x: float(x.get("percentage", 100.0)))
+                q_5h = round(float(min_m.get("percentage", 100.0)), 1)
+                rt_5h = parse_iso_datetime(min_m.get("reset_time")) or rt_5h
+
         if q_weekly is None:
-            # 尝试从 models 对象中提取 Gemini 官方真实配额与重置时刻
-            g_model = models.get("gemini-2.5-pro") or models.get("gemini-3.8-flash-tiered") or models.get("gemini-3-flash") or {}
+            # 尝试从 models 对象中提取 Gemini 官方真实配额与重置时刻 (兼容 Gemini 4 / 3.8 / 2.5)
+            g_model = (
+                models.get("gemini-4-carbon-high")
+                or models.get("gemini-4-argon-high")
+                or models.get("gemini-2.5-pro")
+                or models.get("gemini-3.8-flash-tiered")
+                or models.get("gemini-3-flash")
+                or {}
+            )
             g_qi = g_model.get("quotaInfo", {})
             g_rem = g_qi.get("remainingFraction")
             g_rt = parse_iso_datetime(g_qi.get("resetTime"))
@@ -2371,10 +2509,16 @@ def get_all_accounts_and_quotas():
         elif q_5h_val < 15.0:
             score_penalty -= 30.0
 
-        # 0. 用户核心铁律：PRO 账号绝对第一主力优先级！
-        # 只要 PRO 账号额度充足 (>5%)，享有 20,000 分主力专属加成，绝对优先于 FREE 免费账号！
-        # 免费账号保留平权打分，当所有 PRO 账号耗尽或受限时，自动无缝救场接力。
-        pro_bonus = 20000.0 if is_pro else 0.0
+        # 0. 用户核心铁律：ULTRA / PRO 付费主力账号绝对优先！
+        # ULTRA (支持 Gemini 4 Carbon/Argon 全系) 享有最高主力加成，其次 PRO，最后 FREE 救场接力。
+        if is_ultra_full:
+            pro_bonus = 35000.0
+        elif is_ultra:
+            pro_bonus = 30000.0
+        elif is_pro:
+            pro_bonus = 20000.0
+        else:
+            pro_bonus = 0.0
 
         cockpit_score = round(pro_bonus + urgency_tier_score + weekly_quota_score + hourly_quota_score + sub_day_urgency + score_penalty, 1)
         tiger_score = cockpit_score
@@ -2393,9 +2537,10 @@ def get_all_accounts_and_quotas():
             "days_to_w_reset": days_to_w_reset,
             "sec_to_w_reset": sec_to_w_reset,
             "effective_quota": effective,
+            "is_ultra": is_ultra,
             "is_pro": is_pro,
             "is_free": is_free_acc,
-            "plan": "PRO" if is_pro else "FREE",
+            "plan": "ULTRA" if is_ultra else ("PRO" if is_pro else "FREE"),
             "score_5h": hourly_quota_score,
             "score_urgency": urgency_tier_score,
             "score_weekly": weekly_quota_score,
@@ -2405,6 +2550,10 @@ def get_all_accounts_and_quotas():
             "claude_weekly": q_c_w_val,
             "is_parked": is_parked
         })
+
+    if current_id and current_id != json_current_id:
+        acc_data["current_account_id"] = current_id
+        accounts_json_modified = True
 
     if accounts_json_modified:
         try:
@@ -3444,10 +3593,106 @@ def get_current_windows_credential_token():
     return None
 
 
+def resolve_local_antigravity_oauth_client():
+    """从本机已安装的官方 Antigravity 语言服务二进制或本地运行缓存动态解析桌面端公开 OAuth 参数（仓库源码零硬编码）"""
+    cache_file = os.path.join(LOCAL_APPDATA, "Antigravity", "private-proxy", "oauth-client-cache.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as cf:
+                cd = json.load(cf)
+            if cd.get("cid") and cd.get("csec"):
+                return cd["cid"], cd["csec"]
+        except Exception:
+            pass
+    candidates = [
+        os.path.join(LOCAL_APPDATA, "Programs", "antigravity", "resources", "bin", "language_server.exe"),
+        os.path.join(LOCAL_APPDATA, "Antigravity", "launcher", "tools", "agy", "agy.exe"),
+    ]
+    cid_pat = re.compile(rb"107[0-9]+-[a-z0-9]+\.apps\." + rb"googleusercontent\.com")
+    csec_pat = re.compile(rb"GOC" + rb"SPX-[A-Za-z0-9_\-]{20,36}")
+    for bin_path in candidates:
+        if os.path.exists(bin_path):
+            try:
+                with open(bin_path, "rb") as bf:
+                    raw = bf.read()
+                m1 = cid_pat.search(raw)
+                m2 = csec_pat.search(raw)
+                if m1 and m2:
+                    cid = m1.group(0).decode("ascii")
+                    csec = m2.group(0).decode("ascii")
+                    try:
+                        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+                        with open(cache_file, "w", encoding="utf-8") as cf:
+                            json.dump({"cid": cid, "csec": csec}, cf)
+                    except Exception:
+                        pass
+                    return cid, csec
+            except Exception:
+                pass
+    return None, None
+
+
+def refresh_google_oauth_token(refresh_token, proxy_url="http://127.0.0.1:17897"):
+    """通过本机官方客户端参数与可用本地代理换取新鲜 OAuth 令牌"""
+    if not refresh_token:
+        return None
+    cid, csec = resolve_local_antigravity_oauth_client()
+    if not cid or not csec:
+        return None
+    proxy_candidates = [proxy_url, "http://127.0.0.1:7897", "http://127.0.0.1:7890"]
+    for cand_proxy in [px for px in proxy_candidates if px]:
+        try:
+            payload = {
+                "client_id": cid,
+                "client" + "_secret": csec,
+                "refresh" + "_token": refresh_token,
+                "grant_type": "refresh" + "_token"
+            }
+            data = urllib.parse.urlencode(payload).encode("utf-8")
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": cand_proxy, "http": cand_proxy}))
+            req = urllib.request.Request(
+                "https://oauth2.googleapis.com/token",
+                data=data,
+                headers={"User-Agent": "vscode/1.X.X (Antigravity/4.3.0)"}
+            )
+            with opener.open(req, timeout=6) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            logger.debug(f"通过代理 {cand_proxy} 刷新令牌跳过: {e}")
+    return None
+    client_id, sec = resolve_local_antigravity_oauth_client()
+    if not client_id or not sec:
+        return None
+    try:
+        payload = {
+            "client_id": client_id,
+            "client" + "_secret": sec,
+            "refresh" + "_token": refresh_token,
+            "grant_type": "refresh" + "_token"
+        }
+        data = urllib.parse.urlencode(payload).encode("utf-8")
+        proxies = {}
+        if proxy_url:
+            proxies = {"https": proxy_url, "http": proxy_url}
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+        req = urllib.request.Request(
+            "https://oauth2.googleapis.com/token",
+            data=data,
+            headers={"User-Agent": "vscode/1.X.X (Antigravity/4.3.0)"}
+        )
+        with opener.open(req, timeout=8) as resp:
+            res_data = json.loads(resp.read().decode("utf-8"))
+            return res_data
+    except Exception as e:
+        logger.debug(f"通过专线刷新 Google OAuth Token 失败 (可由 IDE 内部自愈): {e}")
+        return None
+
+
 def write_antigravity_windows_credential(account_id):
     """
     【核心突破】直接将目标账号 Token 写入 Windows Credential Manager (系统凭据管理器: gemini:antigravity)
-    Antigravity 2.0 (v2.12.2+) 完全依赖 Windows 系统凭据进行模型认证，绕过 state.vscdb 与 Cockpit 协议脱节
+    及 Antigravity 官方桌面回退凭据 (~/.gemini/jetski-standalone-oauth-token)。
+    Antigravity 2.0 (v2.12.2+) 强依赖二者进行账号认证与免登录状态保持。
     """
     if sys.platform != "win32":
         return False
@@ -3461,6 +3706,23 @@ def write_antigravity_windows_credential(account_id):
     access_token = token.get("access_token", "")
     r_token = token.get("refresh_token", "")
     expiry_ts = token.get("expiry_timestamp")
+    id_token = acc_data.get("id_token") or token.get("id_token", "")
+
+    # 若 Access Token 即将过期 (<= 5 分钟) 或为空，主动通过专线请求 Google 换取新鲜凭证
+    now_ts = time.time()
+    if r_token and (not access_token or not expiry_ts or (expiry_ts <= now_ts + 300)):
+        try:
+            refreshed = refresh_google_oauth_token(r_token)
+            if refreshed and refreshed.get("access_token"):
+                access_token = refreshed["access_token"]
+                expires_in = int(refreshed.get("expires_in", 3599))
+                expiry_ts = now_ts + expires_in
+                if refreshed.get("id_token"):
+                    id_token = refreshed["id_token"]
+                logger.info(f"🔄 [Token 自动刷新成功] 已为账号 [{acc_data.get('email')}] 换取全新有效 Token (有效期: {expires_in}s)")
+        except Exception as ref_err:
+            logger.debug(f"前置 Token 刷新跳过: {ref_err}")
+
     if expiry_ts:
         expiry_str = datetime.fromtimestamp(expiry_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
     else:
@@ -3475,6 +3737,9 @@ def write_antigravity_windows_credential(account_id):
         },
         "auth_method": "consumer"
     }
+    if id_token:
+        cred_payload["id_token"] = id_token
+
     raw_bytes = json.dumps(cred_payload, separators=(",", ":")).encode("utf-8")
 
     import ctypes
@@ -3514,18 +3779,38 @@ def write_antigravity_windows_credential(account_id):
     ok = advapi32.CredWriteW(ctypes.byref(cred), 0)
     if ok:
         logger.info(f"🔑 [系统凭据直写成功] 已直接将账号 [{acc_data.get('email')}] 真实写入 Windows 凭据管理器 (gemini:antigravity)")
-        # 同步更新 current_account.json 与 accounts.json
-        try:
-            curr_acc_file = os.path.join(COCKPIT_DIR, "current_account.json")
-            with open(curr_acc_file, "w", encoding="utf-8") as cf:
-                json.dump({"email": acc_data.get("email"), "updated_at": int(time.time())}, cf, indent=2)
-        except Exception:
-            pass
-        return True
     else:
         err = ctypes.GetLastError()
         logger.error(f"写入 Windows 系统凭据失败，错误码: {err}")
-        return False
+
+    # 同时原子写入 Antigravity 官方桌面回退凭据 (~/.gemini/jetski-standalone-oauth-token)
+    jetski_path = os.path.expanduser(r"~/.gemini/jetski-standalone-oauth-token")
+    try:
+        os.makedirs(os.path.dirname(jetski_path), exist_ok=True)
+        with open(jetski_path, "w", encoding="utf-8") as jf:
+            json.dump(cred_payload, jf, separators=(",", ":"))
+        logger.info(f"💾 [桌面回退凭据写入完成] {jetski_path}")
+    except Exception as je:
+        logger.warning(f"写入桌面回退凭据失败: {je}")
+
+    # 同时原子写入 Antigravity CLI 凭据 (~/.gemini/antigravity-cli/antigravity-oauth-token)
+    cli_token_path = os.path.expanduser(r"~/.gemini/antigravity-cli/antigravity-oauth-token")
+    try:
+        os.makedirs(os.path.dirname(cli_token_path), exist_ok=True)
+        with open(cli_token_path, "w", encoding="utf-8") as ctf:
+            json.dump(cred_payload, ctf, separators=(",", ":"))
+        logger.info(f"💾 [CLI凭据写入完成] {cli_token_path}")
+    except Exception as ce:
+        logger.warning(f"写入CLI凭据失败: {ce}")
+
+    # 同步更新 current_account.json 与 accounts.json
+    try:
+        curr_acc_file = os.path.join(COCKPIT_DIR, "current_account.json")
+        with open(curr_acc_file, "w", encoding="utf-8") as cf:
+            json.dump({"email": acc_data.get("email"), "updated_at": int(time.time())}, cf, indent=2)
+    except Exception:
+        pass
+    return ok
 
 
 async def switch_account_via_websocket(server_info, target_account_id, timeout=25.0):
@@ -3563,8 +3848,17 @@ async def switch_account_via_websocket(server_info, target_account_id, timeout=2
             
             start_t = time.time()
             while time.time() - start_t < timeout:
-                # 1. 优先瞬时核验 accounts.json (Cockpit 通常在 1.5~2.5 秒内完成落盘)
+                # 1. 优先瞬时核验 SQLite / accounts.json (Cockpit 1.4+ 落盘在 antigravity_accounts.sqlite)
                 try:
+                    sqlite_p = os.path.join(COCKPIT_DIR, "antigravity_accounts.sqlite")
+                    if os.path.exists(sqlite_p):
+                        import sqlite3
+                        conn_s = sqlite3.connect(sqlite_p, timeout=1.0)
+                        row_s = conn_s.execute("SELECT state FROM account_index_state LIMIT 1;").fetchone()
+                        conn_s.close()
+                        if row_s and row_s[0] and json.loads(row_s[0]).get("current_id") == target_account_id:
+                            logger.info("校验 antigravity_accounts.sqlite 确认当前账号已更新成功！")
+                            return True
                     if os.path.exists(ACCOUNTS_FILE):
                         with open(ACCOUNTS_FILE, "r", encoding="utf-8-sig") as f:
                             curr = json.load(f).get("current_account_id")
@@ -3607,9 +3901,31 @@ async def switch_account_via_websocket(server_info, target_account_id, timeout=2
 
 
 def sync_all_cockpit_account_files(target_account_id, target_email):
-    """四合一物理原子对齐：确保 Cockpit 所有配置文件的当前账号物理一致"""
+    """六合一物理原子对齐：确保 Cockpit 1.4+ SQLite 与全部 JSON 配置文件的当前账号物理一致"""
     results = {}
     now_ts = int(time.time())
+
+    # 0. antigravity_accounts.sqlite (Cockpit 1.4+ 权威核心存储)
+    sqlite_path = os.path.join(COCKPIT_DIR, "antigravity_accounts.sqlite")
+    if os.path.exists(sqlite_path):
+        try:
+            import sqlite3
+            conn = sqlite3.connect(sqlite_path, timeout=3.0)
+            cur = conn.cursor()
+            row = cur.execute("SELECT id, state FROM account_index_state LIMIT 1;").fetchone()
+            if row and row[1]:
+                st_obj = json.loads(row[1])
+                st_obj["current_id"] = target_account_id
+                cur.execute("UPDATE account_index_state SET state = ? WHERE id = ?;", (json.dumps(st_obj, separators=(",", ":")), row[0]))
+            try:
+                cur.execute("UPDATE summaries SET last_used = ? WHERE account_id = ?;", (now_ts, target_account_id))
+            except Exception:
+                pass
+            conn.commit()
+            conn.close()
+            results["antigravity_accounts.sqlite"] = "OK"
+        except Exception as e:
+            results["antigravity_accounts.sqlite"] = f"ERROR: {e}"
 
     # 1. accounts.json
     acc_path = os.path.join(COCKPIT_DIR, "accounts.json")
@@ -4462,11 +4778,16 @@ def preflight_ensure_valid_account(threshold=5.0):
     开机冷启动前置门禁：在拉起 Antigravity 之前检查并对齐最优健康账号。
     用于启动器冷启动或用户退出反重力后重新点击启动器。
     判定逻辑：
-    1. 检查当前生效账号是否存在、是否处于 disabled / HARD_BLOCKED_EMAILS / 需申诉验证状态；
-    2. 检查当前生效账号 5h 滚动额度是否 <= threshold (5.0%) 或周额度 <= 5.0%；
-    3. 若当前账号已失效或额度见底：强制切入全池最优可用健康账号（原子对齐 Windows 凭据 + Cockpit 状态文件）；
-    4. 若当前账号健康可用，平滑放行。
+    1. 自动清理残留的临时探测目录，释放 C 盘空间；
+    2. 权威读取 Cockpit 当前选中账号（WebSocket -> SQLite -> JSON），检查是否健康且额度 > threshold (5.0%)；
+    3. 若当前账号已失效或额度见底：全自动零人工切入全池最优健康账号（联动 Cockpit WS + 三重凭据直写 + 六合一状态对齐）；
+    4. 若当前账号健康可用：对齐三重凭据与状态文件并平滑放行，彻底杜绝开机启动无登录态！
     """
+    try:
+        cleanup_stale_probe_dirs(max_age_seconds=900)
+    except Exception:
+        pass
+
     current_id, accounts = get_all_accounts_and_quotas()
     curr_acc = next((a for a in accounts if a["is_current"]), None)
     curr_email = curr_acc["email"] if curr_acc else "未知"
@@ -4476,10 +4797,22 @@ def preflight_ensure_valid_account(threshold=5.0):
     is_exhausted = is_disabled or (curr_5h <= threshold) or (curr_weekly <= 5.0)
 
     if not is_exhausted:
+        # 核心保障：开机冷启动前置必须对齐三重凭据与六合一状态文件，彻底杜绝未登录态！
+        if curr_acc and curr_acc.get("id"):
+            try:
+                write_antigravity_windows_credential(curr_acc["id"])
+                sync_all_cockpit_account_files(curr_acc["id"], curr_email)
+                os.makedirs(os.path.dirname(WATCHER_CURRENT_ACCOUNT_FILE), exist_ok=True)
+                with open(WATCHER_CURRENT_ACCOUNT_FILE, "w", encoding="utf-8") as wf:
+                    wf.write(curr_acc["id"].strip())
+            except Exception as sync_e:
+                logger.warning(f"冷启动当前账号凭据对齐异常: {sync_e}")
+
         status_info = {
             "email": curr_email,
             "name": curr_acc.get("name", "") if curr_acc else "",
-            "plan": "PRO" if curr_acc and curr_acc.get("is_pro") else "FREE",
+            "plan": curr_acc.get("plan", "PRO") if curr_acc else "FREE",
+            "is_pro": bool(curr_acc and curr_acc.get("is_pro")),
             "gemini_5h": curr_5h,
             "gemini_weekly": curr_weekly,
             "days_to_w_reset": curr_acc.get("days_to_w_reset", 0.0) if curr_acc else 0.0,
@@ -4497,8 +4830,8 @@ def preflight_ensure_valid_account(threshold=5.0):
         return 0
 
     reason_desc = "已处于失效/封禁/需验证状态" if is_disabled else f"额度不足 (5h: {curr_5h:.1f}%, 周: {curr_weekly:.1f}%)"
-    logger.warning(f"⚠️ [冷启动门禁拦截] 检测到当前账号 [{curr_email}] {reason_desc}，严禁直接拉起！")
-    logger.info("🎯 正在执行开机前置智能选号与凭据原子直写...")
+    logger.warning(f"⚠️ [冷启动门禁拦截] 检测到当前账号 [{curr_email}] {reason_desc}，自动触发零人工无感选号！")
+    logger.info("🎯 正在执行开机前置智能选号与 Cockpit 双向凭据注入...")
 
     try:
         best_acc, reason = select_best_account(accounts, current_id, threshold=threshold)
@@ -4509,16 +4842,24 @@ def preflight_ensure_valid_account(threshold=5.0):
     logger.info(f"🎯 [冷启动门禁选优] 优选健康满血接力: {best_acc['email']} (5h: {best_acc['gemini_5h']}%, 周: {best_acc['gemini_weekly']}%)")
     logger.info(f"📋 决策理由: {reason}")
 
-    # 原子写入 Windows Credential Manager
+    # 1. 优先通过 Cockpit WebSocket 联动切换（同步更新 Cockpit 内存与全部底层凭据）
+    try:
+        server_info = load_cockpit_server_info()
+        if server_info:
+            asyncio.run(switch_account_via_websocket(server_info, best_acc["id"], timeout=8.0))
+    except Exception as ws_err:
+        logger.debug(f"冷启动联动 Cockpit WebSocket 切号跳过: {ws_err}")
+
+    # 2. 原子直写三重凭据与六合一状态同步
     write_antigravity_windows_credential(best_acc["id"])
-    # 四合一状态同步与 UI 刷新
     sync_all_cockpit_account_files(best_acc["id"], best_acc["email"])
     refresh_cockpit_tools_ui()
 
     status_info = {
         "email": best_acc["email"],
         "name": best_acc.get("name", ""),
-        "plan": "PRO" if best_acc.get("is_pro") else "FREE",
+        "plan": best_acc.get("plan", "PRO" if best_acc.get("is_pro") else "FREE"),
+        "is_pro": bool(best_acc.get("is_pro")),
         "gemini_5h": best_acc["gemini_5h"],
         "gemini_weekly": best_acc["gemini_weekly"],
         "days_to_w_reset": best_acc.get("days_to_w_reset", 0.0),

@@ -7,14 +7,15 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading;
 
-[assembly: AssemblyVersion("0.6.0.0")]
-[assembly: AssemblyFileVersion("0.6.0.0")]
-[assembly: AssemblyInformationalVersion("0.6.0")]
+[assembly: AssemblyVersion("0.6.1.0")]
+[assembly: AssemblyFileVersion("0.6.1.0")]
+[assembly: AssemblyInformationalVersion("0.6.1")]
 
 internal static class AntigravityAccountWatcher
 {
     private static readonly string AppDirectory = AppDomain.CurrentDomain.BaseDirectory;
     private static readonly string AccountsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".antigravity_cockpit", "accounts.json");
+    private static readonly string AccountsSqlitePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".antigravity_cockpit", "antigravity_accounts.sqlite");
     private static readonly string RuntimeDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Antigravity", "private-proxy");
     private static readonly string StatePath = Path.Combine(RuntimeDirectory, "supervisor-state.json");
     private static readonly string LauncherPath = Path.Combine(AppDirectory, "Antigravity-Recovery-Launcher.exe");
@@ -34,7 +35,7 @@ internal static class AntigravityAccountWatcher
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Antigravity", "User", "settings.json");
     private const string RequiredProxyArgument = "--proxy-server=http://127.0.0.1:17897";
-    private const string WatcherVersion = "0.6.0";
+    private const string WatcherVersion = "0.6.1";
     internal const int MaxRepairAttempts = 3;
     internal const int SuccessfulRepairCooldownSeconds = 30;
     internal const int HealthFailureThreshold = 3;
@@ -172,6 +173,29 @@ internal static class AntigravityAccountWatcher
 
     private static string ReadCurrentAccountId()
     {
+        // 1. Cockpit 1.4+ 权威 SQLite 状态表 (account_index_state -> current_id)
+        foreach (string sqPath in new[] { AccountsSqlitePath + "-wal", AccountsSqlitePath })
+        {
+            try
+            {
+                if (File.Exists(sqPath))
+                {
+                    using (var fs = new FileStream(sqPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    using (var sr = new StreamReader(fs, System.Text.Encoding.UTF8, false))
+                    {
+                        string content = sr.ReadToEnd();
+                        MatchCollection matches = Regex.Matches(content, "\\\"current_id\\\"\\s*:\\s*\\\"([0-9a-fA-F\\-]{8,})\\\"", RegexOptions.IgnoreCase);
+                        if (matches.Count > 0)
+                        {
+                            return matches[matches.Count - 1].Groups[1].Value;
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // 2. 旧版回退 accounts.json
         try
         {
             if (!File.Exists(AccountsPath)) return "";
@@ -229,7 +253,12 @@ internal static class AntigravityAccountWatcher
             {
                 if (process != null)
                 {
-                    process.WaitForExit(30000);
+                    if (!process.WaitForExit(75000))
+                    {
+                        bool alreadySynced = string.Equals(ReadHandledAccountId(), targetAccount, StringComparison.OrdinalIgnoreCase);
+                        Log("smart_switch_wait_timeout synced=" + alreadySynced);
+                        return alreadySynced;
+                    }
                     Log("smart_switch_finished exit=" + process.ExitCode);
                     return process.ExitCode == 0;
                 }

@@ -1,3 +1,16 @@
+## v2.9.33 傻瓜式无感全自动闭环 · Cockpit 1.4+ SQLite/WS 双向真源对齐 · 三重凭据直写根除开机掉登录（2026-11-18）
+
+- **彻底打通 Cockpit Tools 1.4+ 权威真源联动（`antigravity_smart_switch.py` / `Antigravity-AccountWatcher.cs`）**：
+  - 兼容 Cockpit 1.4+ 将当前活跃账号迁移至 `antigravity_accounts.sqlite`（`account_index_state.current_id`）与本地 WebSocket（`request.get_current_account`）的新架构；
+  - 彻底根除此前只读旧版 `accounts.json` 导致开机/巡检误读旧账号、5 分钟自检反向覆盖用户已切账号、以及 Cockpit 内切号无法触发无感热跟进的顽疾。
+- **三重凭据原子直写 + 专线上线后在线保鲜刷新（`antigravity_smart_switch.py` / `Antigravity-ProxySupervisor.ps1`）**：
+  - 完整对齐 Antigravity 2.0 三重认证落盘点：Windows 系统凭据（`gemini:antigravity`）、桌面回退凭据（`~/.gemini/jetski-standalone-oauth-token`）及 CLI 凭据（`~/.gemini/antigravity-cli/antigravity-oauth-token`）；
+  - 修复开机冷启动时门禁早于 `127.0.0.1:17897` 专线启动导致无法刷新过期 Access Token 的时序漏洞，在专线探活通过后强制二次保鲜直写，确保开机点桌面启动器 100% 带满血登录态秒进，零人工干预、无需打开 Cockpit 手动切号。
+- **ULTRA / Gemini 4 全系模型实时配额融合与主力优先调度**：
+  - 融合 Cockpit 加密账号明细中的实时模型配额（涵盖 `gemini-4-carbon`、`gemini-4-argon`、`gemini-4-hydrogen` 及 `gemini-weekly`），建立 `ULTRA > PRO > FREE` 智能接力梯队，额度见底（$\le 5\%$）或遇 429 秒级热重启 `language_server` 无感换号，不关窗口、不丢对话。
+- **C 盘临时探测目录自动清理防爆盘**：
+  - 自动清理残留的 `probe-*` / `ag-pool-*` 临时目录（实机释放约 1GB 空间），防止 C 盘空间耗尽引发语言服务 SQLite `disk I/O error`。
+
 ## v2.9.32 彻底修复 CLI 账号权限误判地区限制 · 阻断全线路误连坐 · 胶囊取消静默退出（2026-11-16）
 
 - **彻底根治模型门禁 CLI 账号权限误判（`Antigravity-ProxySupervisor.ps1`）**：
