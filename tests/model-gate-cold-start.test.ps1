@@ -10,6 +10,15 @@ $modelFunction = $source.Substring($modelStart, $modelEnd - $modelStart)
 if ($modelFunction -match 'language_server_wait_started|language_server_wait_timeout|lsWaitSeconds') {
     throw 'cold_start_must_not_wait_for_existing_language_server'
 }
+$readyCheck = $modelFunction.IndexOf('if (Test-IsLanguageServerReady)')
+if ($readyCheck -lt 0) { throw 'language_server_readiness_check_missing' }
+$probeSetup = $modelFunction.IndexOf('$probeId =', $readyCheck)
+if ($probeSetup -le $readyCheck) { throw 'model_probe_setup_missing' }
+$readinessBranch = $modelFunction.Substring($readyCheck, $probeSetup - $readyCheck)
+if ($readinessBranch -match '\breturn\b|LastModelProbeState\s*=\s*''passed''') {
+    throw 'ready_language_server_must_not_bypass_model_generation'
+}
+
 $skipLog = $modelFunction.IndexOf("language_server_wait_skipped")
 $agyInvoke = $modelFunction.IndexOf('Invoke-BoundedModelProcess -FilePath $AgyPath')
 if ($skipLog -lt 0 -or $agyInvoke -lt 0 -or $skipLog -gt $agyInvoke) {

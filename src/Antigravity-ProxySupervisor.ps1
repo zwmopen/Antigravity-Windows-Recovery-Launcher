@@ -101,6 +101,10 @@ $script:LastOAuthStatus = 0
 $script:LastEgressCountry = ''
 $script:LastModelProbeState = 'not_run'
 $script:AccountAdmissionPassed = $false
+# ForceRefresh is called again after a candidate is promoted.  Initialize this
+# flag explicitly so StrictMode does not turn that second account check into an
+# unclassified exception (which used to quarantine every otherwise healthy node).
+$script:CredentialsRefreshedOnline = $false
 $script:AdmissionStartedAt = Get-Date
 $script:LocalizationMode = ''
 $script:LaunchedAntigravityPid = 0
@@ -2728,15 +2732,12 @@ function Test-RealModelGeneration {
         throw 'model_probe_cli_missing'
     }
 
-    # AGY owns language_server.exe bootstrap. A cold supervisor run happens
-    # before Antigravity is launched, so waiting for an existing language
-    # server would block every candidate and misclassify it as model_transport.
-    # Reuse an already-ready server when present, otherwise let AGY start or
-    # attach its own server and classify the real result below.
+    # A running language server only proves the process is alive; it does not
+    # prove that the currently selected proxy can complete a model request.
+    # Always issue a fresh real-model probe for each candidate so location and
+    # account errors cannot be misrecorded as a healthy node.
     if (Test-IsLanguageServerReady) {
-        Write-SafeLog -Event 'language_server_ready_reused'
-        $script:LastModelProbeState = 'passed'
-        return $true
+        Write-SafeLog -Event 'language_server_ready_real_probe_required' -Values @{ recovery = $RecoveryReason }
     } else {
         Write-SafeLog -Event 'language_server_wait_skipped' -Values @{ reason = 'agy_cli_bootstrap'; recovery = $RecoveryReason }
     }
